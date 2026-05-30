@@ -4,11 +4,11 @@ import worldmapviewstyles from './worldmapview.css';
 import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
-import { getFilePathFromMod, getHoiOpenedFileOriginalUri, readFileFromModOrHOI4 } from '../../util/fileloader';
+import { getFilePathFromMod, getHoiOpenedFileOriginalUri, readFileFromModOrHOI4, readFileFromPath } from '../../util/fileloader';
 import { WorldMapLoader } from './loader/worldmaploader';
 import { isEqual } from 'lodash';
 import { LoaderSession } from '../../util/loader/loader';
@@ -111,6 +111,9 @@ export class WorldMap {
                     break;
                 case 'exportmap':
                     await this.exportMap(msg.dataUrl);
+                    break;
+                case 'persiststates':
+                    await this.persistStates(msg.states, msg.deletedFiles ?? []);
                     break;
             }
         } catch (e) {
@@ -370,5 +373,208 @@ export class WorldMap {
             error(e);
             vscode.window.showErrorMessage(localize('worldmap.export.error', 'Can\'t export world map: {0}.', e));
         }
+    }
+
+    private async persistStates(states: PersistedState[], deletedFiles: string[]) {
+        const uniqueDeletedFiles = Array.from(new Set(deletedFiles));
+        for (const relativePath of uniqueDeletedFiles) {
+            const targetFile = await this.resolveTargetFile(relativePath);
+            try {
+                await vscode.workspace.fs.delete(targetFile, { useTrash: false, recursive: false });
+            } catch {
+                // Ignore if file does not exist or cannot be deleted.
+            }
+        }
+
+        if (states.length === 0) {
+            return;
+        }
+
+        const groupedByFile = new Map<string, PersistedState[]>();
+        for (const state of states) {
+            const existing = groupedByFile.get(state.file);
+            if (existing) {
+                existing.push(state);
+            } else {
+                groupedByFile.set(state.file, [state]);
+            }
+        }
+
+        for (const [relativePath, fileStates] of groupedByFile) {
+            const targetFile = await this.resolveTargetFile(relativePath);
+            let sourceText = '';
+            try {
+                const sourcePath = await getFilePathFromMod(relativePath);
+                if (sourcePath) {
+                    sourceText = (await readFileFromPath(sourcePath))[0].toString('utf-8').replace(/^\uFEFF/, '');
+                } else {
+                    sourceText = (await readFileFromModOrHOI4(relativePath))[0].toString('utf-8').replace(/^\uFEFF/, '');
+                }
+            } catch {
+                // If file does not exist yet, we'll create it from state data.
+            }
+
+            const eol = sourceText.includes('\r\n') ? '\r\n' : '\n';
+            const newContent = this.applyStateUpdates(sourceText, fileStates, eol, relativePath);
+
+            await mkdirs(dirUri(targetFile));
+            await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
+        }
+    }
+
+    private async resolveTargetFile(relativePath: string): Promise<vscode.Uri> {
+        const modFile = await getFilePathFromMod(relativePath);
+        if (modFile) {
+            return getHoiOpenedFileOriginalUri(modFile);
+        }
+
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+            throw new Error('Must open a folder before saving state changes.');
+        }
+
+        return vscode.Uri.joinPath(workspaceFolder.uri, relativePath);
+    }
+
+    private applyStateUpdates(sourceText: string, states: PersistedState[], eol: string, relativePath: string): string {
+        let text = sourceText;
+        const replacementStates = states.filter(s => s.tokenStart !== undefined && s.tokenEnd !== undefined);
+
+        for (const state of replacementStates) {
+            const range = this.findStateBlockRangeById(text, state.id);
+            if (!range) {
+                throw new Error(`Failed to locate existing state block by id ${state.id} in ${relativePath}`);
+            }
+
+            const serialized = this.serializeState(state, eol);
+            text = text.substring(0, range.start) + serialized + text.substring(range.end);
+        }
+
+        const tokenlessStates = states.filter(s => s.tokenStart === undefined || s.tokenEnd === undefined);
+        if (tokenlessStates.length > 0) {
+            // For newly created states we always overwrite their dedicated target file,
+            // never append into an existing file.
+            const chunks = tokenlessStates.map(state => this.serializeState(state, eol));
+            const body = chunks.join(eol + eol);
+
+            if (replacementStates.length > 0) {
+                throw new Error(`Refusing to mix tokenless and tokened state writes in one file: ${relativePath}`);
+            }
+
+            text = body + eol;
+        }
+
+        return text;
+    }
+
+    private findStateBlockRangeById(text: string, stateId: number): { start: number; end: number } | undefined {
+        let cursor = 0;
+        while (cursor < text.length) {
+            const stateIndex = text.indexOf('state', cursor);
+            if (stateIndex === -1) {
+                return undefined;
+            }
+
+            const before = stateIndex > 0 ? text[stateIndex - 1] : ' ';
+            const after = stateIndex + 5 < text.length ? text[stateIndex + 5] : ' ';
+            if ((/[A-Za-z0-9_]/.test(before)) || (/[A-Za-z0-9_]/.test(after))) {
+                cursor = stateIndex + 5;
+                continue;
+            }
+
+            let index = stateIndex + 5;
+            while (index < text.length && /\s/.test(text[index])) {
+                index++;
+            }
+
+            if (index >= text.length || text[index] !== '=') {
+                cursor = stateIndex + 5;
+                continue;
+            }
+
+            index++;
+            while (index < text.length && /\s/.test(text[index])) {
+                index++;
+            }
+
+            if (index >= text.length || text[index] !== '{') {
+                cursor = stateIndex + 5;
+                continue;
+            }
+
+            const blockStart = stateIndex;
+            let depth = 0;
+            let blockEnd = index;
+            for (let i = index; i < text.length; i++) {
+                const ch = text[i];
+                if (ch === '{') {
+                    depth++;
+                } else if (ch === '}') {
+                    depth--;
+                    if (depth === 0) {
+                        blockEnd = i + 1;
+                        break;
+                    }
+                }
+            }
+
+            if (depth !== 0) {
+                return undefined;
+            }
+
+            const blockText = text.substring(blockStart, blockEnd);
+            const idRegex = new RegExp(`\\bid\\s*=\\s*${stateId}\\b`);
+            if (idRegex.test(blockText)) {
+                return { start: blockStart, end: blockEnd };
+            }
+
+            cursor = blockEnd;
+        }
+
+        return undefined;
+    }
+
+    private serializeState(state: PersistedState, eol: string): string {
+        const provinces = [...state.provinces].sort((a, b) => a - b).join(' ');
+        const coreLines = [...state.cores].filter((v, i, a) => v && a.indexOf(v) === i).map(core => `\t\tadd_core_of = ${core}`);
+        const vpEntries = Object.entries(state.victoryPoints)
+            .map(([provinceId, value]) => [parseInt(provinceId), value] as const)
+            .filter(([, value]) => value !== undefined)
+            .sort((a, b) => a[0] - b[0])
+            .map(([provinceId, value]) => `\t\tvictory_points = { ${provinceId} ${value} }`);
+        const resourceEntries = Object.entries(state.resources)
+            .filter(([, value]) => value !== undefined)
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([key, value]) => `\t\t${key} = ${value}`);
+
+        const lines: string[] = [
+            'state = {',
+            `\tid = ${state.id}`,
+            `\tname = "${state.name}"`,
+            `\tmanpower = ${state.manpower}`,
+            `\tstate_category = ${state.category}`,
+            `\tprovinces = { ${provinces} }`,
+        ];
+
+        if (state.impassable) {
+            lines.push('\timpassable = yes');
+        }
+
+        if (resourceEntries.length > 0) {
+            lines.push('\tresources = {');
+            lines.push(...resourceEntries);
+            lines.push('\t}');
+        }
+
+        lines.push('\thistory = {');
+        if (state.owner) {
+            lines.push(`\t\towner = ${state.owner}`);
+        }
+        lines.push(...coreLines);
+        lines.push(...vpEntries);
+        lines.push('\t}');
+        lines.push('}');
+
+        return lines.join(eol);
     }
 }

@@ -214,7 +214,7 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage;
+export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
@@ -260,6 +260,28 @@ export interface OpenFileMessage {
 export interface ExportMapMessage {
     command: 'exportmap' | 'requestexportmap';
     dataUrl?: string;
+}
+
+export interface PersistedState {
+    id: number;
+    name: string;
+    manpower: number;
+    category: string;
+    owner?: string;
+    provinces: number[];
+    cores: string[];
+    impassable: boolean;
+    victoryPoints: Record<number, number | undefined>;
+    resources: Record<string, number | undefined>;
+    file: string;
+    tokenStart?: number;
+    tokenEnd?: number;
+}
+
+export interface PersistStatesMessage {
+    command: 'persiststates';
+    states: PersistedState[];
+    deletedFiles?: string[];
 }
 
 export type ProgressReporter = (progress: string) => Promise<void>;

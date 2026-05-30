@@ -2,6 +2,53 @@
 
 This extension add tools for Heart of Iron IV modding. Some of the tools may work on other Paradox games.
 
+> This fork is specifically made for the purpose of allowing rapid and repetitive state creation with minimal effort, all neatly presented through the Preview World Map feature.
+> I may or may not update this over time with additional things, but please do not spam me with requests for this or that update. I have many projects in the works. Thank you for your understanding.
+
+* Shift + Left-drag — select provinces by dragging (Province view)
+* Ctrl + Left-click — toggle a province in the multi-selection (Province view)
+* Left-click — single-select / deselect province (Province view)
+* Ctrl + Shift + N — Create new state from current selection (rapid state creation)
+* Ctrl + Z — Undo (map-edit undo first: create/assign; if none, selection undo)
+* Ctrl + Y — Redo (map-edit redo first; if none, selection redo)
+* Enter (in search box) — Run search for entered province/state id
+* Double-click (canvas) — Open hovered region file (state/strategic region/supply area)
+
+## Install Without Marketplace
+
+This fork can be distributed directly as a VS Code extension package, without using the Visual Studio Marketplace.
+
+To build the installable package from the repository root:
+
+```powershell
+vsce package
+```
+
+The current package generated for this repository is:
+
+```text
+hoi4modutilities-0.12.2.vsix
+```
+
+Users can install that package from a terminal:
+
+```powershell
+code --install-extension hoi4modutilities-0.12.2.vsix
+```
+
+Or from inside VS Code:
+
+```text
+Extensions -> ... -> Install from VSIX...
+```
+
+This is the intended distribution path for this fork. GitHub Releases can host the `.vsix` asset directly, so no Azure DevOps publisher setup is required.
+
+## Contribute
+* If you have any suggestion, feel free to create an issue on this [Github repo](https://github.com/TheCascadian/HOI4ModernUtils/issues).
+
+# ORIGINAL README RETAINED BELOW
+
 > I'm disappointed by Paradox because of the Silk Road thing. I'll pause this project until they fix it.
 
 ## Features
@@ -18,6 +65,8 @@ This extension add tools for Heart of Iron IV modding. Some of the tools may wor
 For feature details and user manual, please refer to [HOI4 Mod Utilities Wiki](https://github.com/herbix/hoi4modutilities/wiki).
 
 ## Steps to start
+
+If you installed the extension from a `.vsix` file instead of the Marketplace, the setup steps below are the same.
 
 1. Install and enable this extension in VSCode.
 2. Set Heart of Iron IV install path. You can:
@@ -77,7 +126,7 @@ For feature details and user manual, please refer to [HOI4 Mod Utilities Wiki](h
 * Allow `|` in symbol type (to support the case `localization_key = building_state_modifier|dam`) (#105) (Contributor: [IShiraiKurokoI(Shirai_Kuroko)](https://github.com/IShiraiKurokoI)).
 
 ## Contribute
-* If you have any suggestion, feel free to create issue on this [Github repo](https://github.com/herbix/hoi4modutilities).
+* If you have any suggestion, feel free to create an issue on this [Github repo](https://github.com/TheCascadian/HOI4ModernUtils/issues).
 * If you want to contribute translation, feel free to create pull request to this [Github repo](https://github.com/herbix/hoi4modutilities). All localization related files are under `i18n` folder.
 
 * Thanks to all contributors listed [here](https://github.com/herbix/hoi4modutilities/graphs/contributors).

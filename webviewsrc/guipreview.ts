@@ -1,9 +1,17 @@
 import { normalizeForStyle } from "../src/util/styletable";
 import { Checkbox } from "./util/checkbox";
 import { setState, getState, scrollToState, tryRun, subscribeRefreshButton } from "./util/common";
+import { vscode } from "./util/vscode";
 
 const existingCheckboxes: Checkbox[] = [];
 let toggleVisibilityContentVisible = getState().toggleVisibilityContentVisible;
+
+let isDragging = false;
+let dragTarget: HTMLElement | null = null;
+let startX = 0;
+let startY = 0;
+let currentDx = 0;
+let currentDy = 0;
 
 function folderChange(folder: string) {
     const elements = document.getElementsByClassName('containerwindow');
@@ -118,5 +126,64 @@ window.addEventListener('load', tryRun(function() {
 
     scrollToState();
     subscribeRefreshButton();
+
+    // --- NEW: DRAG AND DROP LOGIC ---
+    const mainContent = document.getElementById('mainContent') as HTMLDivElement;
+
+    mainContent?.addEventListener('mousedown', (e) => {
+        // Require Shift key to drag (so we don't interfere with standard clicking or panning)
+        if (!e.shiftKey) return;
+
+        const target = (e.target as HTMLElement).closest('.navigator') as HTMLElement;
+        if (!target) return;
+
+        isDragging = true;
+        dragTarget = target;
+        startX = e.clientX;
+        startY = e.clientY;
+        currentDx = 0;
+        currentDy = 0;
+
+        e.preventDefault();
+        e.stopPropagation();
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!isDragging || !dragTarget) return;
+
+        // Calculate delta based on current zoom scale
+        const scale = getState().scale || 1;
+        currentDx = (e.clientX - startX) / scale;
+        currentDy = (e.clientY - startY) / scale;
+
+        // Apply visual offset temporarily using CSS transform
+        dragTarget.style.transform = `translate(${currentDx}px, ${currentDy}px)`;
+    });
+
+    window.addEventListener('mouseup', (e) => {
+        if (!isDragging || !dragTarget) return;
+
+        // Remove temporary visual transform
+        dragTarget.style.transform = '';
+
+        // If we actually moved the element, send the edit to the backend
+        if (Math.abs(currentDx) > 1 || Math.abs(currentDy) > 1) {
+            const startByte = dragTarget.getAttribute('start');
+            const endByte = dragTarget.getAttribute('end');
+
+            if (startByte && endByte) {
+                vscode.postMessage({
+                    command: 'editGuiPosition',
+                    start: parseInt(startByte),
+                    end: parseInt(endByte),
+                    dx: Math.round(currentDx),
+                    dy: Math.round(currentDy)
+                });
+            }
+        }
+
+        isDragging = false;
+        dragTarget = null;
+    });
 
 }));
