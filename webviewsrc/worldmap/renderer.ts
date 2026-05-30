@@ -74,13 +74,14 @@ export class Renderer extends Subscriber {
                 topBar.viewMode$,
                 topBar.colorSet$,
                 topBar.hoverProvinceId$,
-                topBar.selectedProvinceId$,
+                topBar.selectedProvinceIds$,
                 topBar.hoverStateId$,
                 topBar.selectedStateId$,
                 topBar.hoverStrategicRegionId$,
                 topBar.selectedStrategicRegionId$,
                 topBar.hoverSupplyAreaId$,
                 topBar.selectedSupplyAreaId$,
+                topBar.mapMutation$,
                 topBar.warningFilter.selectedValues$,
                 topBar.display.selectedValues$,
             ]).pipe(
@@ -683,13 +684,16 @@ ${worldMap.getProvinceWarnings(province, stateObject, strategicRegion, supplyAre
     }
 
     private renderProvinceHoverSelection(worldMap: FEWorldMap) {
-        let province = worldMap.getProvinceById(this.topBar.selectedProvinceId$.value);
-        if (province) {
-            this.renderSelectedProvince(province, worldMap);
+        const selectedIds = this.topBar.selectedProvinceIds$.value;
+        for (const id of selectedIds) {
+            const sel = worldMap.getProvinceById(id);
+            if (sel) {
+                this.renderSelectedProvince(sel, worldMap);
+            }
         }
-        province = worldMap.getProvinceById(this.topBar.hoverProvinceId$.value);
+        const province = worldMap.getProvinceById(this.topBar.hoverProvinceId$.value);
         if (province) {
-            if (this.topBar.selectedProvinceId$ !== this.topBar.hoverProvinceId$ && this.isMouseHighlightVisible()) {
+            if (!selectedIds.has(province.id) && this.isMouseHighlightVisible()) {
                 this.renderHoverProvince(province, worldMap);
             }
             if (this.isTooltipVisible()) {

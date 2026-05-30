@@ -1,4 +1,4 @@
-import { WorldMapMessage, Province, WorldMapData, RequestMapItemMessage, State, Country, Point } from "./definitions";
+import { WorldMapMessage, Province, WorldMapData, RequestMapItemMessage, State, Country, Point, Zone } from "./definitions";
 import { copyArray } from "../util/common";
 import { inBBox } from "./graphutils";
 import { Subscriber } from "../util/event";
@@ -41,6 +41,12 @@ interface FEWorldMapClassExtra {
     getSupplyAreaWarnings(supplyArea: SupplyArea): string[];
     getRiverWarnings(riverIndex: number): string[];
 
+    assignProvincesToState(provinceIds: number[], targetStateId: number): number[] | undefined;
+    createStateFromProvinces(provinceIds: number[]): { newStateId: number; changedStateIds: number[] } | undefined;
+    getNextStateId(): number;
+    snapshotStates(stateIds: number[]): StateSnapshot[];
+    restoreStates(snapshots: StateSnapshot[]): void;
+
     forEachProvince(callback: (province: Province) => boolean | void): void;
     forEachState(callback: (state: State) => boolean | void): void;
     forEachStrategicRegion(callback: (strategicRegion: StrategicRegion) => boolean | void): void;
@@ -51,6 +57,11 @@ interface FEWorldMapClassExtra {
 
 export type FEWorldMap = Omit<WorldMapData, 'states' | 'provinces' | 'strategicRegions' | 'supplyAreas' | 'railways' | 'supplyNodes'>
     & ExtraMapData & FEWorldMapClassExtra;
+
+export interface StateSnapshot {
+    id: number;
+    state: State | undefined;
+}
 
 export class Loader extends Subscriber {
     public worldMap: FEWorldMapClass;
@@ -468,5 +479,213 @@ class FEWorldMapClass implements FEWorldMap {
 
     public getRiverWarnings(riverIndex: number): string[] {
         return this.warnings.filter(v => v.source.some(s => s.type === 'river' && s.index === riverIndex)).map(v => v.text);
+    }
+
+    public assignProvincesToState(provinceIds: number[], targetStateId: number): number[] | undefined {
+        const target = this.getStateById(targetStateId);
+        if (!target) {
+            return undefined;
+        }
+
+        const normalizedIds = this.normalizeProvinceIds(provinceIds);
+        if (normalizedIds.length === 0) {
+            return undefined;
+        }
+
+        let changed = false;
+        const changedStateIds = new Set<number>();
+
+        this.forEachState(state => {
+            if (state.id === targetStateId) {
+                return;
+            }
+
+            const beforeLength = state.provinces.length;
+            state.provinces = state.provinces.filter(id => !normalizedIds.includes(id));
+            if (state.provinces.length !== beforeLength) {
+                changed = true;
+                changedStateIds.add(state.id);
+            }
+        });
+
+        for (const provinceId of normalizedIds) {
+            if (!target.provinces.includes(provinceId)) {
+                target.provinces.push(provinceId);
+                changed = true;
+            }
+        }
+
+        if (!changed) {
+            return undefined;
+        }
+
+        target.provinces.sort((a, b) => a - b);
+        changedStateIds.add(targetStateId);
+        changedStateIds.forEach(stateId => {
+            const state = this.getStateById(stateId);
+            if (state) {
+                this.recomputeStateGeometry(state);
+            }
+        });
+
+        return Array.from(changedStateIds.values());
+    }
+
+    public createStateFromProvinces(provinceIds: number[]): { newStateId: number; changedStateIds: number[] } | undefined {
+        const normalizedIds = this.normalizeProvinceIds(provinceIds);
+        if (normalizedIds.length === 0) {
+            return undefined;
+        }
+
+        const template = this.getStateByProvinceId(normalizedIds[0]);
+        const newStateId = this.findNextStateId();
+        const newState: State = {
+            id: newStateId,
+            name: `STATE_${newStateId}`,
+            manpower: 0,
+            category: template?.category ?? 'rural',
+            owner: template?.owner,
+            provinces: [],
+            cores: [...(template?.cores ?? [])],
+            impassable: template?.impassable ?? false,
+            victoryPoints: {},
+            resources: {},
+            // New states always go to their own file to avoid mutating unrelated state files.
+            file: `history/states/${newStateId}-state.txt`,
+            token: null,
+            boundingBox: { x: 0, y: 0, w: 0, h: 0 },
+            centerOfMass: { x: 0, y: 0 },
+            mass: 0,
+        };
+
+        this.states[newStateId] = newState;
+        if (newStateId >= this.statesCount) {
+            this.statesCount = newStateId + 1;
+        }
+
+        const changedStateIds = this.assignProvincesToState(normalizedIds, newStateId);
+        if (!changedStateIds) {
+            return undefined;
+        }
+
+        return { newStateId, changedStateIds };
+    }
+
+    public getNextStateId(): number {
+        return this.findNextStateId();
+    }
+
+    public snapshotStates(stateIds: number[]): StateSnapshot[] {
+        const uniqueStateIds = Array.from(new Set(stateIds));
+        return uniqueStateIds.map(id => ({
+            id,
+            state: this.cloneState(this.getStateById(id)),
+        }));
+    }
+
+    public restoreStates(snapshots: StateSnapshot[]): void {
+        for (const snapshot of snapshots) {
+            this.states[snapshot.id] = this.cloneState(snapshot.state);
+        }
+
+        let lastStateId = this.badStatesCount - 1;
+        for (let i = this.states.length - 1; i >= this.badStatesCount; i--) {
+            if (this.states[i]) {
+                lastStateId = i;
+                break;
+            }
+        }
+
+        this.statesCount = Math.max(this.badStatesCount, lastStateId + 1);
+    }
+
+    private normalizeProvinceIds(provinceIds: number[]): number[] {
+        const unique = new Set<number>();
+        for (const provinceId of provinceIds) {
+            if (this.getProvinceById(provinceId)) {
+                unique.add(provinceId);
+            }
+        }
+        return Array.from(unique.values());
+    }
+
+    private findNextStateId(): number {
+        // Strict contiguous numbering: choose the first missing positive state id.
+        for (let id = 1; id < this.states.length; id++) {
+            if (!this.states[id]) {
+                return id;
+            }
+        }
+
+        return Math.max(1, this.states.length);
+    }
+
+    private recomputeStateGeometry(state: State): void {
+        const provinces = state.provinces
+            .map(id => this.getProvinceById(id))
+            .filter((p): p is Province => !!p);
+
+        if (provinces.length === 0) {
+            state.boundingBox = { x: 0, y: 0, w: 0, h: 0 };
+            state.centerOfMass = { x: 0, y: 0 };
+            state.mass = 0;
+            return;
+        }
+
+        const bbox = this.computeBoundingBox(provinces.map(p => p.boundingBox));
+        let totalMass = 0;
+        let weightedX = 0;
+        let weightedY = 0;
+        for (const province of provinces) {
+            const mass = Math.max(1, province.mass);
+            totalMass += mass;
+            weightedX += province.centerOfMass.x * mass;
+            weightedY += province.centerOfMass.y * mass;
+        }
+
+        state.boundingBox = bbox;
+        state.mass = totalMass;
+        state.centerOfMass = {
+            x: weightedX / totalMass,
+            y: weightedY / totalMass,
+        };
+    }
+
+    private cloneState(state: State | undefined): State | undefined {
+        if (!state) {
+            return undefined;
+        }
+
+        return {
+            ...state,
+            provinces: [...state.provinces],
+            cores: [...state.cores],
+            victoryPoints: { ...state.victoryPoints },
+            resources: { ...state.resources },
+            boundingBox: { ...state.boundingBox },
+            centerOfMass: { ...state.centerOfMass },
+            token: state.token ? { ...state.token } : null,
+        };
+    }
+
+    private computeBoundingBox(boxes: Zone[]): Zone {
+        let minX = Number.MAX_SAFE_INTEGER;
+        let minY = Number.MAX_SAFE_INTEGER;
+        let maxX = Number.MIN_SAFE_INTEGER;
+        let maxY = Number.MIN_SAFE_INTEGER;
+
+        for (const box of boxes) {
+            minX = Math.min(minX, box.x);
+            minY = Math.min(minY, box.y);
+            maxX = Math.max(maxX, box.x + box.w);
+            maxY = Math.max(maxY, box.y + box.h);
+        }
+
+        return {
+            x: minX,
+            y: minY,
+            w: Math.max(0, maxX - minX),
+            h: Math.max(0, maxY - minY),
+        };
     }
 }

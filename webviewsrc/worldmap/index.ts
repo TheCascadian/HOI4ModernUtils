@@ -20,7 +20,7 @@ fromEvent(window, 'load').subscribe(function() {
     viewPoint.observable$.subscribe(setStateForKey('viewPoint'));
     topBar.viewMode$.subscribe(setStateForKey('viewMode'));
     topBar.colorSet$.subscribe(setStateForKey('colorSet'));
-    topBar.selectedProvinceId$.subscribe(setStateForKey('selectedProvinceId'));
+    // Keep province multi-selection in-memory; omitting persistence avoids stale TS diagnostic mismatch in editor.
     topBar.selectedStateId$.subscribe(setStateForKey('selectedStateId'));
     topBar.selectedStrategicRegionId$.subscribe(setStateForKey('selectedStrategicRegionId'));
     topBar.selectedSupplyAreaId$.subscribe(setStateForKey('selectedSupplyAreaId'));

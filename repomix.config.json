@@ -1,0 +1,51 @@
+{
+  "output": {
+    "filePath": "repomix-output.md",
+    "style": "markdown",
+    "removeComments": false,
+    "removeEmptyLines": true,
+    "topFilesLength": 5,
+    "showLineNumbers": false,
+    "copyToClipboard": false
+  },
+  "ignore": {
+    "useGitignore": false,
+    "useDefaultPatterns": false,
+    "customPatterns": [
+      "*", 
+      "static/",
+      "node_modules/",
+      "out/",
+      "dist/",
+      ".vscode-test/",
+      ".vscode/",
+      ".github/",
+      ".git/",
+      "*.vsix",
+      "*.log",
+      ".eslintrc.json",
+      ".gitignore",
+      ".vscodeignore",
+      "CHANGELOG.md",
+      "LICENSE",
+      "README.md",
+      "package.json",
+      "package-lock.json",
+      "package.nls.json",
+      "tsconfig.json",
+      "webpack.config.js",
+      "repomix.config.json",
+      "test-ui/",
+      "test/",
+      "demo/",
+      "i18n/",
+      "resource/",
+      "icon.png",
+      "icon.xcf"
+    ]
+  },
+  "compress": {
+    "removeComments": false,
+    "removeEmptyLines": true
+  }
+}
