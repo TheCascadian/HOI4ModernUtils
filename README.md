@@ -1,8 +1,9 @@
 # HOI4 Modern Utilities
+![Version](https://img.shields.io/github/v/release/TheCascadian/HOI4ModernUtils)
 ![Downloads](https://img.shields.io/github/downloads/TheCascadian/HOI4ModernUtils/latest/total)
 ![Views](https://komarev.com/ghpvc/?username=TheCascadian&repo=HOI4ModernUtils&label=Views)
-
-This extension add tools for Heart of Iron IV modding. Some of the tools may work on other Paradox games.
+ 
+This extension adds tools for Heart of Iron IV modding. Some of the tools may work for other Paradox games.
 
 > This fork is specifically made for the purpose of allowing rapid and repetitive state creation with minimal effort, all neatly presented through the Preview World Map feature.
 > I may or may not update this over time with additional things, but please do not spam me with requests for this or that update. I have many projects in the works. Thank you for your understanding.
