@@ -214,7 +214,7 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage;
+export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
@@ -281,6 +281,22 @@ export interface PersistedState {
 export interface PersistStatesMessage {
     command: 'persiststates';
     states: PersistedState[];
+    deletedFiles?: string[];
+}
+
+export interface PersistedStrategicRegion {
+    id: number;
+    name: string;
+    provinces: number[];
+    navalTerrain: string | null;
+    file: string;
+    tokenStart?: number;
+    tokenEnd?: number;
+}
+
+export interface PersistStrategicRegionsMessage {
+    command: 'persiststrategicregions';
+    strategicRegions: PersistedStrategicRegion[];
     deletedFiles?: string[];
 }
 

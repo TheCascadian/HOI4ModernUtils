@@ -31,4 +31,14 @@
     "hoi4modutilities.worldMapCreateStateKeybind.desc": "Keybind used in world map preview to create state from selected provinces. Example: Ctrl+Shift+N.",
     "hoi4modutilities.worldMapAssignSelectionKeybind.title": "World Map Assign Selection Keybind",
     "hoi4modutilities.worldMapAssignSelectionKeybind.desc": "Keybind used in world map preview to assign selected provinces to the selected state. Example: Ctrl+Enter."
+    ,
+    "hoi4modutilities.worldMapAssignSelectionToStrategicRegionKeybind.title": "World Map Assign To Strategic Region Keybind",
+    "hoi4modutilities.worldMapAssignSelectionToStrategicRegionKeybind.desc": "Keybind used in world map preview to assign selected states to the selected strategic region. Example: Ctrl+Shift+G.",
+
+    "worldmap.action.assignstrategic.done": "Added {0} states to strategic region {1}.",
+    "worldmap.action.assignstrategic.nochange": "No states were moved.",
+    "worldmap.action.assignstrategic.missingregion": "Select a target strategic region first, then add states.",
+    "worldmap.action.assignstrategic.missingselection": "No states selected to add."
+    ,
+    "worldmap.topbar.assignstrategic.title": "Add selected states to strategic region"
 }

@@ -63,6 +63,11 @@ export interface StateSnapshot {
     state: State | undefined;
 }
 
+export interface StrategicRegionSnapshot {
+    id: number;
+    strategicRegion: StrategicRegion | undefined;
+}
+
 export class Loader extends Subscriber {
     public worldMap: FEWorldMapClass;
     public loading$ = new BehaviorSubject<boolean>(false);
@@ -575,6 +580,10 @@ class FEWorldMapClass implements FEWorldMap {
         return this.findNextStateId();
     }
 
+    public getNextStrategicRegionId(): number {
+        return this.findNextStrategicRegionId();
+    }
+
     public snapshotStates(stateIds: number[]): StateSnapshot[] {
         const uniqueStateIds = Array.from(new Set(stateIds));
         return uniqueStateIds.map(id => ({
@@ -618,6 +627,16 @@ class FEWorldMapClass implements FEWorldMap {
         }
 
         return Math.max(1, this.states.length);
+    }
+
+    private findNextStrategicRegionId(): number {
+        for (let id = 1; id < this.strategicRegions.length; id++) {
+            if (!this.strategicRegions[id]) {
+                return id;
+            }
+        }
+
+        return Math.max(1, this.strategicRegions.length);
     }
 
     private recomputeStateGeometry(state: State): void {
@@ -666,6 +685,178 @@ class FEWorldMapClass implements FEWorldMap {
             centerOfMass: { ...state.centerOfMass },
             token: state.token ? { ...state.token } : null,
         };
+    }
+
+    public snapshotStrategicRegions(strategicRegionIds: number[]): StrategicRegionSnapshot[] {
+        const uniqueIds = Array.from(new Set(strategicRegionIds));
+        return uniqueIds.map(id => ({
+            id,
+            strategicRegion: this.cloneStrategicRegion(this.getStrategicRegionById(id)),
+        }));
+    }
+
+    public restoreStrategicRegions(snapshots: StrategicRegionSnapshot[]): void {
+        for (const snapshot of snapshots) {
+            this.strategicRegions[snapshot.id] = this.cloneStrategicRegion(snapshot.strategicRegion);
+        }
+
+        let lastId = this.badStrategicRegionsCount - 1;
+        for (let i = this.strategicRegions.length - 1; i >= this.badStrategicRegionsCount; i--) {
+            if (this.strategicRegions[i]) {
+                lastId = i;
+                break;
+            }
+        }
+
+        this.strategicRegionsCount = Math.max(this.badStrategicRegionsCount, lastId + 1);
+    }
+
+    public addStatesToStrategicRegion(stateIds: number[], targetStrategicRegionId: number): number[] | undefined {
+        const target = this.getStrategicRegionById(targetStrategicRegionId);
+        if (!target) {
+            return undefined;
+        }
+
+        const uniqueStateIds = Array.from(new Set(stateIds)).filter(id => !!this.getStateById(id));
+        if (uniqueStateIds.length === 0) {
+            return undefined;
+        }
+
+        let changed = false;
+        const changedRegionIds = new Set<number>();
+
+        // Collect provinces from given states
+        const provincesToAdd = new Set<number>();
+        for (const stateId of uniqueStateIds) {
+            const state = this.getStateById(stateId);
+            if (!state) continue;
+            for (const p of state.provinces) provincesToAdd.add(p);
+        }
+
+        if (provincesToAdd.size === 0) {
+            return undefined;
+        }
+
+        // Remove these provinces from other strategic regions
+        this.forEachStrategicRegion(sr => {
+            if (sr.id === targetStrategicRegionId) return;
+            const beforeLength = sr.provinces.length;
+            sr.provinces = sr.provinces.filter(id => !provincesToAdd.has(id));
+            if (sr.provinces.length !== beforeLength) {
+                changed = true;
+                changedRegionIds.add(sr.id);
+            }
+        });
+
+        // Add to target
+        for (const p of provincesToAdd) {
+            if (!target.provinces.includes(p)) {
+                target.provinces.push(p);
+                changed = true;
+            }
+        }
+
+        if (!changed) {
+            return undefined;
+        }
+
+        target.provinces.sort((a, b) => a - b);
+        changedRegionIds.add(targetStrategicRegionId);
+
+        changedRegionIds.forEach(id => {
+            const sr = this.getStrategicRegionById(id);
+            if (sr) {
+                this.recomputeStrategicRegionGeometry(sr);
+            }
+        });
+
+        return Array.from(changedRegionIds.values());
+    }
+
+    private recomputeStrategicRegionGeometry(strategicRegion: StrategicRegion): void {
+        const provinces = strategicRegion.provinces
+            .map(id => this.getProvinceById(id))
+            .filter((p): p is Province => !!p);
+
+        if (provinces.length === 0) {
+            strategicRegion.boundingBox = { x: 0, y: 0, w: 0, h: 0 };
+            strategicRegion.centerOfMass = { x: 0, y: 0 };
+            strategicRegion.mass = 0;
+            return;
+        }
+
+        const bbox = this.computeBoundingBox(provinces.map(p => p.boundingBox));
+        let totalMass = 0;
+        let weightedX = 0;
+        let weightedY = 0;
+        for (const province of provinces) {
+            const mass = Math.max(1, province.mass);
+            totalMass += mass;
+            weightedX += province.centerOfMass.x * mass;
+            weightedY += province.centerOfMass.y * mass;
+        }
+
+        strategicRegion.boundingBox = bbox;
+        strategicRegion.mass = totalMass;
+        strategicRegion.centerOfMass = {
+            x: weightedX / totalMass,
+            y: weightedY / totalMass,
+        };
+    }
+
+    private cloneStrategicRegion(strategicRegion: StrategicRegion | undefined): StrategicRegion | undefined {
+        if (!strategicRegion) return undefined;
+
+        return {
+            ...strategicRegion,
+            provinces: [...strategicRegion.provinces],
+            token: strategicRegion.token ? { ...strategicRegion.token } : null,
+            boundingBox: { ...strategicRegion.boundingBox },
+            centerOfMass: { ...strategicRegion.centerOfMass },
+        };
+    }
+
+    public createStrategicRegionFromStates(stateIds: number[]): { newStrategicRegionId: number; changedRegionIds: number[] } | undefined {
+        const uniqueStateIds = Array.from(new Set(stateIds)).filter(id => !!this.getStateById(id));
+        if (uniqueStateIds.length === 0) {
+            return undefined;
+        }
+
+        const newId = this.findNextStrategicRegionId();
+        const newRegion = {
+            id: newId,
+            name: `STRATEGIC_REGION_${newId}`,
+            provinces: [] as number[],
+            navalTerrain: null,
+            file: `map/strategicregions/${newId}-strategicregion.txt`,
+            token: null,
+            boundingBox: { x: 0, y: 0, w: 0, h: 0 },
+            centerOfMass: { x: 0, y: 0 },
+            mass: 0,
+        } as StrategicRegion;
+
+        this.strategicRegions[newId] = newRegion;
+        if (newId >= this.strategicRegionsCount) {
+            this.strategicRegionsCount = newId + 1;
+        }
+
+        const changed = this.addStatesToStrategicRegion(uniqueStateIds, newId);
+        if (!changed || changed.length === 0) {
+            // Revert creation
+            this.strategicRegions[newId] = undefined as any;
+            let lastId = this.badStrategicRegionsCount - 1;
+            for (let i = this.strategicRegions.length - 1; i >= this.badStrategicRegionsCount; i--) {
+                if (this.strategicRegions[i]) {
+                    lastId = i;
+                    break;
+                }
+            }
+
+            this.strategicRegionsCount = Math.max(this.badStrategicRegionsCount, lastId + 1);
+            return undefined;
+        }
+
+        return { newStrategicRegionId: newId, changedRegionIds: changed };
     }
 
     private computeBoundingBox(boxes: Zone[]): Zone {

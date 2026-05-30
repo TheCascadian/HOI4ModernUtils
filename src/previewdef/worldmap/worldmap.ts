@@ -4,7 +4,7 @@ import worldmapviewstyles from './worldmapview.css';
 import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
@@ -67,6 +67,7 @@ export class WorldMap {
             mapRedo: conf.get<string>('worldMapMapRedoKeybind', 'Ctrl+Y'),
             createStateFromSelection: conf.get<string>('worldMapCreateStateKeybind', 'Ctrl+Shift+N'),
             assignSelectionToState: conf.get<string>('worldMapAssignSelectionKeybind', 'Ctrl+Enter'),
+            assignSelectionToStrategicRegion: conf.get<string>('worldMapAssignSelectionToStrategicRegionKeybind', 'Ctrl+Shift+G'),
         };
 
         return html(
@@ -125,6 +126,11 @@ export class WorldMap {
                     break;
                 case 'persiststates':
                     await this.persistStates(msg.states, msg.deletedFiles ?? []);
+                    break;
+                case 'persiststrategicregions':
+                    await this.persistStrategicRegions(msg.strategicRegions, msg.deletedFiles ?? []);
+                    break;
+                
                     break;
             }
         } catch (e) {
@@ -433,6 +439,50 @@ export class WorldMap {
         }
     }
 
+    private async persistStrategicRegions(regions: PersistedStrategicRegion[], deletedFiles: string[]) {
+        const uniqueDeletedFiles = Array.from(new Set(deletedFiles));
+        for (const relativePath of uniqueDeletedFiles) {
+            const targetFile = await this.resolveTargetFile(relativePath);
+            try {
+                await vscode.workspace.fs.delete(targetFile, { useTrash: false, recursive: false });
+            } catch {
+                // Ignore if file does not exist or cannot be deleted.
+            }
+        }
+
+        if (regions.length === 0) {
+            return;
+        }
+
+        const groupedByFile = new Map<string, PersistedStrategicRegion[]>();
+        for (const region of regions) {
+            const existing = groupedByFile.get(region.file);
+            if (existing) existing.push(region);
+            else groupedByFile.set(region.file, [region]);
+        }
+
+        for (const [relativePath, fileRegions] of groupedByFile) {
+            const targetFile = await this.resolveTargetFile(relativePath);
+            let sourceText = '';
+            try {
+                const sourcePath = await getFilePathFromMod(relativePath);
+                if (sourcePath) {
+                    sourceText = (await readFileFromPath(sourcePath))[0].toString('utf-8').replace(/^\uFEFF/, '');
+                } else {
+                    sourceText = (await readFileFromModOrHOI4(relativePath))[0].toString('utf-8').replace(/^\uFEFF/, '');
+                }
+            } catch {
+                // If file does not exist yet, we'll create it from region data.
+            }
+
+            const eol = sourceText.includes('\r\n') ? '\r\n' : '\n';
+            const newContent = this.applyStrategicRegionUpdates(sourceText, fileRegions, eol, relativePath);
+
+            await mkdirs(dirUri(targetFile));
+            await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
+        }
+    }
+
     private async resolveTargetFile(relativePath: string): Promise<vscode.Uri> {
         const modFile = await getFilePathFromMod(relativePath);
         if (modFile) {
@@ -586,6 +636,95 @@ export class WorldMap {
         lines.push('\t}');
         lines.push('}');
 
+        return lines.join(eol);
+    }
+
+    private applyStrategicRegionUpdates(sourceText: string, regions: PersistedStrategicRegion[], eol: string, relativePath: string): string {
+        let text = sourceText;
+        const replacementRegions = regions.filter(r => r.tokenStart !== undefined && r.tokenEnd !== undefined);
+
+        for (const region of replacementRegions) {
+            const range = this.findStrategicRegionBlockRangeById(text, region.id);
+            if (!range) {
+                throw new Error(`Failed to locate existing strategic region block by id ${region.id} in ${relativePath}`);
+            }
+
+            const serialized = this.serializeStrategicRegion(region, eol);
+            text = text.substring(0, range.start) + serialized + text.substring(range.end);
+        }
+
+        const tokenlessRegions = regions.filter(r => r.tokenStart === undefined || r.tokenEnd === undefined);
+        if (tokenlessRegions.length > 0) {
+            const chunks = tokenlessRegions.map(r => this.serializeStrategicRegion(r, eol));
+            const body = chunks.join(eol + eol);
+
+            if (replacementRegions.length > 0) {
+                throw new Error(`Refusing to mix tokenless and tokened strategic region writes in one file: ${relativePath}`);
+            }
+
+            text = body + eol;
+        }
+
+        return text;
+    }
+
+    private findStrategicRegionBlockRangeById(text: string, regionId: number): { start: number; end: number } | undefined {
+        let cursor = 0;
+        while (cursor < text.length) {
+            const idx = text.indexOf('strategic_region', cursor);
+            if (idx === -1) {
+                return undefined;
+            }
+
+            const before = idx > 0 ? text[idx - 1] : ' ';
+            const after = idx + 16 < text.length ? text[idx + 16] : ' ';
+            if ((/[A-Za-z0-9_]/.test(before)) || (/[A-Za-z0-9_]/.test(after))) {
+                cursor = idx + 16;
+                continue;
+            }
+
+            let index = idx + 16;
+            while (index < text.length && /\s/.test(text[index])) index++;
+            if (index >= text.length || text[index] !== '=') { cursor = idx + 16; continue; }
+            index++;
+            while (index < text.length && /\s/.test(text[index])) index++;
+            if (index >= text.length || text[index] !== '{') { cursor = idx + 16; continue; }
+
+            const blockStart = idx;
+            let depth = 1;
+            let blockEnd = index + 1;
+            while (blockEnd < text.length && depth > 0) {
+                if (text[blockEnd] === '{') depth++;
+                else if (text[blockEnd] === '}') depth--;
+                blockEnd++;
+            }
+
+            const blockText = text.substring(blockStart, blockEnd);
+            const idRegex = new RegExp(`\\bid\\s*=\\s*${regionId}\\b`);
+            if (idRegex.test(blockText)) {
+                return { start: blockStart, end: blockEnd };
+            }
+
+            cursor = blockEnd;
+        }
+
+        return undefined;
+    }
+
+    private serializeStrategicRegion(region: PersistedStrategicRegion, eol: string): string {
+        const provinces = [...region.provinces].sort((a, b) => a - b).join(' ');
+        const lines: string[] = [
+            'strategic_region = {',
+            `	id = ${region.id}`,
+            `	name = "${region.name}"`,
+            `	provinces = { ${provinces} }`,
+        ];
+
+        if (region.navalTerrain) {
+            lines.push(`	naval_terrain = ${region.navalTerrain}`);
+        }
+
+        lines.push('}');
         return lines.join(eol);
     }
 }

@@ -7,6 +7,7 @@ declare var __worldMapKeybinds: {
     mapRedo?: string;
     createStateFromSelection?: string;
     assignSelectionToState?: string;
+    assignSelectionToStrategicRegion?: string;
 } | undefined;
 
 declare interface VSCodeAPI {

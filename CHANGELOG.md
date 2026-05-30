@@ -4,7 +4,12 @@ All notable changes to the "hoi4modutilities" extension will be documented in th
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
-## [0.12.4] - 2026/05/29 - Latest
+## [0.12.5] - 2026/05/30 - Latest
+
+### Added
+* Add ability to add selected states to strategic regions from world map preview (multi-state selection support, undo/redo, and persistence plumbing).
+* Add ability to create brand-new strategic regions from current selection (states or provinces) and persist them as new strategic region files.
+
 
 ### Added
 * Add configurable world map keybind settings via VS Code `settings.json` for selection undo/redo, map undo/redo, create-state, and assign-selection actions.
@@ -17,6 +22,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Fixed
 * Fix missing dev-only module import by adding `debug.shouldignore` shim used by the development test command.
 * Fix cache interval timer typing/cleanup compatibility for mixed Node/web TypeScript targets.
+* Prevent webview content overflow: topbar/toolbar and inline action messages now wrap or truncate appropriately, and the world map webview CSS was tightened to avoid text extending past the window frame (prevents unexpected scrollbars and layout breakage).
 
 ## [0.12.3] - 2026/05/29
 

@@ -1,8 +1,8 @@
 import { Subscriber, toBehaviorSubject } from "../util/event";
-import { Loader, FEWorldMap, StateSnapshot } from "./loader";
+import { Loader, FEWorldMap, StateSnapshot, StrategicRegionSnapshot } from "./loader";
 import { ViewPoint } from "./viewpoint";
 import { vscode } from "../util/vscode";
-import { PersistedState, WorldMapMessage, WorldMapWarning } from "../../src/previewdef/worldmap/definitions";
+import { PersistedState, WorldMapMessage, WorldMapWarning, PersistedStrategicRegion } from "../../src/previewdef/worldmap/definitions";
 import { feLocalize } from "../util/i18n";
 import { DivDropdown } from "../util/dropdown";
 import { BehaviorSubject, combineLatest, fromEvent } from 'rxjs';
@@ -16,8 +16,10 @@ export type ColorSet = 'provinceid' | 'provincetype' | 'terrain' | 'country' | '
 export const topBarHeight = 40;
 
 interface MapEditAction {
-    before: StateSnapshot[];
-    after: StateSnapshot[];
+    beforeStates: StateSnapshot[];
+    afterStates: StateSnapshot[];
+    beforeStrategic?: StrategicRegionSnapshot[];
+    afterStrategic?: StrategicRegionSnapshot[];
 }
 
 interface ShortcutSpec {
@@ -35,6 +37,7 @@ interface WorldMapKeybindSpec {
     mapRedo: ShortcutSpec;
     createStateFromSelection: ShortcutSpec;
     assignSelectionToState: ShortcutSpec;
+    assignSelectionToStrategicRegion: ShortcutSpec;
 }
 
 const defaultKeybindLabels = {
@@ -44,6 +47,7 @@ const defaultKeybindLabels = {
     mapRedo: 'Ctrl+Y',
     createStateFromSelection: 'Ctrl+Shift+N',
     assignSelectionToState: 'Ctrl+Enter',
+    assignSelectionToStrategicRegion: 'Ctrl+Shift+G',
 } as const;
 
 function parseShortcutOrDefault(value: string | undefined, fallback: string): ShortcutSpec {
@@ -109,6 +113,7 @@ function getWorldMapKeybinds(): WorldMapKeybindSpec {
         mapRedo: parseShortcutOrDefault(source.mapRedo, defaultKeybindLabels.mapRedo),
         createStateFromSelection: parseShortcutOrDefault(source.createStateFromSelection, defaultKeybindLabels.createStateFromSelection),
         assignSelectionToState: parseShortcutOrDefault(source.assignSelectionToState, defaultKeybindLabels.assignSelectionToState),
+        assignSelectionToStrategicRegion: parseShortcutOrDefault(source.assignSelectionToStrategicRegion, defaultKeybindLabels.assignSelectionToStrategicRegion),
     };
 }
 
@@ -119,6 +124,7 @@ export class TopBar extends Subscriber {
     // Backward-compat alias for older callers/tools expecting a single selected province stream
     public selectedProvinceId$: BehaviorSubject<number | undefined>;
     public selectedProvinceIds$: BehaviorSubject<Set<number>>;
+    public selectedStateIds$: BehaviorSubject<Set<number>>;
     public hoverStateId$: BehaviorSubject<number | undefined>;
     public selectedStateId$: BehaviorSubject<number | undefined>;
     public hoverStrategicRegionId$: BehaviorSubject<number | undefined>;
@@ -133,10 +139,14 @@ export class TopBar extends Subscriber {
 
     private searchBox: HTMLInputElement;
     private dragProcessedProvinceIds: Set<number>;
+    private dragProcessedStateIds: Set<number>;
     private selectionUndoStack: Set<number>[];
     private selectionRedoStack: Set<number>[];
+    private selectionUndoStackStates: Set<number>[];
+    private selectionRedoStackStates: Set<number>[];
     private mapUndoStack: MapEditAction[];
     private mapRedoStack: MapEditAction[];
+    
     private actionStatus: HTMLDivElement;
     private actionStatusTimer: ReturnType<typeof setTimeout> | undefined;
     private keybinds: WorldMapKeybindSpec;
@@ -152,6 +162,7 @@ export class TopBar extends Subscriber {
         this.hoverProvinceId$ = new BehaviorSubject<number | undefined>(undefined);
         this.selectedProvinceIds$ = new BehaviorSubject<Set<number>>(new Set<number>(state.selectedProvinceIds ?? []));
         this.selectedProvinceId$ = new BehaviorSubject<number | undefined>(state.selectedProvinceId ?? state.selectedProvinceIds?.[0] ?? undefined);
+        this.selectedStateIds$ = new BehaviorSubject<Set<number>>(new Set<number>(state.selectedStateIds ?? []));
         this.hoverStateId$ = new BehaviorSubject<number | undefined>(undefined);
         this.selectedStateId$ = new BehaviorSubject<number | undefined>(state.selectedStateId ?? undefined);
         this.hoverStrategicRegionId$ = new BehaviorSubject<number | undefined>(undefined);
@@ -160,10 +171,14 @@ export class TopBar extends Subscriber {
         this.selectedSupplyAreaId$ = new BehaviorSubject<number | undefined>(state.selectedSupplyAreaId ?? undefined);
         this.mapMutation$ = new BehaviorSubject<number>(0);
         this.dragProcessedProvinceIds = new Set<number>();
+        this.dragProcessedStateIds = new Set<number>();
         this.selectionUndoStack = [];
         this.selectionRedoStack = [];
+        this.selectionUndoStackStates = [];
+        this.selectionRedoStackStates = [];
         this.mapUndoStack = [];
         this.mapRedoStack = [];
+        
         if (state.warningFilter) {
             this.warningFilter.selectedValues$.next(state.warningFilter);
         } else {
@@ -177,6 +192,9 @@ export class TopBar extends Subscriber {
 
         this.addSubscription(this.selectedProvinceIds$.subscribe(set => {
             this.selectedProvinceId$.next(set.values().next().value);
+        }));
+        this.addSubscription(this.selectedStateIds$.subscribe(set => {
+            this.selectedStateId$.next(set.values().next().value);
         }));
 
         this.searchBox = document.getElementById("searchbox") as HTMLInputElement;
@@ -242,6 +260,8 @@ export class TopBar extends Subscriber {
     private loadStateEditButtons() {
         const createStateButton = document.getElementById('create-state-from-selection') as HTMLButtonElement;
         const assignSelectionButton = document.getElementById('assign-selection-to-state') as HTMLButtonElement;
+        const assignStrategicButton = document.getElementById('assign-states-to-strategicregion') as HTMLButtonElement | null;
+        const createStrategicButton = document.getElementById('create-strategicregion-from-selection') as HTMLButtonElement | null;
 
         this.addSubscription(fromEvent<PointerEvent>(createStateButton, 'pointerdown').subscribe(e => {
             e.preventDefault();
@@ -255,9 +275,32 @@ export class TopBar extends Subscriber {
             this.assignSelectionToState();
         }));
 
-        this.addSubscription(combineLatest([this.selectedProvinceIds$, this.selectedStateId$]).subscribe(([selectedProvinceIds, selectedStateId]) => {
+        if (assignStrategicButton) {
+            this.addSubscription(fromEvent<PointerEvent>(assignStrategicButton, 'pointerdown').subscribe(e => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.assignSelectionToStrategicRegion();
+            }));
+        }
+
+        if (createStrategicButton) {
+            this.addSubscription(fromEvent<PointerEvent>(createStrategicButton, 'pointerdown').subscribe(e => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.createStrategicRegionFromSelection();
+            }));
+        }
+
+        this.addSubscription(combineLatest([this.selectedProvinceIds$, this.selectedStateIds$, this.selectedStateId$, this.selectedStrategicRegionId$]).subscribe(([selectedProvinceIds, selectedStateIds, selectedStateId, selectedStrategicRegionId]) => {
             createStateButton.disabled = selectedProvinceIds.size === 0;
             assignSelectionButton.disabled = selectedProvinceIds.size === 0 || selectedStateId === undefined;
+            if (assignStrategicButton) {
+                // Enabled when either provinces or states are selected, and a target strategic region is chosen
+                assignStrategicButton.disabled = (selectedProvinceIds.size === 0 && selectedStateIds.size === 0) || selectedStrategicRegionId === undefined;
+            }
+            if (createStrategicButton) {
+                createStrategicButton.disabled = (selectedProvinceIds.size === 0 && selectedStateIds.size === 0);
+            }
         }));
     }
 
@@ -426,6 +469,7 @@ export class TopBar extends Subscriber {
                 dragMoved = false;
                 dragStarted = false;
                 this.dragProcessedProvinceIds.clear();
+                this.dragProcessedStateIds.clear();
 
                 if (this.viewMode$.value === 'province') {
                     const prov = this.hoverProvinceId$.value;
@@ -447,6 +491,26 @@ export class TopBar extends Subscriber {
                     } else {
                         pressedLeft = e.shiftKey;
                     }
+                } else if (this.viewMode$.value === 'state') {
+                    const st = this.hoverStateId$.value;
+                    if (st !== undefined) {
+                        if (e.ctrlKey) {
+                            // Ctrl+mousedown: toggle this state immediately and track for drag
+                            this.toggleSelectedState(st);
+                        } else if (e.shiftKey) {
+                            // Shift+mousedown starts drag-selection and adds the hovered state.
+                            pressedLeft = true;
+                            dragStarted = true;
+                            const next = new Set(this.selectedStateIds$.value);
+                            next.add(st);
+                            this.setSelectedStateIds(next, true);
+                        } else {
+                            pressedLeft = false;
+                        }
+                        this.dragProcessedStateIds.add(st);
+                    } else {
+                        pressedLeft = e.shiftKey;
+                    }
                 } else {
                     pressedLeft = false;
                 }
@@ -454,24 +518,36 @@ export class TopBar extends Subscriber {
         }));
 
         this.addSubscription(fromEvent<MouseEvent>(document.body, 'mousemove').subscribe(() => {
-            if (!pressedLeft || this.viewMode$.value !== 'province') {
+            if (!pressedLeft) {
                 return;
             }
             dragMoved = true;
-            const prov = this.hoverProvinceId$.value;
-            if (prov !== undefined && !this.dragProcessedProvinceIds.has(prov)) {
-                const next = new Set(this.selectedProvinceIds$.value);
-                next.add(prov);
-                this.setSelectedProvinceIds(next, false);
-                this.dragProcessedProvinceIds.add(prov);
+            if (this.viewMode$.value === 'province') {
+                const prov = this.hoverProvinceId$.value;
+                if (prov !== undefined && !this.dragProcessedProvinceIds.has(prov)) {
+                    const next = new Set(this.selectedProvinceIds$.value);
+                    next.add(prov);
+                    this.setSelectedProvinceIds(next, false);
+                    this.dragProcessedProvinceIds.add(prov);
+                }
+            } else if (this.viewMode$.value === 'state') {
+                const st = this.hoverStateId$.value;
+                if (st !== undefined && !this.dragProcessedStateIds.has(st)) {
+                    const next = new Set(this.selectedStateIds$.value);
+                    next.add(st);
+                    this.setSelectedStateIds(next, false);
+                    this.dragProcessedStateIds.add(st);
+                }
             }
         }));
 
         this.addSubscription(fromEvent<MouseEvent>(document.body, 'mouseup').subscribe(() => {
             pressedLeft = false;
             this.dragProcessedProvinceIds.clear();
+            this.dragProcessedStateIds.clear();
             if (dragStarted) {
                 this.selectionRedoStack.length = 0;
+                this.selectionRedoStackStates.length = 0;
             }
             dragStarted = false;
         }));
@@ -503,7 +579,23 @@ export class TopBar extends Subscriber {
                     }
                     break;
                 case 'state':
-                    this.selectedStateId$.next(this.selectedStateId$.value === this.hoverStateId$.value ? undefined : this.hoverStateId$.value);
+                    {
+                        const st = this.hoverStateId$.value;
+                        if (e.ctrlKey) {
+                            // Ctrl+click: toggle (already handled on mousedown)
+                        } else {
+                            if (st !== undefined) {
+                                const cur = this.selectedStateIds$.value;
+                                if (cur.size === 1 && cur.has(st)) {
+                                    this.setSelectedStateIds(new Set(), true);
+                                } else {
+                                    this.setSelectedStateIds(new Set([st]), true);
+                                }
+                            } else {
+                                this.setSelectedStateIds(new Set(), true);
+                            }
+                        }
+                    }
                     break;
                 case 'strategicregion':
                     this.selectedStrategicRegionId$.next(this.selectedStrategicRegionId$.value === this.hoverStrategicRegionId$.value ? undefined : this.hoverStrategicRegionId$.value);
@@ -539,13 +631,21 @@ export class TopBar extends Subscriber {
 
             if (this.matchesShortcut(e, this.keybinds.selectionUndo)) {
                 e.preventDefault();
-                this.undoProvinceSelection();
+                if (this.viewMode$.value === 'state') {
+                    this.undoStateSelection();
+                } else {
+                    this.undoProvinceSelection();
+                }
                 return;
             }
 
             if (this.matchesShortcut(e, this.keybinds.selectionRedo)) {
                 e.preventDefault();
-                this.redoProvinceSelection();
+                if (this.viewMode$.value === 'state') {
+                    this.redoStateSelection();
+                } else {
+                    this.redoProvinceSelection();
+                }
                 return;
             }
 
@@ -572,6 +672,12 @@ export class TopBar extends Subscriber {
             if (this.matchesShortcut(e, this.keybinds.assignSelectionToState)) {
                 e.preventDefault();
                 this.assignSelectionToState();
+                return;
+            }
+
+            if (this.matchesShortcut(e, this.keybinds.assignSelectionToStrategicRegion)) {
+                e.preventDefault();
+                this.assignSelectionToStrategicRegion();
                 return;
             }
 
@@ -628,6 +734,45 @@ export class TopBar extends Subscriber {
         }
     }
 
+    private toggleSelectedState(stateId: number) {
+        const next = new Set(this.selectedStateIds$.value);
+        if (next.has(stateId)) {
+            next.delete(stateId);
+        } else {
+            next.add(stateId);
+        }
+        this.setSelectedStateIds(next, true);
+    }
+
+    private setSelectedStateIds(nextSelection: Set<number>, recordHistory: boolean) {
+        const current = this.selectedStateIds$.value;
+        if (this.isSameSelection(current, nextSelection)) {
+            return;
+        }
+
+        const largeSelectionReplaced = recordHistory && current.size >= 8 && nextSelection.size <= 1;
+
+        if (recordHistory) {
+            this.selectionUndoStackStates.push(new Set(current));
+            if (this.selectionUndoStackStates.length > 200) {
+                this.selectionUndoStackStates.shift();
+            }
+            this.selectionRedoStackStates.length = 0;
+        }
+
+        this.selectedStateIds$.next(new Set(nextSelection));
+
+        if (largeSelectionReplaced) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.selectionreplaced',
+                    'Selection changed from {0} provinces to {1}. Press {2} to restore your previous selection.',
+                    current.size,
+                    nextSelection.size,
+                    this.keybinds.selectionUndo.label),
+                'warn');
+        }
+    }
+
     private undoProvinceSelection() {
         const previous = this.selectionUndoStack.pop();
         if (!previous) {
@@ -649,6 +794,30 @@ export class TopBar extends Subscriber {
 
         this.selectionUndoStack.push(new Set(this.selectedProvinceIds$.value));
         this.selectedProvinceIds$.next(next);
+        this.showActionStatus(feLocalize('worldmap.action.selectionredo', 'Reapplied selection: {0} provinces selected.', next.size));
+    }
+
+    private undoStateSelection() {
+        const previous = this.selectionUndoStackStates.pop();
+        if (!previous) {
+            this.showActionStatus(feLocalize('worldmap.action.noselectionundo', 'No selection history to undo.'));
+            return;
+        }
+
+        this.selectionRedoStackStates.push(new Set(this.selectedStateIds$.value));
+        this.selectedStateIds$.next(previous);
+        this.showActionStatus(feLocalize('worldmap.action.selectionundo', 'Restored selection: {0} provinces selected.', previous.size));
+    }
+
+    private redoStateSelection() {
+        const next = this.selectionRedoStackStates.pop();
+        if (!next) {
+            this.showActionStatus(feLocalize('worldmap.action.noselectionredo', 'No selection history to redo.'));
+            return;
+        }
+
+        this.selectionUndoStackStates.push(new Set(this.selectedStateIds$.value));
+        this.selectedStateIds$.next(next);
         this.showActionStatus(feLocalize('worldmap.action.selectionredo', 'Reapplied selection: {0} provinces selected.', next.size));
     }
 
@@ -758,6 +927,50 @@ export class TopBar extends Subscriber {
         }
     }
 
+    private createStrategicRegionFromSelection() {
+        const explicitStateSelection = Array.from(this.selectedStateIds$.value.values());
+        const selectedProvinceIds = Array.from(this.selectedProvinceIds$.value.values());
+
+        const selectedStateIds = new Set<number>(explicitStateSelection.length > 0 ? explicitStateSelection : []);
+        if (selectedStateIds.size === 0) {
+            for (const provinceId of selectedProvinceIds) {
+                const s = this.loader.worldMap.getStateByProvinceId(provinceId);
+                if (s) selectedStateIds.add(s.id);
+            }
+        }
+
+        if (selectedStateIds.size === 0) {
+            this.showActionStatus(feLocalize('worldmap.action.createstrategic.missingselection', 'No states selected to create strategic region from.'), 'warn');
+            return;
+        }
+
+        const nextId = this.loader.worldMap.getNextStrategicRegionId();
+        const beforeIds = new Set<number>([nextId]);
+        for (const stateId of selectedStateIds) {
+            const st = this.loader.worldMap.getStateById(stateId);
+            if (st) {
+                for (const pid of st.provinces) {
+                    const src = this.loader.worldMap.getStrategicRegionByProvinceId(pid);
+                    if (src) beforeIds.add(src.id);
+                }
+            }
+        }
+
+        const before = this.loader.worldMap.snapshotStrategicRegions(Array.from(beforeIds.values()));
+
+        const created = this.loader.worldMap.createStrategicRegionFromStates(Array.from(selectedStateIds.values()));
+        if (created !== undefined) {
+            const after = this.loader.worldMap.snapshotStrategicRegions(created.changedRegionIds);
+            this.recordMapEdit([], [], before, after);
+            this.persistStrategicRegions(created.changedRegionIds);
+            this.selectedStrategicRegionId$.next(created.newStrategicRegionId);
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize('worldmap.action.createstrategic.done', 'Created strategic region {0} from selection.', created.newStrategicRegionId));
+        } else {
+            this.showActionStatus(feLocalize('worldmap.action.createstrategic.nochange', 'No strategic region was created.'), 'warn');
+        }
+    }
+
     private persistStates(stateIds: number[], deletedFiles: string[] = []) {
         const payload: PersistedState[] = Array.from(new Set(stateIds))
             .map(id => this.loader.worldMap.getStateById(id))
@@ -783,8 +996,75 @@ export class TopBar extends Subscriber {
         }
     }
 
-    private recordMapEdit(before: StateSnapshot[], after: StateSnapshot[]) {
-        this.mapUndoStack.push({ before, after });
+    private persistStrategicRegions(strategicRegionIds: number[], deletedFiles: string[] = []) {
+        const payload: PersistedStrategicRegion[] = Array.from(new Set(strategicRegionIds))
+            .map(id => this.loader.worldMap.getStrategicRegionById(id))
+            .filter((sr): sr is NonNullable<typeof sr> => !!sr)
+            .map(sr => ({
+                id: sr.id,
+                name: sr.name,
+                provinces: [...sr.provinces],
+                navalTerrain: sr.navalTerrain ?? null,
+                file: sr.file,
+                tokenStart: sr.token?.start,
+                tokenEnd: sr.token?.end,
+            }));
+
+        if (payload.length > 0 || deletedFiles.length > 0) {
+            vscode.postMessage<WorldMapMessage>({ command: 'persiststrategicregions', strategicRegions: payload, deletedFiles: Array.from(new Set(deletedFiles)) });
+        }
+    }
+
+    private assignSelectionToStrategicRegion() {
+        const selectedStrategicRegionId = this.selectedStrategicRegionId$.value;
+        if (selectedStrategicRegionId === undefined) {
+            this.showActionStatus(feLocalize('worldmap.action.assignstrategic.missingregion', 'Select a target strategic region first, then add states.'), 'warn');
+            return;
+        }
+
+        const selectedProvinceIds = Array.from(this.selectedProvinceIds$.value.values());
+        const explicitStateSelection = Array.from(this.selectedStateIds$.value.values());
+        if (selectedProvinceIds.length === 0 && explicitStateSelection.length === 0) {
+            this.showActionStatus(feLocalize('worldmap.action.assignstrategic.missingselection', 'No states selected to add.'), 'warn');
+            return;
+        }
+
+        const selectedStateIds = new Set<number>(explicitStateSelection.length > 0 ? explicitStateSelection : []);
+        if (selectedStateIds.size === 0) {
+            for (const provinceId of selectedProvinceIds) {
+                const s = this.loader.worldMap.getStateByProvinceId(provinceId);
+                if (s) selectedStateIds.add(s.id);
+            }
+        }
+
+        if (selectedStateIds.size === 0) {
+            this.showActionStatus(feLocalize('worldmap.action.assignstrategic.missingselection', 'No states selected to add.'), 'warn');
+            return;
+        }
+
+        const affectedRegionIds = new Set<number>([selectedStrategicRegionId]);
+        for (const provinceId of selectedProvinceIds) {
+            const src = this.loader.worldMap.getStrategicRegionByProvinceId(provinceId);
+            if (src) affectedRegionIds.add(src.id);
+        }
+
+        const before = this.loader.worldMap.snapshotStrategicRegions(Array.from(affectedRegionIds.values()));
+
+        const changed = this.loader.worldMap.addStatesToStrategicRegion(Array.from(selectedStateIds.values()), selectedStrategicRegionId);
+        if (changed && changed.length > 0) {
+            const after = this.loader.worldMap.snapshotStrategicRegions(changed);
+            this.recordMapEdit([], [], before, after);
+            this.persistStrategicRegions(changed);
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize('worldmap.action.assignstrategic.done', 'Added {0} states to strategic region {1}.', selectedStateIds.size, selectedStrategicRegionId));
+        } else {
+            this.showActionStatus(feLocalize('worldmap.action.assignstrategic.nochange', 'No states were moved.'));
+        }
+    }
+
+
+    private recordMapEdit(beforeStates: StateSnapshot[], afterStates: StateSnapshot[], beforeStrategic?: StrategicRegionSnapshot[], afterStrategic?: StrategicRegionSnapshot[]) {
+        this.mapUndoStack.push({ beforeStates, afterStates, beforeStrategic, afterStrategic });
         if (this.mapUndoStack.length > 200) {
             this.mapUndoStack.shift();
         }
@@ -797,10 +1077,25 @@ export class TopBar extends Subscriber {
             return false;
         }
 
-        this.loader.worldMap.restoreStates(action.before);
+        if (action.beforeStates && action.beforeStates.length > 0) {
+            this.loader.worldMap.restoreStates(action.beforeStates);
+        }
+        if (action.beforeStrategic && action.beforeStrategic.length > 0) {
+            this.loader.worldMap.restoreStrategicRegions(action.beforeStrategic);
+        }
+
         this.mapRedoStack.push(action);
-        const { stateIds, deletedFiles } = this.getPersistenceTargets(action.before, action.after);
-        this.persistStates(stateIds, deletedFiles);
+
+        if (action.beforeStates && action.afterStates) {
+            const { stateIds, deletedFiles } = this.getPersistenceTargets(action.beforeStates, action.afterStates);
+            this.persistStates(stateIds, deletedFiles);
+        }
+
+        if (action.beforeStrategic && action.afterStrategic) {
+            const { strategicIds, deletedFiles } = this.getPersistenceTargetsForStrategic(action.beforeStrategic, action.afterStrategic);
+            this.persistStrategicRegions(strategicIds, deletedFiles);
+        }
+
         this.mapMutation$.next(this.mapMutation$.value + 1);
         return true;
     }
@@ -811,10 +1106,25 @@ export class TopBar extends Subscriber {
             return false;
         }
 
-        this.loader.worldMap.restoreStates(action.after);
+        if (action.afterStates && action.afterStates.length > 0) {
+            this.loader.worldMap.restoreStates(action.afterStates);
+        }
+        if (action.afterStrategic && action.afterStrategic.length > 0) {
+            this.loader.worldMap.restoreStrategicRegions(action.afterStrategic);
+        }
+
         this.mapUndoStack.push(action);
-        const { stateIds, deletedFiles } = this.getPersistenceTargets(action.after, action.before);
-        this.persistStates(stateIds, deletedFiles);
+
+        if (action.afterStates && action.beforeStates) {
+            const { stateIds, deletedFiles } = this.getPersistenceTargets(action.afterStates, action.beforeStates);
+            this.persistStates(stateIds, deletedFiles);
+        }
+
+        if (action.afterStrategic && action.beforeStrategic) {
+            const { strategicIds, deletedFiles } = this.getPersistenceTargetsForStrategic(action.afterStrategic, action.beforeStrategic);
+            this.persistStrategicRegions(strategicIds, deletedFiles);
+        }
+
         this.mapMutation$.next(this.mapMutation$.value + 1);
         return true;
     }
@@ -841,6 +1151,30 @@ export class TopBar extends Subscriber {
         }
 
         return { stateIds, deletedFiles };
+    }
+
+    private getPersistenceTargetsForStrategic(target: StrategicRegionSnapshot[], source: StrategicRegionSnapshot[]): { strategicIds: number[]; deletedFiles: string[] } {
+        const strategicIds: number[] = [];
+        const deletedFiles: string[] = [];
+
+        const sourceById: Record<number, StrategicRegionSnapshot['strategicRegion']> = {};
+        for (const snapshot of source) {
+            sourceById[snapshot.id] = snapshot.strategicRegion;
+        }
+
+        for (const snapshot of target) {
+            if (snapshot.strategicRegion) {
+                strategicIds.push(snapshot.id);
+                continue;
+            }
+
+            const previous = sourceById[snapshot.id];
+            if (previous && previous.token === null) {
+                deletedFiles.push(previous.file);
+            }
+        }
+
+        return { strategicIds, deletedFiles };
     }
 
     private search(text: string) {
