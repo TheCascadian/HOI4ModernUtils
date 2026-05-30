@@ -1,6 +1,6 @@
 {
-	"name": "hoi4modutilities",
-	"displayName": "%hoi4modutilities.displayName%",
+	"name": "hoi4modernutils",
+	"displayName": "%HOI4ModernUtils.displayName%",
 	"description": "Utilities for Heart of Iron IV mods developers",
 	"version": "0.12.5",
 	"author": "TheCascadian",
@@ -8,7 +8,7 @@
 	"icon": "icon.png",
 	"repository": {
 		"type": "git",
-		"url": "https://github.com/herbix/hoi4modutilities"
+		"url": "https://github.com/TheCascadian/HOI4ModernUtils"
 	},
 	"engines": {
 		"vscode": "^1.52.0"

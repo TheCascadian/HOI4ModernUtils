@@ -10,6 +10,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Add ability to add selected states to strategic regions from world map preview (multi-state selection support, undo/redo, and persistence plumbing).
 * Add ability to create brand-new strategic regions from current selection (states or provinces) and persist them as new strategic region files.
 
+## [0.12.4] - 2026/05/29
 
 ### Added
 * Add configurable world map keybind settings via VS Code `settings.json` for selection undo/redo, map undo/redo, create-state, and assign-selection actions.
@@ -18,6 +19,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Update world map shortcut handling to use runtime-configured keybinds instead of hardcoded key combinations.
 * Separate map-edit undo/redo history from selection undo/redo history so each command only affects its own context.
 * Improve world map action feedback presentation to a subtler inline status message and show dynamic key names in selection-restore hints.
+
+### Fixed
+* Fix missing dev-only module import by adding `debug.shouldignore` shim used by the development test command.
+* Fix cache interval timer typing/cleanup compatibility for mixed Node/web TypeScript targets.
 
 ### Fixed
 * Fix missing dev-only module import by adding `debug.shouldignore` shim used by the development test command.
