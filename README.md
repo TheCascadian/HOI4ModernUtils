@@ -126,7 +126,7 @@ If you installed the extension from a `.vsix` file instead of the Marketplace, t
 * Allow `|` in symbol type (to support the case `localization_key = building_state_modifier|dam`) (#105) (Contributor: [IShiraiKurokoI(Shirai_Kuroko)](https://github.com/IShiraiKurokoI)).
 
 ## Contribute
-* If you have any suggestion, feel free to create an issue on this [Github repo](https://github.com/TheCascadian/HOI4ModernUtils/issues).
+* If you have any suggestion, feel free to create an issue on this [Github repo](https://github.com/herbix/hoi4modutilities/issues).
 * If you want to contribute translation, feel free to create pull request to this [Github repo](https://github.com/herbix/hoi4modutilities). All localization related files are under `i18n` folder.
 
 * Thanks to all contributors listed [here](https://github.com/herbix/hoi4modutilities/graphs/contributors).
