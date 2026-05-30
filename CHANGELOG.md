@@ -4,6 +4,17 @@ All notable changes to the "hoi4modutilities" extension will be documented in th
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.12.3] - 2026/05/29
+
+### Added
+* Add fork-specific README content, including VSIX installation instructions and rapid state-creation usage notes.
+* Add repomix configuration and generated output files.
+
+### Changed
+* Update npm dependencies and regenerate lockfile entries.
+* Update icon assets.
+* Apply related updates across preview, webview, test-ui, and TypeScript configuration files to align with documentation and configuration changes.
+
 ## [0.12.2] - 2024/12/07 - Latest
 
 ### Fixed
