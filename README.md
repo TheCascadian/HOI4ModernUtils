@@ -9,8 +9,8 @@ This extension add tools for Heart of Iron IV modding. Some of the tools may wor
 * Ctrl + Left-click — toggle a province in the multi-selection (Province view)
 * Left-click — single-select / deselect province (Province view)
 * Ctrl + Shift + N — Create new state from current selection (rapid state creation)
-* Ctrl + Z — Undo (map-edit undo first: create/assign; if none, selection undo)
-* Ctrl + Y — Redo (map-edit redo first; if none, selection redo)
+* Ctrl + Z — Undo map edits only (create/assign)
+* Ctrl + Y — Redo map edits only (create/assign)
 * Enter (in search box) — Run search for entered province/state id
 * Double-click (canvas) — Open hovered region file (state/strategic region/supply area)
 

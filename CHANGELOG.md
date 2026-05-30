@@ -4,6 +4,20 @@ All notable changes to the "hoi4modutilities" extension will be documented in th
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [0.12.4] - 2026/05/29 - Latest
+
+### Added
+* Add configurable world map keybind settings via VS Code `settings.json` for selection undo/redo, map undo/redo, create-state, and assign-selection actions.
+
+### Changed
+* Update world map shortcut handling to use runtime-configured keybinds instead of hardcoded key combinations.
+* Separate map-edit undo/redo history from selection undo/redo history so each command only affects its own context.
+* Improve world map action feedback presentation to a subtler inline status message and show dynamic key names in selection-restore hints.
+
+### Fixed
+* Fix missing dev-only module import by adding `debug.shouldignore` shim used by the development test command.
+* Fix cache interval timer typing/cleanup compatibility for mixed Node/web TypeScript targets.
+
 ## [0.12.3] - 2026/05/29
 
 ### Added

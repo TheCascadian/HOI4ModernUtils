@@ -18,5 +18,17 @@
     "hoi4modutilities.selecthoifolder.title": "Select HOI4 Install Path",
     "hoi4modutilities.selectmodfile.title": "Select Mod File",
     "hoi4modutilities.enableSupplyArea.title": "Enable Supply Area",
-    "hoi4modutilities.enableSupplyArea.desc": "If you are developing mod for HOI4(version<=1.10). Check this to enable supply area."
+    "hoi4modutilities.enableSupplyArea.desc": "If you are developing mod for HOI4(version<=1.10). Check this to enable supply area.",
+    "hoi4modutilities.worldMapSelectionUndoKeybind.title": "World Map Selection Undo Keybind",
+    "hoi4modutilities.worldMapSelectionUndoKeybind.desc": "Keybind used in world map preview for selection-only undo. Examples: T, Ctrl+Z, Alt+U.",
+    "hoi4modutilities.worldMapSelectionRedoKeybind.title": "World Map Selection Redo Keybind",
+    "hoi4modutilities.worldMapSelectionRedoKeybind.desc": "Keybind used in world map preview for selection-only redo. Examples: R, Ctrl+Y, Alt+I.",
+    "hoi4modutilities.worldMapMapUndoKeybind.title": "World Map Edit Undo Keybind",
+    "hoi4modutilities.worldMapMapUndoKeybind.desc": "Keybind used in world map preview for map edit undo fallback. Example: Ctrl+Z.",
+    "hoi4modutilities.worldMapMapRedoKeybind.title": "World Map Edit Redo Keybind",
+    "hoi4modutilities.worldMapMapRedoKeybind.desc": "Keybind used in world map preview for map edit redo fallback. Example: Ctrl+Y.",
+    "hoi4modutilities.worldMapCreateStateKeybind.title": "World Map Create State Keybind",
+    "hoi4modutilities.worldMapCreateStateKeybind.desc": "Keybind used in world map preview to create state from selected provinces. Example: Ctrl+Shift+N.",
+    "hoi4modutilities.worldMapAssignSelectionKeybind.title": "World Map Assign Selection Keybind",
+    "hoi4modutilities.worldMapAssignSelectionKeybind.desc": "Keybind used in world map preview to assign selected provinces to the selected state. Example: Ctrl+Enter."
 }

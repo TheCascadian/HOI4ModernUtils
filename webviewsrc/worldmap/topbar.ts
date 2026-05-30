@@ -20,6 +20,98 @@ interface MapEditAction {
     after: StateSnapshot[];
 }
 
+interface ShortcutSpec {
+    key: string;
+    ctrl: boolean;
+    shift: boolean;
+    alt: boolean;
+    label: string;
+}
+
+interface WorldMapKeybindSpec {
+    selectionUndo: ShortcutSpec;
+    selectionRedo: ShortcutSpec;
+    mapUndo: ShortcutSpec;
+    mapRedo: ShortcutSpec;
+    createStateFromSelection: ShortcutSpec;
+    assignSelectionToState: ShortcutSpec;
+}
+
+const defaultKeybindLabels = {
+    selectionUndo: 'T',
+    selectionRedo: 'R',
+    mapUndo: 'Ctrl+Z',
+    mapRedo: 'Ctrl+Y',
+    createStateFromSelection: 'Ctrl+Shift+N',
+    assignSelectionToState: 'Ctrl+Enter',
+} as const;
+
+function parseShortcutOrDefault(value: string | undefined, fallback: string): ShortcutSpec {
+    const parsed = parseShortcut(value);
+    if (parsed) {
+        return parsed;
+    }
+
+    const fallbackParsed = parseShortcut(fallback);
+    if (fallbackParsed) {
+        return fallbackParsed;
+    }
+
+    return { key: 'unidentified', ctrl: false, shift: false, alt: false, label: fallback };
+}
+
+function parseShortcut(value: string | undefined): ShortcutSpec | undefined {
+    if (!value) {
+        return undefined;
+    }
+
+    const parts = value.split('+').map(x => x.trim()).filter(x => x.length > 0);
+    if (parts.length === 0) {
+        return undefined;
+    }
+
+    let ctrl = false;
+    let shift = false;
+    let alt = false;
+    let key: string | undefined;
+
+    for (const part of parts) {
+        const lower = part.toLowerCase();
+        if (lower === 'ctrl' || lower === 'control') {
+            ctrl = true;
+            continue;
+        }
+        if (lower === 'shift') {
+            shift = true;
+            continue;
+        }
+        if (lower === 'alt' || lower === 'option') {
+            alt = true;
+            continue;
+        }
+
+        key = lower === 'return' ? 'enter' : lower;
+    }
+
+    if (!key) {
+        return undefined;
+    }
+
+    return { key, ctrl, shift, alt, label: value };
+}
+
+function getWorldMapKeybinds(): WorldMapKeybindSpec {
+    const source = ((window as any)['__worldMapKeybinds'] ?? {}) as Partial<Record<keyof WorldMapKeybindSpec, string>>;
+    return {
+        selectionUndo: parseShortcutOrDefault(source.selectionUndo, defaultKeybindLabels.selectionUndo),
+        selectionRedo: parseShortcutOrDefault(source.selectionRedo, defaultKeybindLabels.selectionRedo),
+        mapUndo: parseShortcutOrDefault(source.mapUndo, defaultKeybindLabels.mapUndo),
+        mapRedo: parseShortcutOrDefault(source.mapRedo, defaultKeybindLabels.mapRedo),
+        createStateFromSelection: parseShortcutOrDefault(source.createStateFromSelection, defaultKeybindLabels.createStateFromSelection),
+        assignSelectionToState: parseShortcutOrDefault(source.assignSelectionToState, defaultKeybindLabels.assignSelectionToState),
+    };
+}
+
 export class TopBar extends Subscriber {
     public viewMode$: BehaviorSubject<ViewMode>;
     public colorSet$: BehaviorSubject<ColorSet>;
@@ -45,6 +137,9 @@ export class TopBar extends Subscriber {
     private selectionRedoStack: Set<number>[];
     private mapUndoStack: MapEditAction[];
     private mapRedoStack: MapEditAction[];
+    private actionStatus: HTMLDivElement;
+    private actionStatusTimer: ReturnType<typeof setTimeout> | undefined;
+    private keybinds: WorldMapKeybindSpec;
 
     constructor(canvas: HTMLCanvasElement, private viewPoint: ViewPoint, private loader: Loader, state: any) {
         super();
@@ -85,6 +180,8 @@ export class TopBar extends Subscriber {
         }));
 
         this.searchBox = document.getElementById("searchbox") as HTMLInputElement;
+        this.actionStatus = document.getElementById('action-status') as HTMLDivElement;
+        this.keybinds = getWorldMapKeybinds();
 
         this.loadControls();
         this.registerEventListeners(canvas);
@@ -440,31 +537,56 @@ export class TopBar extends Subscriber {
                 return;
             }
 
-            const key = e.key.toLowerCase();
-            if (e.ctrlKey && !e.shiftKey && key === 'z') {
+            if (this.matchesShortcut(e, this.keybinds.selectionUndo)) {
                 e.preventDefault();
-                if (this.undoMapEdit()) {
-                    return;
-                }
                 this.undoProvinceSelection();
                 return;
             }
 
-            if (e.ctrlKey && !e.shiftKey && key === 'y') {
+            if (this.matchesShortcut(e, this.keybinds.selectionRedo)) {
                 e.preventDefault();
-                if (this.redoMapEdit()) {
-                    return;
-                }
                 this.redoProvinceSelection();
                 return;
             }
 
-            // Rapid state creation: Ctrl+Shift+N (N = New state)
-            if (e.ctrlKey && e.shiftKey && key === 'n') {
+            if (this.matchesShortcut(e, this.keybinds.mapUndo)) {
+                e.preventDefault();
+                if (this.undoMapEdit()) {
+                    this.showActionStatus(feLocalize('worldmap.action.mapundo', 'Undid last state transfer/create change.'));
+                    return;
+                }
+                this.showActionStatus(feLocalize('worldmap.action.nomapundo', 'No map-edit history to undo.'));
+                return;
+            }
+
+            if (this.matchesShortcut(e, this.keybinds.mapRedo)) {
+                e.preventDefault();
+                if (this.redoMapEdit()) {
+                    this.showActionStatus(feLocalize('worldmap.action.mapredo', 'Redid last state transfer/create change.'));
+                    return;
+                }
+                this.showActionStatus(feLocalize('worldmap.action.nomapredo', 'No map-edit history to redo.'));
+                return;
+            }
+
+            if (this.matchesShortcut(e, this.keybinds.assignSelectionToState)) {
+                e.preventDefault();
+                this.assignSelectionToState();
+                return;
+            }
+
+            if (this.matchesShortcut(e, this.keybinds.createStateFromSelection)) {
                 e.preventDefault();
                 this.createStateFromSelection();
             }
         }));
+    }
+
+    private matchesShortcut(e: KeyboardEvent, shortcut: ShortcutSpec): boolean {
+        return e.key.toLowerCase() === shortcut.key &&
+            e.ctrlKey === shortcut.ctrl &&
+            e.shiftKey === shortcut.shift &&
+            e.altKey === shortcut.alt;
     }
 
     private toggleSelectedProvince(provinceId: number) {
@@ -483,6 +605,8 @@ export class TopBar extends Subscriber {
             return;
         }
 
+        const largeSelectionReplaced = recordHistory && current.size >= 8 && nextSelection.size <= 1;
+
         if (recordHistory) {
             this.selectionUndoStack.push(new Set(current));
             if (this.selectionUndoStack.length > 200) {
@@ -492,26 +616,40 @@ export class TopBar extends Subscriber {
         }
 
         this.selectedProvinceIds$.next(new Set(nextSelection));
+
+        if (largeSelectionReplaced) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.selectionreplaced',
+                    'Selection changed from {0} provinces to {1}. Press {2} to restore your previous selection.',
+                    current.size,
+                    nextSelection.size,
+                    this.keybinds.selectionUndo.label),
+                'warn');
+        }
     }
 
     private undoProvinceSelection() {
         const previous = this.selectionUndoStack.pop();
         if (!previous) {
+            this.showActionStatus(feLocalize('worldmap.action.noselectionundo', 'No selection history to undo.'));
             return;
         }
 
         this.selectionRedoStack.push(new Set(this.selectedProvinceIds$.value));
         this.selectedProvinceIds$.next(previous);
+        this.showActionStatus(feLocalize('worldmap.action.selectionundo', 'Restored selection: {0} provinces selected.', previous.size));
     }
 
     private redoProvinceSelection() {
         const next = this.selectionRedoStack.pop();
         if (!next) {
+            this.showActionStatus(feLocalize('worldmap.action.noselectionredo', 'No selection history to redo.'));
             return;
         }
 
         this.selectionUndoStack.push(new Set(this.selectedProvinceIds$.value));
         this.selectedProvinceIds$.next(next);
+        this.showActionStatus(feLocalize('worldmap.action.selectionredo', 'Reapplied selection: {0} provinces selected.', next.size));
     }
 
     private isSameSelection(a: Set<number>, b: Set<number>): boolean {
@@ -540,11 +678,13 @@ export class TopBar extends Subscriber {
     private assignSelectionToState() {
         const selectedStateId = this.selectedStateId$.value;
         if (selectedStateId === undefined) {
+            this.showActionStatus(feLocalize('worldmap.action.assign.missingstate', 'Select a target state first, then transfer provinces.'), 'warn');
             return;
         }
 
         const selectedProvinceIds = Array.from(this.selectedProvinceIds$.value.values());
         if (selectedProvinceIds.length === 0) {
+            this.showActionStatus(feLocalize('worldmap.action.assign.missingselection', 'No provinces selected to transfer.'), 'warn');
             return;
         }
 
@@ -563,7 +703,33 @@ export class TopBar extends Subscriber {
             this.recordMapEdit(before, after);
             this.persistStates(changedStateIds);
             this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize('worldmap.action.assign.done',
+                'Transferred {0} provinces to state {1}.',
+                selectedProvinceIds.length,
+                selectedStateId));
+        } else {
+            this.showActionStatus(feLocalize('worldmap.action.assign.nochange', 'No provinces were moved.'));
         }
+    }
+
+    private showActionStatus(message: string, tone: 'info' | 'warn' = 'info') {
+        if (!this.actionStatus) {
+            return;
+        }
+
+        this.actionStatus.textContent = message;
+        this.actionStatus.classList.remove('warn', 'hidden');
+        if (tone === 'warn') {
+            this.actionStatus.classList.add('warn');
+        }
+
+        if (this.actionStatusTimer) {
+            clearTimeout(this.actionStatusTimer);
+        }
+
+        this.actionStatusTimer = setTimeout(() => {
+            this.actionStatus.classList.add('hidden');
+        }, 3200);
     }
 
     private createStateFromSelection() {

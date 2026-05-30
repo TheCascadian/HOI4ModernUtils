@@ -17,7 +17,7 @@ interface CacheEntry<V> {
 
 export class Cache<V> {
     protected _cache: Record<string, CacheEntry<V>> = {};
-    private _intervalToken: NodeJS.Timeout | null = null;
+    private _intervalToken: any = null;
     
     constructor(protected readonly options: CacheOptions<V>) {
         if (options.life > 0) {
@@ -65,7 +65,7 @@ export class Cache<V> {
     public dispose(): void {
         this._cache = {};
         if (this._intervalToken) {
-            clearTimeout(this._intervalToken);
+            clearInterval(this._intervalToken);
         }
     }
     

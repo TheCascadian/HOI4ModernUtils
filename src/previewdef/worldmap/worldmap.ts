@@ -59,12 +59,23 @@ export class WorldMap {
     }
 
     private renderWorldMap(webview: vscode.Webview): string {
+        const conf = getConfiguration();
+        const worldMapKeybinds = {
+            selectionUndo: conf.get<string>('worldMapSelectionUndoKeybind', 'T'),
+            selectionRedo: conf.get<string>('worldMapSelectionRedoKeybind', 'R'),
+            mapUndo: conf.get<string>('worldMapMapUndoKeybind', 'Ctrl+Z'),
+            mapRedo: conf.get<string>('worldMapMapRedoKeybind', 'Ctrl+Y'),
+            createStateFromSelection: conf.get<string>('worldMapCreateStateKeybind', 'Ctrl+Shift+N'),
+            assignSelectionToState: conf.get<string>('worldMapAssignSelectionKeybind', 'Ctrl+Enter'),
+        };
+
         return html(
             webview,
             localizeText(worldmapview),
             [
                 { content: i18nTableAsScript() },
                 { content: 'window.__enableSupplyArea = ' + getConfiguration().enableSupplyArea + ';' },
+                { content: 'window.__worldMapKeybinds = ' + JSON.stringify(worldMapKeybinds) + ';' },
                 'common.js',
                 'worldmap.js'
             ],

@@ -2,7 +2,7 @@
 	"name": "hoi4modutilities",
 	"displayName": "%hoi4modutilities.displayName%",
 	"description": "Utilities for Heart of Iron IV mods developers",
-	"version": "0.12.3",
+	"version": "0.12.4",
 	"author": "TheCascadian",
 	"publisher": "wrekt",
 	"icon": "icon.png",
@@ -97,6 +97,42 @@
 						"type": "array",
 						"default": [],
 						"description": "%hoi4modutilities.featureFlags.desc%"
+					},
+					"hoi4ModUtilities.worldMapSelectionUndoKeybind": {
+						"title": "%hoi4modutilities.worldMapSelectionUndoKeybind.title%",
+						"type": "string",
+						"default": "T",
+						"description": "%hoi4modutilities.worldMapSelectionUndoKeybind.desc%"
+					},
+					"hoi4ModUtilities.worldMapSelectionRedoKeybind": {
+						"title": "%hoi4modutilities.worldMapSelectionRedoKeybind.title%",
+						"type": "string",
+						"default": "R",
+						"description": "%hoi4modutilities.worldMapSelectionRedoKeybind.desc%"
+					},
+					"hoi4ModUtilities.worldMapMapUndoKeybind": {
+						"title": "%hoi4modutilities.worldMapMapUndoKeybind.title%",
+						"type": "string",
+						"default": "Ctrl+Z",
+						"description": "%hoi4modutilities.worldMapMapUndoKeybind.desc%"
+					},
+					"hoi4ModUtilities.worldMapMapRedoKeybind": {
+						"title": "%hoi4modutilities.worldMapMapRedoKeybind.title%",
+						"type": "string",
+						"default": "Ctrl+Y",
+						"description": "%hoi4modutilities.worldMapMapRedoKeybind.desc%"
+					},
+					"hoi4ModUtilities.worldMapCreateStateKeybind": {
+						"title": "%hoi4modutilities.worldMapCreateStateKeybind.title%",
+						"type": "string",
+						"default": "Ctrl+Shift+N",
+						"description": "%hoi4modutilities.worldMapCreateStateKeybind.desc%"
+					},
+					"hoi4ModUtilities.worldMapAssignSelectionKeybind": {
+						"title": "%hoi4modutilities.worldMapAssignSelectionKeybind.title%",
+						"type": "string",
+						"default": "Ctrl+Enter",
+						"description": "%hoi4modutilities.worldMapAssignSelectionKeybind.desc%"
 					}
 				}
 			}
