@@ -27,13 +27,13 @@ vsce package
 * The current package generated for this repository is:
 
 ```text
-hoi4modutilities-0.12.2.vsix
+hoi4modutilities-0.12.3.vsix
 ```
 
 * Users can install that package from a terminal:
 
 ```powershell
-code --install-extension hoi4modutilities-0.12.2.vsix
+code --install-extension hoi4modutilities-0.12.3.vsix
 ```
 
 * Or from inside VS Code:
