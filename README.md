@@ -1,4 +1,6 @@
-# HOI4 Mod Utilities
+# HOI4 Modern Utilities
+![Downloads](https://img.shields.io/github/downloads/TheCascadian/HOI4ModernUtils/latest/total)
+![Views](https://komarev.com/ghpvc/?username=TheCascadian&repo=HOI4ModernUtils&label=Views)
 
 This extension add tools for Heart of Iron IV modding. Some of the tools may work on other Paradox games.
 
