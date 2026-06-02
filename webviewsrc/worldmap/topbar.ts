@@ -608,7 +608,14 @@ export class TopBar extends Subscriber {
 
         this.addSubscription(fromEvent(canvas, 'dblclick').subscribe(e => {
             e.stopPropagation();
-            this.openMapItem(true);
+            if (this.viewMode$.value === 'province') {
+                const prov = this.hoverProvinceId$.value;
+                if (prov !== undefined) {
+                    this.toggleVictoryPoint(prov);
+                }
+            } else {
+                this.openMapItem(true);
+            }
         }));
 
         this.addSubscription(this.viewMode$.subscribe(() => this.onViewModeChange()));
@@ -899,6 +906,41 @@ export class TopBar extends Subscriber {
         this.actionStatusTimer = setTimeout(() => {
             this.actionStatus.classList.add('hidden');
         }, 3200);
+    }
+
+    private toggleVictoryPoint(provinceId: number) {
+        const worldMap = this.loader.worldMap;
+        const state = worldMap.getStateByProvinceId(provinceId);
+        if (!state) {
+            this.showActionStatus(feLocalize('TODO', 'Province {0} is not part of any state.', provinceId), 'warn');
+            return;
+        }
+
+        const before = worldMap.snapshotStates([state.id]);
+        const currentVp = state.victoryPoints[provinceId];
+
+        if (currentVp !== undefined) {
+            delete state.victoryPoints[provinceId];
+            const after = worldMap.snapshotStates([state.id]);
+            this.recordMapEdit(before, after);
+            this.persistStates([state.id]);
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize('TODO', 'Removed victory point from province {0} in state {1}.', provinceId, state.id));
+        } else {
+            state.victoryPoints[provinceId] = 1;
+            const after = worldMap.snapshotStates([state.id]);
+            this.recordMapEdit(before, after);
+            this.persistStates([state.id]);
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            const localisationKey = `VICTORY_POINT_${state.id}`;
+            vscode.postMessage<WorldMapMessage>({
+                command: 'persistvictorypointlocalisation',
+                key: localisationKey,
+                value: `Victory Point ${state.id}`,
+                stateId: state.id,
+            } as WorldMapMessage);
+            this.showActionStatus(feLocalize('TODO', 'Added victory point (value=1) to province {0} in state {1}. Localisation key: {2}', provinceId, state.id, localisationKey));
+        }
     }
 
     private createStateFromSelection() {

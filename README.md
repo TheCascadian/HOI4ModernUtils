@@ -15,7 +15,8 @@ This extension add tools for Heart of Iron IV modding. Some of the tools may wor
 * Ctrl + Z — Undo map edits only (create/assign)
 * Ctrl + Y — Redo map edits only (create/assign)
 * Enter (in search box) — Run search for entered province/state id
-* Double-click (canvas) — Open hovered region file (state/strategic region/supply area)
+* Double-click (Province view) — Drop/remove a victory point on the hovered province (value=1 placeholder, with localisation key)
+* Double-click (State/Strategic Region/Supply Area views) — Open hovered region file
 
 ## Install Without Marketplace
 
@@ -30,13 +31,13 @@ vsce package
 * The current package generated for this repository is:
 
 ```text
-hoi4modutilities-0.12.5.vsix
+hoi4modutilities-0.12.6.vsix
 ```
 
 * Users can install that package from a terminal:
 
 ```powershell
-code --install-extension hoi4modutilities-0.12.5.vsix
+code --install-extension hoi4modutilities-0.12.6.vsix
 ```
 
 * Or from inside VS Code:

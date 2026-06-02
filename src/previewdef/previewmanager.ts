@@ -49,7 +49,17 @@ export class PreviewManager implements vscode.WebviewPanelSerializer {
 
     public register(): vscode.Disposable {
         const disposables: vscode.Disposable[] = [];
-        disposables.push(vscode.commands.registerCommand(Commands.Preview, this.showPreview, this));
+        try {
+            disposables.push(vscode.commands.registerCommand(Commands.Preview, this.showPreview, this));
+        } catch (e) {
+            const msg = (e && (e as Error).message) ? (e as Error).message : '';
+            if (msg.includes('already exists')) {
+                // Command already registered by another activation; skip registering to avoid activation failure.
+                console.warn(`Command ${Commands.Preview} already exists; skipping registration.`);
+            } else {
+                throw e;
+            }
+        }
         disposables.push(vscode.workspace.onDidCloseTextDocument(this.onCloseTextDocument, this));
         disposables.push(vscode.workspace.onDidChangeTextDocument(this.onChangeTextDocument, this));
         disposables.push(vscode.window.onDidChangeActiveTextEditor(this.updateHoi4PreviewContextValue, this));

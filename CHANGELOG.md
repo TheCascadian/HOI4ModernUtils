@@ -4,7 +4,12 @@ All notable changes to the "hoi4modutilities" extension will be documented in th
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
-## [0.12.5] - 2026/05/30 - Latest
+## [0.12.6] - 2026/06/01 - Latest
+
+### Added
+* Double-click a province in Province view mode to drop (or remove) a victory point. Adds a placeholder VP value of 1 to the state file and generates a localisation key in `localisation/victory_points_l_english.yml` for quick human editing.
+
+## [0.12.5] - 2026/05/30
 
 ### Added
 * Add ability to add selected states to strategic regions from world map preview (multi-state selection support, undo/redo, and persistence plumbing).

@@ -4,7 +4,7 @@ import worldmapviewstyles from './worldmapview.css';
 import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistVictoryPointLocalisationMessage } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
@@ -129,6 +129,9 @@ export class WorldMap {
                     break;
                 case 'persiststrategicregions':
                     await this.persistStrategicRegions(msg.strategicRegions, msg.deletedFiles ?? []);
+                    break;
+                case 'persistvictorypointlocalisation':
+                    await this.persistVictoryPointLocalisation(msg);
                     break;
                 
                     break;
@@ -481,6 +484,45 @@ export class WorldMap {
             await mkdirs(dirUri(targetFile));
             await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
         }
+    }
+
+    private async persistVictoryPointLocalisation(msg: PersistVictoryPointLocalisationMessage) {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+            debug('No workspace folder open; skipping victory point localisation write.');
+            return;
+        }
+
+        const localisationDir = vscode.Uri.joinPath(workspaceFolder.uri, 'localisation');
+        const targetFile = vscode.Uri.joinPath(localisationDir, 'victory_points_l_english.yml');
+        const entryText = ` ${msg.key}:0 "${msg.value}"`;
+
+        let existingContent = '';
+        try {
+            const sourceBytes = await vscode.workspace.fs.readFile(targetFile);
+            existingContent = Buffer.from(sourceBytes).toString('utf-8').replace(/^\uFEFF/, '');
+        } catch {
+            // File does not exist yet; create it.
+        }
+
+        const eol = existingContent.includes('\r\n') ? '\r\n' : '\n';
+
+        if (existingContent.includes(`${msg.key}:`)) {
+            debug(`Localisation key ${msg.key} already exists; skipping.`);
+            return;
+        }
+
+        let newContent: string;
+        if (existingContent.length === 0) {
+            newContent = `l_english:${eol}${entryText}${eol}`;
+        } else {
+            const trimmed = existingContent.replace(/\s+$/, '');
+            newContent = `${trimmed}${eol}${entryText}${eol}`;
+        }
+
+        await mkdirs(localisationDir);
+        await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
+        debug(`Wrote victory point localisation entry ${msg.key} to ${targetFile.fsPath}`);
     }
 
     private async resolveTargetFile(relativePath: string): Promise<vscode.Uri> {

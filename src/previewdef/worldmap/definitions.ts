@@ -214,7 +214,7 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage;
+export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage | PersistVictoryPointLocalisationMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
@@ -298,6 +298,13 @@ export interface PersistStrategicRegionsMessage {
     command: 'persiststrategicregions';
     strategicRegions: PersistedStrategicRegion[];
     deletedFiles?: string[];
+}
+
+export interface PersistVictoryPointLocalisationMessage {
+    command: 'persistvictorypointlocalisation';
+    key: string;
+    value: string;
+    stateId: number;
 }
 
 export type ProgressReporter = (progress: string) => Promise<void>;
