@@ -1,4 +1,4 @@
-# HOI4 Modern Utilities
+# HOI4 Modern Utils 
 ![Version](https://img.shields.io/github/tag/TheCascadian/HOI4ModernUtils)
 ![Downloads](https://img.shields.io/github/downloads/TheCascadian/HOI4ModernUtils/total)
 ![Views](https://komarev.com/ghpvc/?username=TheCascadian&repo=HOI4ModernUtils&label=Views)
