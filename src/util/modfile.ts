@@ -23,7 +23,7 @@ export function registerModFile(): vscode.Disposable {
     disposables.push(new vscode.Disposable(() => { modFileStatusContainer.current = null; }));
 
     // Initial status bar
-    checkAndUpdateModFileStatus(fileOrUriStringToUri(getConfiguration().modFile));
+    updateConfiguredOrImplicitModFileStatus();
     return vscode.Disposable.from(...disposables);
 }
 
@@ -47,8 +47,13 @@ export function updateSelectedModFileStatus(modFile: vscode.Uri | undefined, err
 
 function onChangeWorkspaceConfiguration(e: vscode.ConfigurationChangeEvent): void {
     if (e.affectsConfiguration(`${ConfigurationKey}.modFile`)) {
-        checkAndUpdateModFileStatus(fileOrUriStringToUri(getConfiguration().modFile));
+        updateConfiguredOrImplicitModFileStatus();
     }
+}
+
+async function updateConfiguredOrImplicitModFileStatus(): Promise<void> {
+    const configured = fileOrUriStringToUri(getConfiguration().modFile);
+    await checkAndUpdateModFileStatus(configured ?? await getImplicitWorkspaceModFile());
 }
 
 async function checkAndUpdateModFileStatus(modFile: vscode.Uri | undefined): Promise<void> {
@@ -77,19 +82,21 @@ async function selectModFile(): Promise<void> {
     let selected = conf.modFile.trim();
 
     workspaceModFilesCache.clear();
+    const workspaceMods: vscode.Uri[] = [];
     if (vscode.workspace.workspaceFolders) {
         for (const workspaceFolder of vscode.workspace.workspaceFolders) {
             const workspaceFolderPath = workspaceFolder.uri;
             const mods = await workspaceModFilesCache.get(workspaceFolderPath.toString());
-            if (selected === '' && mods.length > 0) {
-                selected = uriToFilePathWhenPossible(mods[0]);
-            }
+            workspaceMods.push(...mods);
             modsList.push(...mods.map(mod => ({
                 label: basename(mod, '.mod'),
                 description: localize('modfile.infolder', 'In folder {0}', basename(workspaceFolderPath)),
                 detail: uriToFilePathWhenPossible(mod),
             })));
         }
+    }
+    if (selected === '' && workspaceMods.length === 1) {
+        selected = uriToFilePathWhenPossible(workspaceMods[0]);
     }
 
     modsList.forEach(r => r.detail === selected ? r.picked = true : undefined);
@@ -135,5 +142,29 @@ async function selectModFile(): Promise<void> {
 async function getWorkspaceModFiles(uriString: string): Promise<vscode.Uri[]> {
     const uri = vscode.Uri.parse(uriString);
     const items = await readDir(uri);
-    return items.filter(i => i.endsWith('.mod')).map(i => vscode.Uri.joinPath(uri, i));
+    return items
+        .filter(i => i.toLowerCase().endsWith('.mod'))
+        .sort((a, b) => a.localeCompare(b))
+        .map(i => vscode.Uri.joinPath(uri, i));
+}
+
+/**
+ * Resolve an unconfigured workspace descriptor only when the choice is
+ * unambiguous. Directory enumeration order must never decide which mod's
+ * replace_path rules or write destination are active.
+ */
+export async function getImplicitWorkspaceModFile(): Promise<vscode.Uri | undefined> {
+    if (!vscode.workspace.workspaceFolders) {
+        return undefined;
+    }
+
+    const mods: vscode.Uri[] = [];
+    for (const workspaceFolder of vscode.workspace.workspaceFolders) {
+        mods.push(...await workspaceModFilesCache.get(workspaceFolder.uri.toString()));
+        if (mods.length > 1) {
+            return undefined;
+        }
+    }
+
+    return mods.length === 1 ? mods[0] : undefined;
 }

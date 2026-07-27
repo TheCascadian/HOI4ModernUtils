@@ -2,7 +2,7 @@
 	"name": "hoi4modernutils",
 	"displayName": "%hoi4modernutils.displayName%",
 	"description": "Utilities for Heart of Iron IV mods developers",
-	"version": "0.4.0",
+	"version": "0.4.01",
 	"author": "TheCascadian",
 	"publisher": "thecascadian",
 	"icon": "icon.png",
@@ -194,6 +194,12 @@
 						"type": "string",
 						"default": "Ctrl+Shift+G",
 						"description": "%hoi4modernutils.worldMapAssignSelectionToStrategicRegionKeybind.desc%"
+					},
+					"hoi4ModernUtils.worldMapConfirmNewProvinceCreation": {
+						"title": "%hoi4modernutils.worldMapConfirmNewProvinceCreation.title%",
+						"type": "boolean",
+						"default": true,
+						"description": "%hoi4modernutils.worldMapConfirmNewProvinceCreation.desc%"
 					}
 				}
 			}

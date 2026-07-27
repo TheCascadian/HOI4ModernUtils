@@ -24,10 +24,18 @@ html, body {
 .toolbar-outer {
     z-index: 10;
     box-sizing: border-box;
+    height: 68px;
     padding: 6px 12px;
-    /* allow toolbar to wrap / scroll horizontally if necessary without breaking layout */
-    overflow-x: auto;
-    overflow-y: hidden;
+    overflow: hidden;
+}
+
+.toolbar {
+    height: 55px;
+    align-content: flex-start;
+    align-items: center;
+    flex-wrap: wrap;
+    column-gap: 0;
+    row-gap: 6px;
 }
 
 label {
@@ -50,6 +58,12 @@ span.divider {
     display: inline-block;
     margin-right: 10px;
     min-width: 0;
+}
+
+#paintbrush-panel[hidden],
+#new-province-confirm-modal[hidden],
+.worldmap-modal[hidden] {
+    display: none !important;
 }
 
 .gourp.hidden {
@@ -108,4 +122,125 @@ span.divider {
 
 #action-status.hidden {
     visibility: hidden;
+}
+
+.worldmap-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 10020;
+    background: rgba(0, 0, 0, 0.58);
+    align-items: center;
+    justify-content: center;
+}
+
+.worldmap-modal-card {
+    box-sizing: border-box;
+    width: min(440px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 18px 20px;
+    border: 1px solid var(--vscode-panel-border, #555);
+    border-radius: 6px;
+    background: var(--vscode-editorWidget-background, #1e1e1e);
+    color: var(--vscode-editorWidget-foreground, #ccc);
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.7);
+}
+
+.worldmap-modal-card label,
+.worldmap-modal-card input,
+.worldmap-modal-card select {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.worldmap-modal-card label {
+    margin: 10px 0 4px;
+}
+
+.worldmap-modal-card input,
+.worldmap-modal-card select {
+    min-width: 0;
+    border: 1px solid var(--vscode-input-border, var(--vscode-settings-textInputBorder, transparent));
+    border-radius: 2px;
+    background: var(--vscode-input-background, #3c3c3c);
+    color: var(--vscode-input-foreground, #cccccc);
+    font: inherit;
+}
+
+.worldmap-modal-card input[type="search"] {
+    appearance: none;
+    height: 28px;
+    padding: 3px 8px;
+}
+
+.worldmap-modal-card input:focus,
+.worldmap-modal-card select:focus {
+    outline: 1px solid var(--vscode-focusBorder, #007fd4);
+    outline-offset: -1px;
+}
+
+.worldmap-modal-card select[size] {
+    height: clamp(72px, 24vh, 144px);
+    padding: 2px;
+}
+
+.worldmap-modal-title {
+    margin-bottom: 8px;
+    color: var(--vscode-editorWidget-foreground, #fff);
+    font-size: 15px;
+    font-weight: 600;
+}
+
+.worldmap-modal-summary {
+    color: var(--vscode-descriptionForeground, #aaa);
+}
+
+.worldmap-modal-error {
+    min-height: 18px;
+    margin-top: 8px;
+    color: var(--vscode-errorForeground, #f48771);
+}
+
+.worldmap-modal-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.worldmap-modal-actions button {
+    box-sizing: border-box;
+    width: auto;
+    min-width: 72px;
+    height: auto;
+    min-height: 28px;
+    padding: 4px 12px;
+    border: 1px solid var(--vscode-button-secondaryBackground, #3a3d41);
+    border-radius: 2px;
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ffffff);
+    font: inherit;
+    line-height: 18px;
+    white-space: normal;
+}
+
+.worldmap-modal-actions button:hover:not([disabled]) {
+    background: var(--vscode-button-secondaryHoverBackground, #45494e);
+}
+
+.worldmap-modal-actions button:active {
+    transform: none;
+}
+
+.worldmap-modal-actions button.primary {
+    border-color: var(--vscode-button-border, transparent);
+    background: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #fff);
+}
+
+.worldmap-modal-actions button.primary:hover:not([disabled]) {
+    background: var(--vscode-button-hoverBackground, #1177bb);
 }

@@ -117,6 +117,13 @@ export function parseHoi4File(input: string, errorMessagePrefix: string = ''): N
     const tokens = tokenizer(input, tokenRegexStrings, errorMessagePrefix);
     const value = parseBlockContent(tokens);
 
+    // HOI4 accepts files with redundant closing braces at the top level.
+    // Consume those braces so tolerant vanilla/mod files do not produce a
+    // misleading "can't be completely parsed" warning.
+    while (tokens.peek().value === '}') {
+        tokens.next();
+    }
+
     if (tokens.peek().type !== 'eof') {
         Logger.warn(errorMessagePrefix + "File content can't be completely parsed");
     }
@@ -223,6 +230,13 @@ function parseNode(tokens: Tokenizer<HOITokenType>): Node {
 }
 
 function parseNodeValue(tokens: Tokenizer<HOITokenType>): [ NodeValue, Token<HOITokenType>, Token<HOITokenType> ] {
+    const peekToken = tokens.peek();
+    if (peekToken.value === '}' || peekToken.type === 'eof') {
+        // Tolerate an empty assignment such as `foo = }`. Leave the closing
+        // brace unconsumed so the containing block still closes correctly.
+        return [null, peekToken, peekToken];
+    }
+
     const nextToken = tokens.next();
     switch (nextToken.type) {
         case 'string':

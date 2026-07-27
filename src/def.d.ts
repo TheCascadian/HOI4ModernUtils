@@ -10,6 +10,7 @@ declare module 'vscode' {
             readonly stateBoundaryColor: string;
             readonly stateBoundaryWidth: number;
             readonly indexing: ('gfx' | 'sharedfocus' | 'localisation' | 'event')[];
+            readonly worldMapConfirmNewProvinceCreation: boolean;
         };
     }
 }

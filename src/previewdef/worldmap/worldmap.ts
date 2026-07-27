@@ -4,7 +4,7 @@ import worldmapviewstyles from './worldmapview.css';
 import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistVictoryPointLocalisationMessage } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistVictoryPointLocalisationMessage, PersistCountryDiplomacyMessage } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
@@ -25,9 +25,9 @@ export class WorldMap {
     private lastRequestedExportUri: vscode.Uri | undefined;
 
     /** Undo stack for province BMP edits: stores raw BMP buffers and CSV snapshots */
-    private bmpUndoStack: { bmpBuffer: Buffer; provinces: PersistedProvince[] }[] = [];
+    private bmpUndoStack: { bmpBuffer: Buffer; provinces: PersistedProvince[]; deletedProvinceIds?: number[] }[] = [];
     /** Redo stack for province BMP edits */
-    private bmpRedoStack: { bmpBuffer: Buffer; provinces: PersistedProvince[] }[] = [];
+    private bmpRedoStack: { bmpBuffer: Buffer; provinces: PersistedProvince[]; deletedProvinceIds?: number[] }[] = [];
 
     private getMaxUndoSteps(): number {
         return (getConfiguration() as any).paintbrushMaxUndoSteps ?? 5;
@@ -88,6 +88,7 @@ export class WorldMap {
                 { content: 'window.__stateBoundaryColor = ' + JSON.stringify(getConfiguration().stateBoundaryColor) + ';' },
                 { content: 'window.__stateBoundaryWidth = ' + getConfiguration().stateBoundaryWidth + ';' },
                 { content: 'window.__worldMapKeybinds = ' + JSON.stringify(worldMapKeybinds) + ';' },
+                { content: 'window.__confirmNewProvinceCreation = ' + (conf.get<boolean>('worldMapConfirmNewProvinceCreation', true)) + ';' },
                 'common.js',
                 'worldmap.js'
             ],
@@ -132,11 +133,26 @@ export class WorldMap {
                 case 'requestexportmap':
                     await this.requestExportMap();
                     break;
+                case 'setconfirmnewprovincecreation':
+                    await this.setConfirmNewProvinceCreation((msg as any).value);
+                    break;
                 case 'exportmap':
                     await this.exportMap(msg.dataUrl);
                     break;
                 case 'persiststates':
                     await this.persistStates(msg.states, msg.deletedFiles ?? []);
+                    break;
+                case 'persistcountrydiplomacy':
+                    try {
+                        await this.persistCountryDiplomacy(msg as PersistCountryDiplomacyMessage);
+                    } catch (e) {
+                        error(e);
+                        await this.postMessageToWebview({
+                            command: 'countrydiplomacyupdated',
+                            success: false,
+                            error: e instanceof Error ? e.message : String(e),
+                        });
+                    }
                     break;
                 case 'persiststrategicregions':
                     await this.persistStrategicRegions((msg as any).strategicRegions, (msg as any).deletedFiles ?? []);
@@ -430,6 +446,10 @@ export class WorldMap {
         return await this.panel.webview.postMessage(message);
     }
 
+    private async setConfirmNewProvinceCreation(value: boolean) {
+        await getConfiguration().update('worldMapConfirmNewProvinceCreation', value, vscode.ConfigurationTarget.Global);
+    }
+
     private async requestExportMap() {
         const uri = await vscode.window.showSaveDialog({ filters: { [localize('pngfile', 'PNG file')]: ['png'] } });
         this.lastRequestedExportUri = uri;
@@ -511,6 +531,68 @@ export class WorldMap {
             await mkdirs(dirUri(targetFile));
             await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
         }
+    }
+
+    private async persistCountryDiplomacy(msg: PersistCountryDiplomacyMessage) {
+        const tagPattern = /^[A-Z0-9]{3}$/;
+        const autonomyPattern = /^autonomy_[a-z0-9_]+$/;
+        const overlord = msg.overlord.toUpperCase();
+        const subject = msg.subject.toUpperCase();
+
+        if (!tagPattern.test(overlord) || !tagPattern.test(subject) || overlord === subject) {
+            throw new Error('Invalid country selection for puppet relationship.');
+        }
+        if (msg.action === 'puppet' && (!msg.autonomyState || !autonomyPattern.test(msg.autonomyState))) {
+            throw new Error('Invalid autonomy state.');
+        }
+        if (msg.action !== 'puppet' && msg.action !== 'end_puppet') {
+            throw new Error('Invalid diplomacy action.');
+        }
+
+        const normalizedFile = msg.file.replace(/\\/g, '/');
+        const fileName = normalizedFile.substring(normalizedFile.lastIndexOf('/') + 1);
+        if (!normalizedFile.startsWith('history/countries/') ||
+            !fileName.toUpperCase().startsWith(overlord)) {
+            throw new Error(`Country history file does not match ${overlord}.`);
+        }
+
+        let sourceText = '';
+        try {
+            const sourcePath = await getFilePathFromMod(normalizedFile);
+            sourceText = sourcePath
+                ? (await readFileFromPath(sourcePath))[0].toString('utf-8').replace(/^\uFEFF/, '')
+                : (await readFileFromModOrHOI4(normalizedFile))[0].toString('utf-8').replace(/^\uFEFF/, '');
+        } catch {
+            // The loader normally supplies an existing file. Keep creation as a
+            // safe fallback for newly introduced country tags.
+        }
+
+        const eol = sourceText.includes('\r\n') ? '\r\n' : '\n';
+        const effect = msg.action === 'end_puppet'
+            ? `end_puppet = ${subject}`
+            : msg.autonomyState === 'autonomy_puppet'
+                ? `puppet = ${subject}`
+                : [
+                'set_autonomy = {',
+                `\ttarget = ${subject}`,
+                `\tautonomous_state = ${msg.autonomyState}`,
+                '}',
+                ].join(eol);
+        const trimmed = sourceText.replace(/\s+$/, '');
+        const newContent = trimmed.length > 0
+            ? `${trimmed}${eol}${eol}${effect}${eol}`
+            : `${effect}${eol}`;
+        const targetFile = await this.resolveTargetFile(normalizedFile);
+
+        await mkdirs(dirUri(targetFile));
+        await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
+        this.cachedWorldMap = undefined;
+        this.worldMapDependencies = undefined;
+
+        await this.postMessageToWebview({
+            command: 'countrydiplomacyupdated',
+            success: true,
+        });
     }
 
     private async persistVictoryPointLocalisation(msg: PersistVictoryPointLocalisationMessage) {
@@ -952,7 +1034,7 @@ export class WorldMap {
             }
         }
 
-        const deletedSet = new Set(deletedFiles);
+        const deletedSet = new Set(deletedFiles.map(value => Number.parseInt(value, 10)).filter(Number.isInteger));
 
         const output = lines.filter(line => {
             if (deletedSet.size === 0) {
@@ -960,7 +1042,7 @@ export class WorldMap {
             }
 
             const id = Number.parseInt(line.split(';')[0], 10);
-            return !deletedSet.has(id.toString());
+            return !deletedSet.has(id);
         });
 
         await mkdirs(dirUri(targetFile));
@@ -980,6 +1062,7 @@ export class WorldMap {
         height: number;
         provinces: PersistedProvince[];
         previousProvinces?: PersistedProvince[];
+        deletedProvinceIds?: number[];
         targetProvinceId: number;
     }) {
         const defaultMap = await this.readDefaultMapConfig();
@@ -993,9 +1076,14 @@ export class WorldMap {
 
         // Save undo snapshot
         if (msg.previousProvinces) {
+            const previousIds = new Set(msg.previousProvinces.map(province => province.id));
+            const addedIds = msg.provinces
+                .map(province => province.id)
+                .filter(id => !previousIds.has(id));
             this.bmpUndoStack.push({
                 bmpBuffer: oldBmpBuffer,
                 provinces: msg.previousProvinces,
+                deletedProvinceIds: addedIds,
             });
             const maxSteps = this.getMaxUndoSteps();
             while (this.bmpUndoStack.length > maxSteps) {
@@ -1011,7 +1099,7 @@ export class WorldMap {
         await this.writeBmpAtomic(bmpRelativePath, newBmpBuffer);
 
         // Write definition.csv
-        await this.persistProvinces(msg.provinces, []);
+        await this.persistProvinces(msg.provinces, (msg.deletedProvinceIds ?? []).map(String));
     }
 
     /**
@@ -1050,9 +1138,13 @@ export class WorldMap {
         const currentBmp = await this.readBmpFile(bmpRelativePath);
         const currentProvinces = await this.readCurrentProvinceDefs();
         if (currentBmp) {
+            const currentIds = new Set(currentProvinces.map(province => province.id));
             this.bmpRedoStack.push({
                 bmpBuffer: currentBmp,
                 provinces: currentProvinces,
+                deletedProvinceIds: snapshot.provinces
+                    .map(province => province.id)
+                    .filter(id => !currentIds.has(id)),
             });
             const maxSteps = this.getMaxUndoSteps();
             while (this.bmpRedoStack.length > maxSteps) {
@@ -1064,7 +1156,7 @@ export class WorldMap {
         await this.writeBmpAtomic(bmpRelativePath, snapshot.bmpBuffer);
 
         // Restore old CSV
-        await this.persistProvinces(snapshot.provinces, []);
+        await this.persistProvinces(snapshot.provinces, (snapshot.deletedProvinceIds ?? []).map(String));
 
         // Signal webview to reload
         await this.postMessageToWebview({
@@ -1091,9 +1183,13 @@ export class WorldMap {
         const currentBmp = await this.readBmpFile(bmpRelativePath);
         const currentProvinces = await this.readCurrentProvinceDefs();
         if (currentBmp) {
+            const currentIds = new Set(currentProvinces.map(province => province.id));
             this.bmpUndoStack.push({
                 bmpBuffer: currentBmp,
                 provinces: currentProvinces,
+                deletedProvinceIds: snapshot.provinces
+                    .map(province => province.id)
+                    .filter(id => !currentIds.has(id)),
             });
             const maxSteps = this.getMaxUndoSteps();
             while (this.bmpUndoStack.length > maxSteps) {
@@ -1105,7 +1201,7 @@ export class WorldMap {
         await this.writeBmpAtomic(bmpRelativePath, snapshot.bmpBuffer);
 
         // Restore redo CSV
-        await this.persistProvinces(snapshot.provinces, []);
+        await this.persistProvinces(snapshot.provinces, (snapshot.deletedProvinceIds ?? []).map(String));
 
         await this.postMessageToWebview({
             command: 'provincebmpupdated',

@@ -5,17 +5,20 @@ import { vscode } from "../util/vscode";
 import { PersistedState, WorldMapMessage, WorldMapWarning, ProvinceDraft } from "../../src/previewdef/worldmap/definitions";
 import { feLocalize } from "../util/i18n";
 import { DivDropdown } from "../util/dropdown";
+import { ContextMenu, ContextMenuItem } from "../util/contextmenu";
 import { BehaviorSubject, combineLatest, fromEvent } from 'rxjs';
 import { Renderer, solveWithCondition, solveWithConditionAsSet } from './renderer';
 import { sendEvent } from '../util/telemetry';
 import { getState } from "../util/common";
 import { ConditionItem, conditionItemToStringValue, conditionToString, stringValueToConditionItem } from "../../src/hoiformat/condition";
+import { Zone } from "../../src/previewdef/worldmap/definitions";
+import { getBrushBounds } from "./brush";
 
-export type ViewMode = 'province' | 'state' | 'strategicregion' | 'supplyarea' | 'warnings';
+export type ViewMode = 'province' | 'state' | 'strategicregion' | 'supplyarea' | 'warnings' | 'country';
 export type ColorSet = 'provinceid' | 'provincetype' | 'terrain' | 'owner' | 'controller' | 'stateid' | 'manpower' |
     'victorypoint' | 'continent' | 'warnings' | 'strategicregionid' | 'supplyareaid' | 'supplyvalue' | 'resources' | 'statecategory';
 
-export const topBarHeight = 40;
+export const topBarHeight = 68;
 
 interface MapEditAction {
     type: 'state' | 'strategicregion' | 'province';
@@ -118,6 +121,11 @@ function getWorldMapKeybinds(): WorldMapKeybindSpec {
     };
 }
 
+function getConfirmNewProvinceCreation(): boolean {
+    const value = (window as any)['__confirmNewProvinceCreation'];
+    return value !== false;
+}
+
 export class TopBar extends Subscriber {
     public viewMode$: BehaviorSubject<ViewMode>;
     public colorSet$: BehaviorSubject<ColorSet>;
@@ -132,6 +140,8 @@ export class TopBar extends Subscriber {
     public selectedStrategicRegionId$: BehaviorSubject<number | undefined>;
     public hoverSupplyAreaId$: BehaviorSubject<number | undefined>;
     public selectedSupplyAreaId$: BehaviorSubject<number | undefined>;
+    public hoverCountryTag$: BehaviorSubject<string | undefined>;
+    public selectedCountryTag$: BehaviorSubject<string | undefined>;
     public mapMutation$: BehaviorSubject<number>;
     public selectedConditions$: BehaviorSubject<ConditionItem[]>;
     public warningFilter: DivDropdown;
@@ -170,6 +180,18 @@ export class TopBar extends Subscriber {
     public paintbrushCanRedo$: BehaviorSubject<boolean>;
 
     public warningsVisible: boolean = false;
+    private warningsFilterByViewMode: boolean = false;
+    private warningsFilterByColorSet: boolean = false;
+    private exportIncludeBorder: boolean = true;
+    private pendingExport: { bbox: Zone; includeBorder: boolean } | undefined;
+    private contextMenu: ContextMenu = new ContextMenu();
+    private pendingPuppetWrite = false;
+    private countryActionMode: 'puppet' | 'annex' | 'transfer' = 'puppet';
+
+    /** Whether to show the confirmation dialog before creating a new province (mirrors the `worldMapConfirmNewProvinceCreation` setting). */
+    private confirmNewProvinceCreation: boolean = getConfirmNewProvinceCreation();
+    /** Last map position painted during the current stroke, used to interpolate a continuous line between mousemove events. */
+    private lastPaintMapPosition: { x: number; y: number } | undefined;
 
     private searchBox: HTMLInputElement;
     private dragProcessedProvinceIds: Set<number>;
@@ -256,6 +278,8 @@ export class TopBar extends Subscriber {
         this.selectedStrategicRegionId$ = new BehaviorSubject<number | undefined>(state.selectedStrategicRegionId ?? undefined);
         this.hoverSupplyAreaId$ = new BehaviorSubject<number | undefined>(undefined);
         this.selectedSupplyAreaId$ = new BehaviorSubject<number | undefined>(state.selectedSupplyAreaId ?? undefined);
+        this.hoverCountryTag$ = new BehaviorSubject<string | undefined>(undefined);
+        this.selectedCountryTag$ = new BehaviorSubject<string | undefined>(state.selectedCountryTag ?? undefined);
         this.mapMutation$ = new BehaviorSubject<number>(0);
         this.paintbrushActive$ = new BehaviorSubject<boolean>(false);
         this.paintbrushColor$ = new BehaviorSubject<number>(0);
@@ -290,6 +314,9 @@ export class TopBar extends Subscriber {
             this.display.selectedValues$.next(state.display);
         } else {
             this.display.selectAll();
+            this.display.selectedValues$.next(
+                this.display.selectedValues$.value.filter(value => value !== 'oceanstateboundary')
+            );
         }
 
         this.addSubscription(this.selectedProvinceIds$.subscribe(set => {
@@ -299,9 +326,9 @@ export class TopBar extends Subscriber {
         // Wire brush size dropdown
         const brushSizeSelect = document.getElementById('brushsize') as HTMLSelectElement;
         if (brushSizeSelect) {
-            this.brushSize$.next(parseInt(brushSizeSelect.value, 10) || 1);
+            this.brushSize$.next(getBrushBounds(parseInt(brushSizeSelect.value, 10)).size);
             this.addSubscription(fromEvent(brushSizeSelect, 'change').subscribe(() => {
-                this.brushSize$.next(parseInt(brushSizeSelect.value, 10) || 1);
+                this.brushSize$.next(getBrushBounds(parseInt(brushSizeSelect.value, 10)).size);
             }));
         }
 
@@ -322,6 +349,10 @@ export class TopBar extends Subscriber {
                         'Province BMP persistence failed:',
                         data.error
                     );
+
+                    // Restore authoritative geometry after any optimistic
+                    // paint/merge mutation when persistence did not complete.
+                    this.loader.refresh();
 
                     return;
                 }
@@ -375,6 +406,7 @@ export class TopBar extends Subscriber {
         this.searchBox = document.getElementById("searchbox") as HTMLInputElement;
         this.actionStatus = document.getElementById('action-status') as HTMLDivElement;
 
+        this.addSubscription(this.contextMenu);
         this.loadControls();
         this.registerEventListeners(canvas);
     }
@@ -433,16 +465,16 @@ export class TopBar extends Subscriber {
     }
     
     private loadControls() {
-        this.loadWarningButton();
         this.loadSearchBox();
         this.loadRefreshButton();
         this.loadOpenButton();
-        this.loadStateEditButtons();
         this.loadStrategicRegionEditButtons();
         this.loadNewProvinceButton();
         this.loadPaintbrushToggleButton();
         this.loadPaintbrushPanel();
-        this.loadExportButton();
+        this.loadNewProvinceConfirmModal();
+        this.loadCountryPuppetModal();
+        this.initExportMapMessageListener();
     }
 
     /**
@@ -465,6 +497,7 @@ export class TopBar extends Subscriber {
 
         // Show/hide panel with paintbrush active state
         this.addSubscription(this.paintbrushActive$.subscribe(active => {
+            panel.hidden = !active;
             panel.style.display = active ? 'block' : 'none';
             if (!active && applyBtn) applyBtn.disabled = false;
         }));
@@ -521,12 +554,18 @@ export class TopBar extends Subscriber {
             }
         }));
 
-        // Apply button: commit and exit
+        // Apply button: confirm (if creating a new province) then commit and exit
         if (applyBtn) {
             this.addSubscription(fromEvent<PointerEvent>(applyBtn, 'pointerdown').subscribe(e => {
                 e.preventDefault();
                 e.stopPropagation();
-                this.exitPaintbrushMode();
+
+                const draft = this.provinceDraft$.value;
+                if (draft?.isNewProvince && this.confirmNewProvinceCreation) {
+                    this.showNewProvinceConfirmModal(draft);
+                } else {
+                    this.exitPaintbrushMode();
+                }
             }));
         }
 
@@ -548,51 +587,352 @@ export class TopBar extends Subscriber {
         }));
     }
 
-    private loadStateEditButtons() {
-        const createStateButton = document.getElementById('create-state-from-selection') as HTMLButtonElement;
-        const assignSelectionButton = document.getElementById('assign-selection-to-state') as HTMLButtonElement;
-        const assignStrategicButton = document.getElementById('assign-states-to-strategicregion') as HTMLButtonElement | null;
-        const createStrategicButton = document.getElementById('create-strategicregion-from-selection') as HTMLButtonElement | null;
+    /**
+     * Wire the "Confirm new province creation" modal shown when Apply is
+     * clicked while a brand-new province (not a boundary edit) is being created.
+     */
+    private loadNewProvinceConfirmModal() {
+        const modal = document.getElementById('new-province-confirm-modal');
+        if (!modal) {
+            return;
+        }
 
-        this.addSubscription(fromEvent<PointerEvent>(createStateButton, 'pointerdown').subscribe(e => {
-            e.preventDefault();
-            e.stopPropagation();
-            this.createStateFromSelection();
-        }));
+        const confirmBtn = document.getElementById('new-province-confirm-ok') as HTMLButtonElement | null;
+        const cancelBtn = document.getElementById('new-province-confirm-cancel') as HTMLButtonElement | null;
+        const dontAskCheckbox = document.getElementById('new-province-confirm-dontask') as HTMLInputElement | null;
 
-        this.addSubscription(fromEvent<PointerEvent>(assignSelectionButton, 'pointerdown').subscribe(e => {
-            e.preventDefault();
-            e.stopPropagation();
-            this.assignSelectionToState();
-        }));
-
-        if (assignStrategicButton) {
-            this.addSubscription(fromEvent<PointerEvent>(assignStrategicButton, 'pointerdown').subscribe(e => {
+        if (confirmBtn) {
+            this.addSubscription(fromEvent<PointerEvent>(confirmBtn, 'pointerdown').subscribe(e => {
                 e.preventDefault();
                 e.stopPropagation();
-                this.assignStatesToStrategicRegion();
+
+                if (dontAskCheckbox?.checked) {
+                    this.confirmNewProvinceCreation = false;
+                    vscode.postMessage<WorldMapMessage>({ command: 'setconfirmnewprovincecreation', value: false });
+                }
+
+                this.hideNewProvinceConfirmModal();
+                this.exitPaintbrushMode();
             }));
         }
 
-        if (createStrategicButton) {
-            this.addSubscription(fromEvent<PointerEvent>(createStrategicButton, 'pointerdown').subscribe(e => {
+        if (cancelBtn) {
+            this.addSubscription(fromEvent<PointerEvent>(cancelBtn, 'pointerdown').subscribe(e => {
                 e.preventDefault();
                 e.stopPropagation();
-                this.createStrategicRegionFromSelection();
+                this.hideNewProvinceConfirmModal();
             }));
         }
+    }
 
-        this.addSubscription(combineLatest([this.selectedProvinceIds$, this.selectedStateIds$, this.selectedStateId$, this.selectedStrategicRegionId$]).subscribe(([selectedProvinceIds, selectedStateIds, selectedStateId, selectedStrategicRegionId]) => {
-            createStateButton.disabled = selectedProvinceIds.size === 0;
-            assignSelectionButton.disabled = selectedProvinceIds.size === 0 || selectedStateId === undefined;
-            if (assignStrategicButton) {
-                // Enabled when either provinces or states are selected, and a target strategic region is chosen
-                assignStrategicButton.disabled = (selectedProvinceIds.size === 0 && selectedStateIds.size === 0) || selectedStrategicRegionId === undefined;
-            }
-            if (createStrategicButton) {
-                createStrategicButton.disabled = (selectedProvinceIds.size === 0 && selectedStateIds.size === 0);
+    private showNewProvinceConfirmModal(draft: ProvinceDraft) {
+        const modal = document.getElementById('new-province-confirm-modal');
+        if (!modal) {
+            // Modal markup unavailable for some reason -  fall back to committing directly
+            // rather than silently dropping the user's paint session.
+            this.exitPaintbrushMode();
+            return;
+        }
+
+        const summary = document.getElementById('new-province-confirm-summary');
+        const dontAskCheckbox = document.getElementById('new-province-confirm-dontask') as HTMLInputElement | null;
+        if (dontAskCheckbox) {
+            dontAskCheckbox.checked = false;
+        }
+
+        if (summary) {
+            const r = (draft.color >> 16) & 0xFF;
+            const g = (draft.color >> 8) & 0xFF;
+            const b = draft.color & 0xFF;
+            summary.innerHTML =
+                `<div>Pixels: ${draft.pixels.size}</div>` +
+                `<div>Colour: rgb(${r}, ${g}, ${b})</div>` +
+                `<div>Type: ${draft.type}</div>` +
+                `<div>Terrain: ${draft.terrain || '(none)'}</div>` +
+                `<div>Coastal: ${draft.coastal}</div>` +
+                `<div>Continent: ${draft.continent}</div>`;
+        }
+
+        modal.hidden = false;
+        modal.style.display = 'flex';
+    }
+
+    private hideNewProvinceConfirmModal() {
+        const modal = document.getElementById('new-province-confirm-modal');
+        if (modal) {
+            modal.hidden = true;
+            modal.style.display = 'none';
+        }
+    }
+
+    private loadCountryPuppetModal() {
+        const modal = document.getElementById('country-puppet-modal');
+        const search = document.getElementById('country-puppet-search') as HTMLInputElement | null;
+        const target = document.getElementById('country-puppet-target') as HTMLSelectElement | null;
+        const autonomy = document.getElementById('country-puppet-autonomy') as HTMLSelectElement | null;
+        const apply = document.getElementById('country-puppet-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('country-puppet-cancel') as HTMLButtonElement | null;
+        if (!modal || !search || !target || !autonomy || !apply || !cancel) {
+            return;
+        }
+
+        this.addSubscription(fromEvent(search, 'input').subscribe(() => {
+            this.populateCountryPuppetTargets(search.value);
+        }));
+        this.addSubscription(fromEvent(cancel, 'click').subscribe(e => {
+            e.preventDefault();
+            if (!this.pendingPuppetWrite) {
+                this.hideCountryPuppetModal();
             }
         }));
+        this.addSubscription(fromEvent(apply, 'click').subscribe(e => {
+            e.preventDefault();
+            if (this.countryActionMode === 'annex') {
+                this.annexCountry(target.value);
+            } else if (this.countryActionMode === 'transfer') {
+                this.transferSelectedStatesToCountry(target.value);
+            } else {
+                this.applyCountryPuppetRelationship(target.value, autonomy.value);
+            }
+        }));
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'countrydiplomacyupdated') {
+                return;
+            }
+
+            this.pendingPuppetWrite = false;
+            apply.disabled = false;
+            cancel.disabled = false;
+            if (!message.success) {
+                this.setCountryPuppetError(message.error ?? feLocalize('worldmap.country.puppet.error', 'Could not update country history.'));
+                return;
+            }
+
+            this.hideCountryPuppetModal();
+            this.showActionStatus(feLocalize('worldmap.country.puppet.done', 'Country puppet relationship saved.'));
+            this.loader.refresh();
+        }));
+    }
+
+    private showCountryPuppetModal(mode: 'puppet' | 'annex' | 'transfer' = 'puppet') {
+        const modal = document.getElementById('country-puppet-modal');
+        const summary = document.getElementById('country-puppet-overlord');
+        const title = document.getElementById('country-puppet-title');
+        const autonomy = document.getElementById('country-puppet-autonomy') as HTMLSelectElement | null;
+        const autonomyLabel = autonomy?.previousElementSibling as HTMLElement | null;
+        const apply = document.getElementById('country-puppet-apply') as HTMLButtonElement | null;
+        const search = document.getElementById('country-puppet-search') as HTMLInputElement | null;
+        const target = document.getElementById('country-puppet-target') as HTMLSelectElement | null;
+        const selectedTag = this.selectedCountryTag$.value;
+        if (!modal || !search || !target) {
+            return;
+        }
+
+        if ((mode === 'puppet' || mode === 'annex') && !selectedTag) {
+            return;
+        }
+        if (mode === 'puppet' && selectedTag && !this.loader.worldMap.countryHistoryFiles[selectedTag]) {
+            this.showActionStatus(
+                feLocalize('worldmap.country.puppet.nohistory', 'No country history file was found for {0}.', selectedTag),
+                'warn'
+            );
+            return;
+        }
+
+        this.countryActionMode = mode;
+        const isPuppet = mode === 'puppet';
+        if (autonomy) autonomy.style.display = isPuppet ? 'block' : 'none';
+        if (autonomyLabel) autonomyLabel.style.display = isPuppet ? 'block' : 'none';
+        if (title) {
+            title.textContent = mode === 'annex'
+                ? feLocalize('worldmap.country.annex.title', 'Annex Country')
+                : mode === 'transfer'
+                    ? feLocalize('worldmap.country.transfer.title', 'Transfer State to Country')
+                    : feLocalize('worldmap.country.puppet.title', 'Force Puppet State');
+        }
+        if (apply) {
+            apply.textContent = mode === 'annex'
+                ? feLocalize('worldmap.country.annex.apply', 'Annex Country')
+                : mode === 'transfer'
+                    ? feLocalize('worldmap.country.transfer.apply', 'Transfer Selected States')
+                    : feLocalize('worldmap.country.puppet.apply', 'Apply Puppet Relationship');
+        }
+        if (summary) {
+            summary.textContent = mode === 'transfer'
+                ? feLocalize('worldmap.country.transfer.summary', 'Selected states: {0}', this.selectedStateIds$.value.size)
+                : mode === 'annex'
+                    ? feLocalize('worldmap.country.annex.summary', 'Annexing country: {0}', selectedTag)
+                    : feLocalize('worldmap.country.puppet.overlord', 'Overlord: {0}', selectedTag);
+        }
+        search.value = '';
+        this.setCountryPuppetError('');
+        this.populateCountryPuppetTargets('');
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        search.focus();
+    }
+
+    private hideCountryPuppetModal() {
+        const modal = document.getElementById('country-puppet-modal');
+        if (modal) {
+            modal.hidden = true;
+            modal.style.display = 'none';
+        }
+        this.setCountryPuppetError('');
+    }
+
+    private populateCountryPuppetTargets(filter: string) {
+        const select = document.getElementById('country-puppet-target') as HTMLSelectElement | null;
+        if (!select) {
+            return;
+        }
+
+        const selectedTag = this.countryActionMode === 'transfer' ? undefined : this.selectedCountryTag$.value;
+        const normalizedFilter = filter.trim().toUpperCase();
+        const previousValue = select.value;
+        select.replaceChildren();
+
+        const tags = this.loader.worldMap.countries
+            .map(country => country.tag)
+            .filter(tag => tag !== selectedTag && tag.includes(normalizedFilter))
+            .sort((a, b) => a.localeCompare(b));
+        for (const tag of tags) {
+            const option = document.createElement('option');
+            option.value = tag;
+            option.textContent = tag;
+            select.appendChild(option);
+        }
+
+        if (tags.includes(previousValue)) {
+            select.value = previousValue;
+        } else if (tags.length > 0) {
+            select.selectedIndex = 0;
+        }
+    }
+
+    private applyCountryPuppetRelationship(subject: string, autonomyState: string) {
+        const overlord = this.selectedCountryTag$.value;
+        const file = overlord ? this.loader.worldMap.countryHistoryFiles[overlord] : undefined;
+        if (!overlord || !file || !subject) {
+            this.setCountryPuppetError(feLocalize('worldmap.country.puppet.missingtarget', 'Choose a target country.'));
+            return;
+        }
+
+        const apply = document.getElementById('country-puppet-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('country-puppet-cancel') as HTMLButtonElement | null;
+        this.pendingPuppetWrite = true;
+        if (apply) apply.disabled = true;
+        if (cancel) cancel.disabled = true;
+        this.setCountryPuppetError('');
+        vscode.postMessage<WorldMapMessage>({
+            command: 'persistcountrydiplomacy',
+            action: 'puppet',
+            file,
+            overlord,
+            subject,
+            autonomyState,
+        });
+    }
+
+    private releaseSelectedPuppet() {
+        const relation = this.getCurrentPuppetRelation();
+        if (!relation) {
+            this.showActionStatus(feLocalize('worldmap.country.release.notpuppet', 'The selected country is not an active puppet.'), 'warn');
+            return;
+        }
+        const file = this.loader.worldMap.countryHistoryFiles[relation.overlord];
+        if (!file) {
+            this.showActionStatus(feLocalize('worldmap.country.release.nohistory', 'No country history file was found for overlord {0}.', relation.overlord), 'warn');
+            return;
+        }
+
+        vscode.postMessage<WorldMapMessage>({
+            command: 'persistcountrydiplomacy',
+            action: 'end_puppet',
+            file,
+            overlord: relation.overlord,
+            subject: relation.subject,
+        });
+        this.showActionStatus(
+            feLocalize('worldmap.country.release.pending', 'Releasing {0} from puppet status under {1}...', relation.subject, relation.overlord)
+        );
+    }
+
+    private getCurrentPuppetRelation() {
+        const subject = this.selectedCountryTag$.value;
+        if (!subject) {
+            return undefined;
+        }
+        const candidates = this.loader.worldMap.diplomacyRelations
+            .filter(relation => relation.subject === subject)
+            .map(relation => ({ condition: relation.condition, value: relation }));
+        const active = solveWithCondition(candidates, this.selectedConditions$.value);
+        return active && active.level !== 'independent' && active.level !== 'annexed'
+            ? active
+            : undefined;
+    }
+
+    private annexCountry(targetTag: string) {
+        const annexingTag = this.selectedCountryTag$.value;
+        if (!annexingTag || !targetTag || annexingTag === targetTag) {
+            this.setCountryPuppetError(feLocalize('worldmap.country.annex.missingtarget', 'Choose a different country to annex.'));
+            return;
+        }
+
+        const affectedStates: number[] = [];
+        this.loader.worldMap.forEachState(state => {
+            if (solveWithCondition(state.owner, this.selectedConditions$.value) === targetTag) {
+                affectedStates.push(state.id);
+            }
+        });
+        if (affectedStates.length === 0) {
+            this.setCountryPuppetError(feLocalize('worldmap.country.annex.nostates', '{0} owns no states under the selected conditions.', targetTag));
+            return;
+        }
+
+        const before = this.loader.worldMap.snapshotStates(affectedStates);
+        for (const stateId of affectedStates) {
+            const state = this.loader.worldMap.getStateById(stateId);
+            if (state) {
+                state.owner = [{ condition: true, value: annexingTag }];
+            }
+        }
+        const after = this.loader.worldMap.snapshotStates(affectedStates);
+        this.recordMapEdit(before, after);
+        this.persistStates(affectedStates);
+        this.mapMutation$.next(this.mapMutation$.value + 1);
+        this.hideCountryPuppetModal();
+        this.showActionStatus(feLocalize('worldmap.country.annex.done', 'Transferred {0} states from {1} to {2}.', affectedStates.length, targetTag, annexingTag));
+    }
+
+    private transferSelectedStatesToCountry(targetTag: string) {
+        const stateIds = Array.from(this.selectedStateIds$.value);
+        if (!targetTag || stateIds.length === 0) {
+            this.setCountryPuppetError(feLocalize('worldmap.country.transfer.missing', 'Select one or more states and a target country.'));
+            return;
+        }
+
+        const before = this.loader.worldMap.snapshotStates(stateIds);
+        for (const stateId of stateIds) {
+            const state = this.loader.worldMap.getStateById(stateId);
+            if (state) {
+                state.owner = [{ condition: true, value: targetTag }];
+            }
+        }
+        const after = this.loader.worldMap.snapshotStates(stateIds);
+        this.recordMapEdit(before, after);
+        this.persistStates(stateIds);
+        this.mapMutation$.next(this.mapMutation$.value + 1);
+        this.hideCountryPuppetModal();
+        this.showActionStatus(feLocalize('worldmap.country.transfer.done', 'Transferred {0} states to {1}.', stateIds.length, targetTag));
+    }
+
+    private setCountryPuppetError(message: string) {
+        const errorElement = document.getElementById('country-puppet-error');
+        if (errorElement) {
+            errorElement.textContent = message;
+        }
     }
 
     private loadStrategicRegionEditButtons() {
@@ -619,8 +959,9 @@ export class TopBar extends Subscriber {
         }));
 
         this.addSubscription(this.selectedProvinceIds$.subscribe(selectedProvinceIds => {
-            // Enable only when exactly one province is selected
-            newProvinceButton.disabled = selectedProvinceIds.size !== 1;
+            // Enable when at least one province is selected (multi-selection is
+            // supported: painting stays clamped to the whole selected group).
+            newProvinceButton.disabled = selectedProvinceIds.size === 0;
         }));
     }
 
@@ -680,18 +1021,268 @@ export class TopBar extends Subscriber {
         }
     }
 
-    private loadWarningButton() {
+    private toggleWarningsVisible() {
         const warningsContainer = document.getElementById('warnings-container')!;
-        const showWarnings = document.getElementById('show-warnings')!;
-        this.addSubscription(fromEvent(showWarnings, 'click').subscribe(() => {
-            this.warningsVisible = !this.warningsVisible;
-            if (this.warningsVisible) {
-                sendEvent('worldmap.openwarnings');
-                warningsContainer.style.display = 'block';
-            } else {
-                warningsContainer.style.display = 'none';
+        this.warningsVisible = !this.warningsVisible;
+        if (this.warningsVisible) {
+            sendEvent('worldmap.openwarnings');
+            warningsContainer.style.display = 'block';
+            this.refreshWarningsDisplay();
+        } else {
+            warningsContainer.style.display = 'none';
+        }
+    }
+
+    private toggleWarningsFilterByViewMode() {
+        this.warningsFilterByViewMode = !this.warningsFilterByViewMode;
+        this.refreshWarningsDisplay();
+    }
+
+    private toggleWarningsFilterByColorSet() {
+        this.warningsFilterByColorSet = !this.warningsFilterByColorSet;
+        this.refreshWarningsDisplay();
+    }
+
+    private refreshWarningsDisplay() {
+        const worldMap = this.loader.worldMap;
+        const warnings = document.getElementById('warnings') as HTMLTextAreaElement;
+        if (!worldMap || !warnings) {
+            return;
+        }
+
+        const filtered = this.filterWarnings(worldMap.warnings);
+        if (filtered.length === 0) {
+            warnings.value = feLocalize('worldmap.warnings.nowarnings', 'No warnings.');
+        } else {
+            warnings.value = feLocalize('worldmap.warnings', 'World map warnings: \n\n{0}', filtered.map(warningToString).join('\n'));
+        }
+    }
+
+    private filterWarnings(warnings: WorldMapWarning[]): WorldMapWarning[] {
+        if (!this.warningsFilterByViewMode && !this.warningsFilterByColorSet) {
+            return warnings;
+        }
+
+        const allowedTypes = new Set<string>();
+        if (this.warningsFilterByViewMode) {
+            allowedTypes.add(this.viewMode$.value);
+        }
+        if (this.warningsFilterByColorSet) {
+            const type = colorSetToWarningSourceType(this.colorSet$.value);
+            if (type) {
+                allowedTypes.add(type);
             }
+        }
+
+        if (allowedTypes.size === 0) {
+            return warnings;
+        }
+
+        return warnings.filter(w => w.source.some(s => allowedTypes.has(s.type)));
+    }
+
+    private getSelectedRegionBoundingBox(): Zone | undefined {
+        const worldMap = this.loader.worldMap;
+        if (!worldMap) {
+            return undefined;
+        }
+
+        const viewMode = this.viewMode$.value;
+        let zones: Zone[] = [];
+
+        if (viewMode === 'province') {
+            zones = Array.from(this.selectedProvinceIds$.value)
+                .map(id => worldMap.getProvinceById(id)?.boundingBox)
+                .filter((z): z is Zone => !!z);
+        } else if (viewMode === 'state') {
+            zones = Array.from(this.selectedStateIds$.value)
+                .map(id => worldMap.getStateById(id)?.boundingBox)
+                .filter((z): z is Zone => !!z);
+        } else if (viewMode === 'strategicregion') {
+            const sr = worldMap.getStrategicRegionById(this.selectedStrategicRegionId$.value);
+            if (sr) {
+                zones = [sr.boundingBox];
+            }
+        } else if (viewMode === 'supplyarea') {
+            const sa = worldMap.getSupplyAreaById(this.selectedSupplyAreaId$.value);
+            if (sa) {
+                zones = [sa.boundingBox];
+            }
+        }
+
+        return unionZones(zones);
+    }
+
+    private exportSelectedRegion(includeBorder: boolean) {
+        this.exportIncludeBorder = includeBorder;
+
+        const bbox = this.getSelectedRegionBoundingBox();
+        if (!bbox || bbox.w <= 0 || bbox.h <= 0) {
+            this.showActionStatus(feLocalize('worldmap.action.export.noselection', 'Select a province, state, strategic region, or supply area first.'), 'warn');
+            return;
+        }
+
+        this.pendingExport = { bbox, includeBorder };
+        vscode.postMessage({ command: 'requestexportmap' });
+    }
+
+    private initExportMapMessageListener() {
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'requestexportmap') {
+                return;
+            }
+
+            const worldMap = this.loader.worldMap;
+            const pendingExport = this.pendingExport;
+            this.pendingExport = undefined;
+            if (!worldMap || !pendingExport) {
+                return;
+            }
+
+            sendEvent('worldmap.export');
+            const { bbox, includeBorder } = pendingExport;
+            const canvas = document.createElement("canvas");
+            canvas.width = Math.max(1, Math.round(bbox.w));
+            canvas.height = Math.max(1, Math.round(bbox.h));
+            const viewPoint = new ViewPoint(canvas, this.loader, 0, { x: bbox.x, y: bbox.y, scale: 1 });
+            Renderer.renderMapImpl(canvas, this, viewPoint, worldMap, { preciseEdge: true, overwriteRenderPrecision: 1 });
+
+            if (includeBorder) {
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    ctx.save();
+                    ctx.strokeStyle = '#ff3b30';
+                    ctx.lineWidth = 3;
+                    ctx.strokeRect(1.5, 1.5, canvas.width - 3, canvas.height - 3);
+                    ctx.restore();
+                }
+            }
+
+            vscode.postMessage({ command: 'exportmap', dataUrl: canvas.toDataURL() });
         }));
+    }
+
+    public showToolsContextMenu(x: number, y: number) {
+        this.contextMenu.show(x, y, this.buildToolsMenuItems());
+    }
+
+    private buildToolsMenuItems(): ContextMenuItem[] {
+        const selectedProvinceIds = this.selectedProvinceIds$.value;
+        const selectedStateIds = this.selectedStateIds$.value;
+        const selectedStateId = this.selectedStateId$.value;
+        const selectedStrategicRegionId = this.selectedStrategicRegionId$.value;
+        const hasRegion = this.getSelectedRegionBoundingBox() !== undefined;
+        const selectedCountryTag = this.selectedCountryTag$.value;
+
+        return [
+            {
+                label: feLocalize('worldmap.contextmenu.export', 'Export as Image (Selected Region)'),
+                disabled: !hasRegion,
+                action: () => this.exportSelectedRegion(this.exportIncludeBorder),
+                submenu: [
+                    {
+                        label: feLocalize('worldmap.contextmenu.export.include', 'Include region outline'),
+                        checked: this.exportIncludeBorder,
+                        disabled: !hasRegion,
+                        action: () => this.exportSelectedRegion(true),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.export.exclude', 'Exclude region outline'),
+                        checked: !this.exportIncludeBorder,
+                        disabled: !hasRegion,
+                        action: () => this.exportSelectedRegion(false),
+                    },
+                ],
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.warnings', 'Toggle Warnings'),
+                action: () => this.toggleWarningsVisible(),
+                submenu: [
+                    {
+                        label: feLocalize('worldmap.contextmenu.warnings.byviewmode', 'Only show warnings for current view mode'),
+                        checked: this.warningsFilterByViewMode,
+                        action: () => this.toggleWarningsFilterByViewMode(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.warnings.bycolorset', 'Only show warnings for current color set'),
+                        checked: this.warningsFilterByColorSet,
+                        action: () => this.toggleWarningsFilterByColorSet(),
+                    },
+                ],
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.provincetools', 'Province Tools'),
+                submenu: [
+                    {
+                        label: selectedProvinceIds.size >= 2
+                            ? feLocalize(
+                                'worldmap.contextmenu.provincetools.merge',
+                                'Merge Selected Provinces into First Selected (#{0})',
+                                Array.from(selectedProvinceIds)[0]
+                            )
+                            : feLocalize(
+                                'worldmap.contextmenu.provincetools.merge.disabled',
+                                'Merge Selected Provinces'
+                            ),
+                        disabled: selectedProvinceIds.size < 2 || this.paintbrushSavePending,
+                        action: () => this.mergeSelectedProvinces(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.provincetools.createstate', 'State from Selected Provinces'),
+                        disabled: selectedProvinceIds.size === 0,
+                        action: () => this.createStateFromSelection(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.provincetools.assignstate', 'Assign Selected Provinces to Existing State'),
+                        disabled: selectedProvinceIds.size === 0 || selectedStateId === undefined,
+                        action: () => this.assignSelectionToState(),
+                    },
+                ],
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.statetools', 'State Tools'),
+                submenu: [
+                    {
+                        label: feLocalize('worldmap.contextmenu.statetools.createstrategic', 'Create Strat Region from Selected States'),
+                        disabled: selectedProvinceIds.size === 0 && selectedStateIds.size === 0,
+                        action: () => this.createStrategicRegionFromSelection(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.statetools.assignstrategic', 'Assign Selected State(s) to Existing Strat Region'),
+                        disabled: (selectedProvinceIds.size === 0 && selectedStateIds.size === 0) || selectedStrategicRegionId === undefined,
+                        action: () => this.assignStatesToStrategicRegion(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.statetools.transfercountry', 'Transfer Selected State(s) to Country'),
+                        disabled: selectedStateIds.size === 0,
+                        action: () => this.showCountryPuppetModal('transfer'),
+                    },
+                ],
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.countrytools', 'Country Tools'),
+                disabled: this.viewMode$.value !== 'country' || !selectedCountryTag,
+                submenu: [
+                    {
+                        label: feLocalize('worldmap.contextmenu.countrytools.forcepuppet', 'Force Puppet State'),
+                        disabled: !selectedCountryTag ||
+                            !this.loader.worldMap.countryHistoryFiles[selectedCountryTag],
+                        action: () => this.showCountryPuppetModal('puppet'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.countrytools.releasepuppet', 'Release Puppet'),
+                        disabled: !this.getCurrentPuppetRelation(),
+                        action: () => this.releaseSelectedPuppet(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.countrytools.annex', 'Annex Country'),
+                        disabled: !selectedCountryTag,
+                        action: () => this.showCountryPuppetModal('annex'),
+                    },
+                ],
+            },
+        ];
     }
 
     private loadSearchBox() {
@@ -791,36 +1382,6 @@ export class TopBar extends Subscriber {
         ));
     }
 
-    private loadExportButton() {
-        const exportButton = document.getElementById("export") as HTMLButtonElement;
-        exportButton.disabled = true;
-        this.addSubscription(this.loader.worldMap$.subscribe(wm => {
-            exportButton.disabled = !wm;
-        }));
-        this.addSubscription(fromEvent(exportButton, 'click').subscribe(e => {
-            e.stopPropagation();
-            vscode.postMessage({ command: 'requestexportmap' });
-        }));
-        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
-            const message = event.data as WorldMapMessage;
-            if (message.command !== 'requestexportmap') {
-                return;
-            }
-
-            const worldMap = this.loader.worldMap;
-            if (!worldMap) {
-                return;
-            }
-
-            sendEvent('worldmap.export');
-            const canvas = document.createElement("canvas");
-            canvas.width = Math.max(1, worldMap.width);
-            canvas.height = Math.max(1, worldMap.height);
-            const viewPoint = new ViewPoint(canvas, this.loader, 0, { x: 0, y: 0, scale: 1 });
-            Renderer.renderMapImpl(canvas, this, viewPoint, worldMap, { preciseEdge: true, overwriteRenderPrecision: 1 });
-            vscode.postMessage({ command: 'exportmap', dataUrl: canvas.toDataURL() });
-        }));
-    }
     
     private registerEventListeners(canvas: HTMLCanvasElement) {
         this.addSubscription(
@@ -833,6 +1394,7 @@ export class TopBar extends Subscriber {
                     this.hoverStateId$.next(undefined);
                     this.hoverStrategicRegionId$.next(undefined);
                     this.hoverSupplyAreaId$.next(undefined);
+                    this.hoverCountryTag$.next(undefined);
                     return;
                 }
 
@@ -847,7 +1409,7 @@ export class TopBar extends Subscriber {
                     mapY >= 0 &&
                     mapY < worldMap.height
                 ) {
-                    this.paintAtPosition(mapX, mapY);
+                    this.paintLineTo(mapX, mapY);
                 }
 
                 const province = worldMap.getProvinceByPosition(mapX, mapY);
@@ -871,17 +1433,24 @@ export class TopBar extends Subscriber {
                         ? undefined
                         : worldMap.getSupplyAreaByStateId(stateId)?.id
                 );
+
+                const hoverState = stateId === undefined ? undefined : worldMap.getStateById(stateId);
+                this.hoverCountryTag$.next(
+                    hoverState ? solveWithCondition(hoverState.owner, this.selectedConditions$.value) : undefined
+                );
             })
         );
-    
+
         this.addSubscription(
             fromEvent(canvas, 'mouseleave').subscribe(() => {
                 this.hoverProvinceId$.next(undefined);
                 this.hoverStateId$.next(undefined);
                 this.hoverStrategicRegionId$.next(undefined);
                 this.hoverSupplyAreaId$.next(undefined);
+                this.hoverCountryTag$.next(undefined);
 
                 this.isPainting = false;
+                this.lastPaintMapPosition = undefined;
             })
         );
 
@@ -904,6 +1473,7 @@ export class TopBar extends Subscriber {
                         position.y < this.loader.worldMap!.height
                     ) {
                         this.isPainting = true;
+                        this.lastPaintMapPosition = { x: position.x, y: position.y };
                         this.hoverMapX$.next(position.x);
                         this.hoverMapY$.next(position.y);
                         this.paintAtPosition(position.x, position.y);
@@ -993,6 +1563,7 @@ export class TopBar extends Subscriber {
             // The user must explicitly click Apply or Cancel.
             if (this.isPainting) {
                 this.isPainting = false;
+                this.lastPaintMapPosition = undefined;
                 return;
             }
 
@@ -1057,6 +1628,9 @@ export class TopBar extends Subscriber {
                 case 'supplyarea':
                     this.selectedSupplyAreaId$.next(this.selectedSupplyAreaId$.value === this.hoverSupplyAreaId$.value ? undefined : this.hoverSupplyAreaId$.value);
                     break;
+                case 'country':
+                    this.selectedCountryTag$.next(this.selectedCountryTag$.value === this.hoverCountryTag$.value ? undefined : this.hoverCountryTag$.value);
+                    break;
             }
         }));
 
@@ -1075,14 +1649,14 @@ export class TopBar extends Subscriber {
         this.addSubscription(this.viewMode$.subscribe(() => this.onViewModeChange()));
 
         this.addSubscription(this.loader.worldMap$.subscribe(wm => {
-            const warnings = document.getElementById('warnings') as HTMLTextAreaElement;
-            if (wm.warnings.length === 0) {
-                warnings.value = feLocalize('worldmap.warnings.nowarnings', 'No warnings.');
-            } else {
-                warnings.value = feLocalize('worldmap.warnings', 'World map warnings: \n\n{0}', wm.warnings.map(warningToString).join('\n'));
-            }
-
+            this.refreshWarningsDisplay();
             this.setSearchBoxPlaceHolder(wm);
+        }));
+
+        this.addSubscription(combineLatest([this.viewMode$, this.colorSet$]).subscribe(() => {
+            if (this.warningsFilterByViewMode || this.warningsFilterByColorSet) {
+                this.refreshWarningsDisplay();
+            }
         }));
 
         this.addSubscription(fromEvent<KeyboardEvent>(document, 'keydown').subscribe(e => {
@@ -1486,8 +2060,11 @@ export class TopBar extends Subscriber {
     }
 
     private createNewProvince() {
+        // Works with one or more selected provinces. With multiple selected,
+        // painting stays clamped to their union (see paintAtPosition); the
+        // first selected province is only used as the metadata/type source.
         const selectedProvinceIds = Array.from(this.selectedProvinceIds$.value.values());
-        if (selectedProvinceIds.length !== 1) {
+        if (selectedProvinceIds.length < 1) {
             return;
         }
 
@@ -1500,6 +2077,82 @@ export class TopBar extends Subscriber {
         // Enter paintbrush mode with a NEW colour, inheriting metadata
         // from the source province (type, terrain, coastal, continent).
         this.enterPaintbrushMode(targetProvince, /* useExistingColor */ false);
+    }
+
+    private mergeSelectedProvinces() {
+        const selectedIds = Array.from(this.selectedProvinceIds$.value);
+        if (selectedIds.length < 2 || this.paintbrushSavePending) {
+            return;
+        }
+
+        const targetId = selectedIds[0];
+        const target = this.loader.worldMap.getProvinceById(targetId);
+        const sources = selectedIds.slice(1)
+            .map(id => this.loader.worldMap.getProvinceById(id))
+            .filter((province): province is NonNullable<typeof province> => !!province);
+        if (!target || sources.length !== selectedIds.length - 1) {
+            this.showActionStatus(feLocalize('worldmap.action.mergeprovinces.invalid', 'One or more selected provinces no longer exist.'), 'warn');
+            return;
+        }
+        if (sources.some(source => source.type !== target.type)) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.mergeprovinces.mixedtypes', 'Land, sea, and lake provinces cannot be merged together.'),
+                'warn'
+            );
+            return;
+        }
+        const targetStateId = this.loader.worldMap.getStateByProvinceId(targetId)?.id;
+        const targetRegionId = this.loader.worldMap.getStrategicRegionByProvinceId(targetId)?.id;
+        if (sources.some(source => this.loader.worldMap.getStateByProvinceId(source.id)?.id !== targetStateId)) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.mergeprovinces.mixedstates', 'Selected provinces must belong to the same state before merging.'),
+                'warn'
+            );
+            return;
+        }
+        if (sources.some(source => this.loader.worldMap.getStrategicRegionByProvinceId(source.id)?.id !== targetRegionId)) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.mergeprovinces.mixedregions', 'Selected provinces must belong to the same strategic region before merging.'),
+                'warn'
+            );
+            return;
+        }
+
+        const previousProvinces = this.collectCurrentProvinceDefs();
+        const result = this.loader.worldMap.mergeProvinces(targetId, selectedIds.slice(1));
+        if (!result || result.paintedPixels.size === 0) {
+            this.showActionStatus(feLocalize('worldmap.action.mergeprovinces.nochange', 'No provinces were merged.'), 'warn');
+            return;
+        }
+
+        this.persistStates(result.changedStateIds);
+        this.persistStrategicRegions(result.changedStrategicRegionIds);
+        this.setSelectedProvinceIds(new Set([targetId]), true);
+        this.mapMutation$.next(this.mapMutation$.value + 1);
+        this.refreshAfterPaintbrushSave = true;
+
+        vscode.postMessage<WorldMapMessage>({
+            command: 'persistprovincebmp',
+            paintedPixels: Array.from(result.paintedPixels.entries()).map(([key, color]) => {
+                const [x, y] = key.split(',').map(Number);
+                return [x, y, color];
+            }),
+            width: this.loader.worldMap.width,
+            height: this.loader.worldMap.height,
+            provinces: this.collectCurrentProvinceDefs(),
+            previousProvinces,
+            deletedProvinceIds: result.deletedProvinceIds,
+            targetProvinceId: targetId,
+        });
+
+        this.showActionStatus(
+            feLocalize(
+                'worldmap.action.mergeprovinces.done',
+                'Merged {0} provinces into province {1} and updated state/strategic-region membership.',
+                selectedIds.length - 1,
+                targetId
+            )
+        );
     }
 
     /**
@@ -1541,6 +2194,9 @@ export class TopBar extends Subscriber {
             continent: targetProvince?.continent ?? 0,
             valid: true,
             errors: [],
+            // A brand-new province is being created whenever we're not simply
+            // repainting an existing province's own colour (see the branch above).
+            isNewProvince: !(targetProvince && useExistingColor),
         };
 
         // Only flag missing terrain when we had a source province that
@@ -1564,11 +2220,13 @@ export class TopBar extends Subscriber {
         this.paintbrushActive$.next(true);
         this.paintbrushCanUndo$.next(false);
         this.paintbrushCanRedo$.next(false);
+        this.lastPaintMapPosition = undefined;
 
         // Show the confirmation panel immediately (belt-and-suspenders
         // with the subscription-based approach in loadPaintbrushPanel).
         const panel = document.getElementById('paintbrush-panel');
         if (panel) {
+            panel.hidden = false;
             panel.style.display = 'block';
         }
 
@@ -1680,10 +2338,12 @@ export class TopBar extends Subscriber {
         this.paintbrushSavePending = false;
         this.refreshAfterPaintbrushSave = false;
         this.isPainting = false;
+        this.lastPaintMapPosition = undefined;
 
         // Hide the confirmation panel directly.
         const panel = document.getElementById('paintbrush-panel');
         if (panel) {
+            panel.hidden = true;
             panel.style.display = 'none';
         }
 
@@ -1709,16 +2369,62 @@ export class TopBar extends Subscriber {
         this.paintbrushSavePending = false;
         this.refreshAfterPaintbrushSave = false;
         this.isPainting = false;
+        this.lastPaintMapPosition = undefined;
 
         // Hide the confirmation panel directly.
         const panel = document.getElementById('paintbrush-panel');
         if (panel) {
+            panel.hidden = true;
             panel.style.display = 'none';
         }
 
         // No reload needed -  the live map was never mutated.
         this.mapMutation$.next(this.mapMutation$.value + 1);
         sendEvent('worldmap.paintbrush.cancel');
+    }
+
+    /**
+     * Paint a continuous stroke from the last painted position to (mapX, mapY),
+     * interpolating intermediate points so fast mouse movement doesn't leave gaps
+     * between mousemove samples. Falls back to a single dab when there's no
+     * previous position (start of stroke) or no movement occurred.
+     */
+    private paintLineTo(mapX: number, mapY: number) {
+        const worldMap = this.loader.worldMap;
+        const last = this.lastPaintMapPosition;
+
+        if (!last || !worldMap || worldMap.width <= 0) {
+            this.paintAtPosition(mapX, mapY);
+            this.lastPaintMapPosition = { x: mapX, y: mapY };
+            return;
+        }
+
+        const mapWidth = worldMap.width;
+        let dx = mapX - last.x;
+        // Take the shorter path across the horizontal world-wrap seam.
+        if (dx > mapWidth / 2) {
+            dx -= mapWidth;
+        } else if (dx < -mapWidth / 2) {
+            dx += mapWidth;
+        }
+        const dy = mapY - last.y;
+
+        // Cap the number of interpolation steps so a large jump (e.g. the
+        // pointer re-entering the canvas far away) doesn't paint a huge line.
+        const steps = Math.min(Math.max(Math.abs(dx), Math.abs(dy)), 512);
+
+        if (steps <= 1) {
+            this.paintAtPosition(mapX, mapY);
+        } else {
+            for (let i = 1; i <= steps; i++) {
+                const t = i / steps;
+                const px = ((Math.round(last.x + dx * t) % mapWidth) + mapWidth) % mapWidth;
+                const py = Math.round(last.y + dy * t);
+                this.paintAtPosition(px, py);
+            }
+        }
+
+        this.lastPaintMapPosition = { x: mapX, y: mapY };
     }
 
     /**
@@ -1737,8 +2443,7 @@ export class TopBar extends Subscriber {
 
         const worldMap = this.loader.worldMap;
         const color = this.paintbrushColor$.value;
-        const brushSize = this.brushSize$.value;
-        const isSourceSea = this.sourceProvinceType === 'sea';
+        const brushBounds = getBrushBounds(this.brushSize$.value);
         const mapWidth = worldMap.width;
         const mapHeight = worldMap.height;
 
@@ -1756,10 +2461,10 @@ export class TopBar extends Subscriber {
         const newDraftPixels = new Map(draft.pixels);
         const newOverlayPixels = new Map(this.paintedPixels$.value);
 
-        // Paint all pixels within brush radius
-        const radius = Math.max(0, Math.floor((brushSize - 1) / 2));
-        for (let dy = -radius; dy <= radius; dy++) {
-            for (let dx = -radius; dx <= radius; dx++) {
+        // Paint an exact N by N square for every brush size, including even
+        // sizes. The renderer uses these same bounds for its cursor preview.
+        for (let dy = brushBounds.startOffset; dy <= brushBounds.endOffset; dy++) {
+            for (let dx = brushBounds.startOffset; dx <= brushBounds.endOffset; dx++) {
                 let px = mapX + dx;
                 const py = mapY + dy;
 
@@ -1785,13 +2490,11 @@ export class TopBar extends Subscriber {
                     }
                 }
 
-                // Land/water clamping: only paint over compatible province types
+                // Exact type clamping prevents land, lake, and sea/ocean
+                // provinces from converting into one another accidentally.
                 const targetType = worldMap.getProvinceTypeAt(px, py);
-                if (targetType !== undefined) {
-                    const targetIsSea = targetType === 'sea';
-                    if (isSourceSea !== targetIsSea) {
-                        continue; // skip: can't paint sea over land or land over sea
-                    }
+                if (targetType !== undefined && targetType !== this.sourceProvinceType) {
+                    continue;
                 }
 
                 const key = `${px},${py}`;
@@ -2195,4 +2898,49 @@ export class TopBar extends Subscriber {
 
 function warningToString(warning: WorldMapWarning): string {
     return `[${warning.source.map(s => `${s.type[0].toUpperCase()}${s.type.substr(1)} ${'id' in s ? s.id : s.name}`).join(', ')}] ${warning.text}`;
+}
+
+function unionZones(zones: Zone[]): Zone | undefined {
+    if (zones.length === 0) {
+        return undefined;
+    }
+
+    let minX = zones[0].x;
+    let minY = zones[0].y;
+    let maxX = zones[0].x + zones[0].w;
+    let maxY = zones[0].y + zones[0].h;
+
+    for (const z of zones.slice(1)) {
+        minX = Math.min(minX, z.x);
+        minY = Math.min(minY, z.y);
+        maxX = Math.max(maxX, z.x + z.w);
+        maxY = Math.max(maxY, z.y + z.h);
+    }
+
+    return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+}
+
+function colorSetToWarningSourceType(colorSet: ColorSet): string | undefined {
+    switch (colorSet) {
+        case 'provinceid':
+        case 'provincetype':
+        case 'terrain':
+        case 'continent':
+            return 'province';
+        case 'stateid':
+        case 'statecategory':
+        case 'manpower':
+        case 'victorypoint':
+        case 'resources':
+        case 'owner':
+        case 'controller':
+            return 'state';
+        case 'strategicregionid':
+            return 'strategicregion';
+        case 'supplyareaid':
+        case 'supplyvalue':
+            return 'supplyarea';
+        default:
+            return undefined;
+    }
 }

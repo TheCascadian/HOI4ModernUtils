@@ -9,6 +9,7 @@
                         <option value="state">%worldmap.topbar.viewmode.state|State%</option>
                         <option value="strategicregion">%worldmap.topbar.viewmode.strategicregion|Strategic Region%</option>
                         <option value="supplyarea" enablesupplyarea="true">%worldmap.topbar.viewmode.supplyarea|Supply Area%</option>
+                        <option value="country">%worldmap.topbar.viewmode.country|Country%</option>
                         <option value="warnings">%worldmap.topbar.viewmode.warnings|Warnings%</option>
                     </select>
                 </div>
@@ -22,8 +23,8 @@
                         <option viewmode="province state" value="stateid">%worldmap.topbar.colorset.stateid|State ID%</option>
                         <option viewmode="province state supplyarea" value="supplyareaid" enablesupplyarea="true">%worldmap.topbar.colorset.supplyareaid|Supply Area ID%</option>
                         <option viewmode="province state strategicregion" value="strategicregionid">%worldmap.topbar.colorset.strategicregionid|Strategic Region ID%</option>
-                        <option viewmode="province state strategicregion supplyarea" value="owner">%worldmap.topbar.colorset.owner|Country (Owner)%</option>
-                        <option viewmode="province state strategicregion supplyarea" value="controller">%worldmap.topbar.colorset.controller|Country (Controller)%</option>
+                        <option viewmode="province state strategicregion supplyarea country" value="owner">%worldmap.topbar.colorset.owner|Country (Owner)%</option>
+                        <option viewmode="province state strategicregion supplyarea country" value="controller">%worldmap.topbar.colorset.controller|Country (Controller)%</option>
                         <option viewmode="province state strategicregion supplyarea" value="provincetype">%worldmap.topbar.colorset.provincetype|Province Type%</option>
                         <option viewmode="province state strategicregion supplyarea" value="terrain">%worldmap.topbar.colorset.terrain|Terrain%</option>
                         <option viewmode="province state strategicregion supplyarea" value="statecategory">%worldmap.topbar.colorset.statecategory|State Category%</option>
@@ -48,6 +49,7 @@
                         <div class="option" value="supply" enablesupplyarea="false">%worldmap.topbar.display.supply|Show Supply%</div>
                         <div class="option" value="river">%worldmap.topbar.display.river|Show River%</div>
                         <div class="option" value="stateboundary">%worldmap.topbar.display.stateboundary|Show State Boundaries%</div>
+                        <div class="option" value="oceanstateboundary">%worldmap.topbar.display.oceanstateboundary|Show Ocean State Boundaries%</div>
                         <div class="option" value="mousehighlight">%worldmap.topbar.display.mousehighlight|Mouse highlight%</div>
                         <div class="option" value="fastrending">%worldmap.topbar.display.fastrendering|Fast rendering%</div>
                         <div class="option" value="adaptzooming">%worldmap.topbar.display.adaptzooming|Adapt zooming%</div>
@@ -90,37 +92,15 @@
                 <button id="refresh" title="%worldmap.topbar.refresh.title|Refresh%">
                     <i class="codicon codicon-refresh"></i>
                 </button>
-                <button id="export" title="%worldmap.export.title|Export as image%">
-                    <i class="codicon codicon-export"></i>
-                </button>
-            </div>
-
-            <div class="group">
-                <button id="show-warnings" title="%worldmap.topbar.warnings.title|Toggle warnings%">
-                    <i class="codicon codicon-warning"></i>
-                </button>
             </div>
 
             <div class="group" viewmode="state strategicregion supplyarea">
-                <button id="open" title="%worldmap.topbar.open.title|Open in workspace%">
+                <button id="open" title="%worldmap.topbar.open.title|Open in workspace (double-click)%">
                     <i class="codicon codicon-link-external"></i>
                 </button>
             </div>
 
-            <div class="group" viewmode="province state">
-                <button id="create-state-from-selection" type="button" title="%worldmap.topbar.createstate.title|Create state from selected provinces (Ctrl+Shift+N)%">
-                    <i class="codicon codicon-new-file"></i>
-                </button>
-                <button id="create-strategicregion-from-selection" type="button" title="%worldmap.topbar.createstrategic.title|Create strategic region from selected states%">
-                    <i class="codicon codicon-new-file"></i>
-                </button>
-                <button id="assign-selection-to-state" type="button" title="%worldmap.topbar.assignstate.title|Assign selected provinces to selected state%">
-                    <i class="codicon codicon-arrow-right"></i>
-                </button>
-                <button id="assign-states-to-strategicregion" type="button" title="%worldmap.topbar.assignstrategic.title|Add selected states to strategic region%">
-                    <i class="codicon codicon-organization"></i>
-                </button>
-            </div>
+            <!-- Export as image, warnings toggle, province/state tools moved to the Shift+Right-click context menu (see topbar.ts loadToolsContextMenu). -->
 
             <div class="group" viewmode="province strategicregion">
                 <button id="assign-to-strategicregion" type="button" title="%worldmap.topbar.assignstrategicregion.title|Assign selected provinces to selected strategic region (Ctrl+Shift+R)%">
@@ -157,7 +137,7 @@
         </div>
     </div>
     <canvas id="main-canvas"></canvas>
-    <div id="paintbrush-panel" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(30,30,30,0.95);border:1px solid #555;border-radius:6px;padding:12px 18px;z-index:9999;font-size:13px;color:#ccc;box-shadow:0 4px 16px rgba(0,0,0,0.6);min-width:340px;max-width:420px;">
+    <div id="paintbrush-panel" hidden style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(30,30,30,0.95);border:1px solid #555;border-radius:6px;padding:12px 18px;z-index:9999;font-size:13px;color:#ccc;box-shadow:0 4px 16px rgba(0,0,0,0.6);min-width:340px;max-width:420px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
             <span style="font-weight:bold;color:#fff;">Paintbrush</span>
             <span id="paintbrush-pixel-count" style="color:#888;">0 pixels</span>
@@ -176,6 +156,48 @@
         <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button id="paintbrush-cancel" style="background:#555;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer;">Cancel (Esc)</button>
             <button id="paintbrush-apply" style="background:#0e639c;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer;">Apply &amp; Exit</button>
+        </div>
+    </div>
+    <div id="new-province-confirm-modal" hidden style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
+        <div style="background:rgba(30,30,30,0.98);border:1px solid #555;border-radius:6px;padding:18px 22px;min-width:320px;max-width:420px;box-shadow:0 4px 20px rgba(0,0,0,0.7);font-size:13px;color:#ccc;">
+            <div style="font-weight:bold;color:#fff;margin-bottom:10px;">%worldmap.paintbrush.confirm.title|Create new province?%</div>
+            <div id="new-province-confirm-summary" style="margin-bottom:12px;line-height:1.6;color:#bbb;"></div>
+            <label style="display:flex;align-items:center;gap:6px;margin-bottom:14px;cursor:pointer;">
+                <input id="new-province-confirm-dontask" type="checkbox"/>
+                <span>%worldmap.paintbrush.confirm.dontask|Don't ask again%</span>
+            </label>
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button id="new-province-confirm-cancel" style="background:#555;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer;">%worldmap.paintbrush.confirm.cancel|Cancel%</button>
+                <button id="new-province-confirm-ok" style="background:#0e639c;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer;">%worldmap.paintbrush.confirm.ok|Create Province%</button>
+            </div>
+        </div>
+    </div>
+    <div id="country-puppet-modal" class="worldmap-modal" hidden style="display:none;">
+        <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="country-puppet-title">
+            <div id="country-puppet-title" class="worldmap-modal-title">%worldmap.country.puppet.title|Force Puppet State%</div>
+            <div id="country-puppet-overlord" class="worldmap-modal-summary"></div>
+            <label for="country-puppet-search">%worldmap.country.puppet.search|Find target country%</label>
+            <input id="country-puppet-search" type="search" autocomplete="off" placeholder="%worldmap.country.puppet.search.placeholder|Search by tag...%"/>
+            <label for="country-puppet-target">%worldmap.country.puppet.target|Target country%</label>
+            <select id="country-puppet-target" size="8"></select>
+            <label for="country-puppet-autonomy">%worldmap.country.puppet.autonomy|Autonomy level%</label>
+            <select id="country-puppet-autonomy">
+                <option value="autonomy_dominion">autonomy_dominion</option>
+                <option value="autonomy_colony">autonomy_colony</option>
+                <option value="autonomy_puppet" selected>autonomy_puppet</option>
+                <option value="autonomy_integrated_puppet">autonomy_integrated_puppet</option>
+                <option value="autonomy_satellite">autonomy_satellite</option>
+                <option value="autonomy_reichsprotectorate">autonomy_reichsprotectorate</option>
+                <option value="autonomy_reichskommissariat">autonomy_reichskommissariat</option>
+                <option value="autonomy_imperial_associate">autonomy_imperial_associate</option>
+                <option value="autonomy_imperial_subject">autonomy_imperial_subject</option>
+                <option value="autonomy_supervised_state">autonomy_supervised_state</option>
+            </select>
+            <div id="country-puppet-error" class="worldmap-modal-error" role="alert"></div>
+            <div class="worldmap-modal-actions">
+                <button id="country-puppet-cancel">%worldmap.country.puppet.cancel|Cancel%</button>
+                <button id="country-puppet-apply" class="primary">%worldmap.country.puppet.apply|Apply Puppet Relationship%</button>
+            </div>
         </div>
     </div>
     <div id="warnings-container">

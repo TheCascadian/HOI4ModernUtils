@@ -10,6 +10,7 @@ import { chain, max, padStart } from "lodash";
 import { combineLatest, fromEvent } from 'rxjs';
 import { distinctUntilChanged } from 'rxjs/operators';
 import { applyCondition, ConditionItem } from "../../src/hoiformat/condition";
+import { getBrushBounds } from "./brush";
 
 const landWarning = 0xE02020;
 const landNoWarning = 0x7FFF7F;
@@ -21,6 +22,7 @@ const renderScaleByViewMode: Record<ViewMode, { edge: number, labels: number }> 
     state: { edge: 1, labels: 1 },
     strategicregion: { edge: 0.25, labels: 0.25 },
     supplyarea: { edge: 0.5, labels: 1 },
+    country: { edge: 0.25, labels: 0.25 },
     warnings: { edge: 2, labels: 3 },
 };
 
@@ -83,6 +85,8 @@ export class Renderer extends Subscriber {
                 topBar.selectedStrategicRegionId$,
                 topBar.hoverSupplyAreaId$,
                 topBar.selectedSupplyAreaId$,
+                topBar.hoverCountryTag$,
+                topBar.selectedCountryTag$,
                 topBar.mapMutation$,
                 topBar.warningFilter.selectedValues$,
                 topBar.display.selectedValues$,
@@ -137,6 +141,9 @@ export class Renderer extends Subscriber {
                 break;
             case 'supplyarea':
                 this.renderSupplyAreaHoverSelection(this.loader.worldMap);
+                break;
+            case 'country':
+                this.renderCountryHoverSelection(this.loader.worldMap);
                 break;
         }
 
@@ -344,17 +351,11 @@ export class Renderer extends Subscriber {
         if (this.topBar.paintbrushActive$.value) {
             const centerX = this.topBar.hoverMapX$.value;
             const centerY = this.topBar.hoverMapY$.value;
-            const brushSize = Math.max(
-                1,
-                Math.floor(this.topBar.brushSize$.value)
-            );
-
-            // This assumes the painting routine uses the same radius rule.
-            const radius = Math.floor((brushSize - 1) / 2);
-            const startX = centerX - radius;
-            const startY = centerY - radius;
-            const endX = centerX + radius + 1;
-            const endY = centerY + radius + 1;
+            const brushBounds = getBrushBounds(this.topBar.brushSize$.value);
+            const startX = centerX + brushBounds.startOffset;
+            const startY = centerY + brushBounds.startOffset;
+            const endX = centerX + brushBounds.endOffset + 1;
+            const endY = centerY + brushBounds.endOffset + 1;
 
             const bounds = this.mapRectToCanvasBounds(
                 startX,
@@ -390,18 +391,21 @@ export class Renderer extends Subscriber {
         mapX: number,
         mapY: number
     ): void {
-        const bounds = this.mapRectToCanvasBounds(
-            mapX,
-            mapY,
-            mapX + 1,
-            mapY + 1
-        );
+        // Adjacent map pixels must share the exact same canvas edge coordinate,
+        // so both edges are rounded with the same function here (unlike
+        // mapRectToCanvasBounds's outward floor/ceil snap for standalone rects).
+        // Otherwise two neighbouring 0.5-alpha fills double-blend at the seam,
+        // showing up as a visible grid of outlines over the painted area.
+        const x1 = Math.round((mapX - this.viewPoint.x) * this.viewPoint.scale);
+        const y1 = Math.round((mapY - this.viewPoint.y) * this.viewPoint.scale);
+        const x2 = Math.round((mapX + 1 - this.viewPoint.x) * this.viewPoint.scale);
+        const y2 = Math.round((mapY + 1 - this.viewPoint.y) * this.viewPoint.scale);
 
         context.fillRect(
-            bounds.x,
-            bounds.y,
-            bounds.width,
-            bounds.height
+            x1,
+            y1,
+            Math.max(1, x2 - x1),
+            Math.max(1, y2 - y1)
         );
     }
 
@@ -441,6 +445,7 @@ export class Renderer extends Subscriber {
     ): void {
         const { provinceToState, renderedProvincesById, viewPoint } = renderContext;
         const scale = viewPoint.scale;
+        const includeOceanBoundaries = renderContext.topBar.display.selectedValues$.value.includes('oceanstateboundary');
 
         const configColor = (window as any)['__stateBoundaryColor'] || 'rgba(0, 0, 0, 0.4)';
         const configWidth = (window as any)['__stateBoundaryWidth'] ?? 1.5;
@@ -454,6 +459,10 @@ export class Renderer extends Subscriber {
 
             for (const edge of province.edges) {
                 if (edge.to <= province.id) {
+                    continue;
+                }
+                const toProvince = worldMap.getProvinceById(edge.to);
+                if (!includeOceanBoundaries && (province.type === 'sea' || toProvince?.type === 'sea')) {
                     continue;
                 }
                 const stateToId = provinceToState[edge.to];
@@ -580,6 +589,15 @@ export class Renderer extends Subscriber {
 
             const stateFromId = provinceToState[province.id];
             const stateToId = provinceToState[provinceEdge.to];
+
+            if (viewMode === 'country') {
+                const selectedConditions = topBar.selectedConditions$.value;
+                const ownerFrom = solveWithCondition(worldMap.getStateById(stateFromId)?.owner, selectedConditions);
+                const ownerTo = solveWithCondition(worldMap.getStateById(stateToId)?.owner, selectedConditions);
+                if (ownerFrom === ownerTo) {
+                    continue;
+                }
+            }
 
             const stateFromImpassable = worldMap.getStateById(stateFromId)?.impassable ?? false;
             const stateToImpassable = worldMap.getStateById(stateToId)?.impassable ?? false;
@@ -975,6 +993,86 @@ ${worldMap.getProvinceWarnings(province, stateObject, strategicRegion, supplyAre
 
         this.renderHoverSelection(worldMap, toProvinces(hover), toProvinces(selected));
         hover && this.isTooltipVisible() && this.renderSupplyAreaTooltip(hover, worldMap);
+    }
+
+    private getProvincesOwnedByCountry(worldMap: FEWorldMap, tag: string | undefined): { provinces: number[] } | undefined {
+        if (!tag) {
+            return undefined;
+        }
+
+        const selectedConditions = this.topBar.selectedConditions$.value;
+        const provinces: number[] = [];
+        worldMap.forEachState(state => {
+            if (solveWithCondition(state.owner, selectedConditions) === tag) {
+                provinces.push(...state.provinces);
+            }
+        });
+
+        return provinces.length > 0 ? { provinces } : undefined;
+    }
+
+    private renderCountryHoverSelection(worldMap: FEWorldMap) {
+        const hoverTag = this.topBar.hoverCountryTag$.value;
+        const hover = this.getProvincesOwnedByCountry(worldMap, hoverTag);
+        const selected = this.getProvincesOwnedByCountry(worldMap, this.topBar.selectedCountryTag$.value);
+        this.renderHoverSelection(worldMap, hover, selected);
+        if (hoverTag && this.isTooltipVisible()) {
+            this.renderCountryTooltip(hoverTag, worldMap);
+        }
+    }
+
+    private renderCountryTooltip(tag: string, worldMap: FEWorldMap) {
+        const selectedConditions = this.topBar.selectedConditions$.value;
+        const ownedStates: State[] = [];
+        let controlledStates = 0;
+        let coreStates = 0;
+        let provinces = 0;
+        let manpower = 0;
+        let victoryPoints = 0;
+        const resources: Record<string, number | undefined> = {};
+
+        worldMap.forEachState(state => {
+            const owner = solveWithCondition(state.owner, selectedConditions);
+            const controller = solveWithCondition(state.controller, selectedConditions) ?? owner;
+            if (controller === tag) {
+                controlledStates++;
+            }
+            if (solveWithConditionAsSet(state.cores, selectedConditions).includes(tag)) {
+                coreStates++;
+            }
+            if (owner !== tag) {
+                return;
+            }
+
+            ownedStates.push(state);
+            provinces += state.provinces.length;
+            manpower += state.manpower;
+            victoryPoints += Object.values(state.victoryPoints)
+                .reduce<number>((total, value) => total + (value ?? 0), 0);
+            for (const [resource, value] of Object.entries(state.resources)) {
+                resources[resource] = (resources[resource] ?? 0) + (value ?? 0);
+            }
+        });
+
+        const resourceState = { resources } as State;
+        this.renderTooltip(`
+${feLocalize('worldmap.tooltip.country', 'Country')}=${tag}
+${feLocalize('worldmap.tooltip.ownedstates', 'Owned states')}=${ownedStates.length}
+${feLocalize('worldmap.tooltip.controlledstates', 'Controlled states')}=${controlledStates}
+${feLocalize('worldmap.tooltip.corestates', 'Core states')}=${coreStates}
+${feLocalize('worldmap.tooltip.provinces', 'Provinces')}=${provinces}
+${feLocalize('worldmap.tooltip.manpower', 'Manpower')}=${toCommaDivideNumber(manpower)}
+${feLocalize('worldmap.tooltip.victorypoints', 'Victory points')}=${toCommaDivideNumber(victoryPoints)}`,
+            (width, height) => {
+                const { width: resourceWidth, height: resourceHeight } = Renderer.getResourcesSize(resourceState);
+                return {
+                    width: Math.max(width, resourceWidth),
+                    height: height + resourceHeight,
+                };
+            },
+            (x, y) => {
+                Renderer.renderResources(this.backCanvasContext, resourceState, x, y);
+            });
     }
 
     private renderHoverSelection(worldMap: FEWorldMap, hover: { provinces: number[] } | undefined, selected: { provinces: number[] } | undefined) {

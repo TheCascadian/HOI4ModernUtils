@@ -11,6 +11,11 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Added
 * Province paintbrush editing: paint/redraw province boundaries directly on the world map, create new provinces from a selection, and undo/redo province BMP + `definition.csv` edits.
 * State/Strategic Region transfer tools: assign selected states to an existing strategic region, or create a brand-new strategic region from the current state/province selection, with dedicated undo/redo and file persistence.
+* Country view mode with country-based coloring, country selection, country borders, and a country-scoped tooltip showing owned, controlled, and core states, provinces, manpower, victory points, and resources.
+* Country tools in the world-map context menu: force puppet relationships, release puppets, annex countries, and transfer selected states to another country.
+* Country history loading and conditional diplomacy editing for puppet and annexation operations.
+* Shift+right-click context menus for map actions, including image export, warnings, state creation and assignment, strategic-region tools, province tools, and country tools.
+* Continuous paintbrush strokes with exact square brush sizes, land/sea/lake type clamping, multi-province painting, merge support, confirmation prompts, and improved undo/redo state handling.
 * Double-click a province in Province view to toggle a placeholder victory point (writes `value=1` to the state file and a starter localisation key in `localisation/victory_points_l_english.yml`).
 * Configurable world map keybinds (selection undo/redo, map undo/redo, create-state, assign-selection, assign-to-strategic-region) via `hoi4ModernUtils.worldMap*Keybind` settings.
 
@@ -18,9 +23,16 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Renamed the extension's displayed name and settings namespace to "HOI4 Modern Utils" / `hoi4ModernUtils.*`.
 * Reconciled two independently-developed lines of this fork's history (local paintbrush/transfer-tool work, and separately-pushed multi-state-selection/keybind/victory-point work) into a single coherent codebase. The map-edit undo/redo system is now generic across state, strategic region, and province edits instead of having two parallel implementations.
 * Recovered and reintegrated 42 upstream commits (through upstream `v0.15.1`, see below) alongside this fork's own changes.
+* Country view now suppresses internal province and state boundaries while retaining country borders.
+* World-map display controls now support ocean state boundaries, view-mode-specific color sets, filtered warnings, and responsive toolbar wrapping.
+* World-map dialogs now use consistent themed inputs, usable multi-row country selectors, and non-overlapping action buttons.
 
 ### Fixed
 * Excluded dev-only assets from the packaged `.vsix`.
+* Prevented an arbitrary first `.mod` file from being selected when multiple descriptors are present; implicit selection now requires exactly one unambiguous workspace descriptor.
+* Made `.mod` discovery case-insensitive and deterministic, and kept explicit descriptor selection authoritative.
+* Prevented missing or stale DLC ZIP archives from aborting base-game map loading; invalid archives are skipped and reported with their archive path.
+* Added safer map persistence and reload handling for province, state, strategic-region, and country edits.
 
 ## [0.15.1] - 2026/07/26 (upstream)
 

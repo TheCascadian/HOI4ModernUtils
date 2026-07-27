@@ -1,4 +1,4 @@
-import { WorldMapMessage, Province, WorldMapData, RequestMapItemMessage, State, Country, Point, Zone, ProvinceEdge } from "./definitions";
+import { WorldMapMessage, Province, WorldMapData, RequestMapItemMessage, State, Country, Point, Zone, ProvinceEdge, DiplomacyRelation } from "./definitions";
 import { copyArray } from "../util/common";
 import { inBBox } from "./graphutils";
 import { Subscriber } from "../util/event";
@@ -59,6 +59,12 @@ interface FEWorldMapClassExtra {
     getNextProvinceId(): number;
     snapshotProvinces(provinceIds: number[]): ProvinceSnapshot[];
     restoreProvinces(snapshots: ProvinceSnapshot[]): void;
+    mergeProvinces(targetProvinceId: number, sourceProvinceIds: number[]): {
+        paintedPixels: Map<string, number>;
+        deletedProvinceIds: number[];
+        changedStateIds: number[];
+        changedStrategicRegionIds: number[];
+    } | undefined;
 
     /** Paintbrush: get the color at a pixel position */
     getColorAt(x: number, y: number): number | undefined;
@@ -304,6 +310,8 @@ class FEWorldMapClass implements FEWorldMap {
     colorByPosition!: number[];
     conditionExprs!: ConditionItem[];
     bookmarks!: Bookmark[];
+    diplomacyRelations!: DiplomacyRelation[];
+    countryHistoryFiles!: Record<string, string>;
 
     private provinces!: (Province | null | undefined)[];
     private states!: (State | null | undefined)[];
@@ -320,7 +328,7 @@ class FEWorldMapClass implements FEWorldMap {
             provincesCount: 0, statesCount: 0, countriesCount: 0, strategicRegionsCount: 0, supplyAreasCount: 0,
             badProvincesCount: 0, badStatesCount: 0, badStrategicRegionsCount: 0, badSupplyAreasCount: 0,
             railwaysCount: 0, supplyNodesCount: 0,
-            conditionExprs: [], bookmarks: []
+            conditionExprs: [], bookmarks: [], diplomacyRelations: [], countryHistoryFiles: {}
         } as WorldMapData & ExtraMapData));
     }
 
@@ -963,13 +971,13 @@ class FEWorldMapClass implements FEWorldMap {
     public getNextProvinceId(): number {
         // HOI4 province IDs start at 1.  Bad provinces occupy negative
         // indices in the array, so start scanning from index 1 at minimum.
-        const startId = Math.max(1, this.badProvincesCount + 1);
+        const startId = Math.max(1, Math.floor(this.badProvincesCount + 1));
         for (let id = startId; id < this.provinces.length; id++) {
             if (!this.provinces[id]) {
-                return id;
+                return Math.max(1, id);
             }
         }
-        return Math.max(startId, this.provinces.length);
+        return Math.max(1, startId, Math.floor(this.provinces.length));
     }
 
     public snapshotProvinces(provinceIds: number[]): ProvinceSnapshot[] {
@@ -997,6 +1005,96 @@ class FEWorldMapClass implements FEWorldMap {
             }
         }
         this.provincesCount = Math.max(startScan, lastProvinceId + 1);
+    }
+
+    public mergeProvinces(targetProvinceId: number, sourceProvinceIds: number[]): {
+        paintedPixels: Map<string, number>;
+        deletedProvinceIds: number[];
+        changedStateIds: number[];
+        changedStrategicRegionIds: number[];
+    } | undefined {
+        const target = this.getProvinceById(targetProvinceId);
+        const sources = Array.from(new Set(sourceProvinceIds))
+            .filter(id => id !== targetProvinceId)
+            .map(id => this.getProvinceById(id))
+            .filter((province): province is Province => !!province);
+        if (!target || sources.length === 0 || !this.colorByPosition) {
+            return undefined;
+        }
+        if (sources.some(source => source.type !== target.type)) {
+            return undefined;
+        }
+
+        const sourceColors = new Set(sources.map(source => source.color));
+        const paintedPixels = new Map<string, number>();
+        for (let y = 0; y < this.height; y++) {
+            const row = y * this.width;
+            for (let x = 0; x < this.width; x++) {
+                if (sourceColors.has(this.colorByPosition[row + x])) {
+                    this.colorByPosition[row + x] = target.color;
+                    paintedPixels.set(`${x},${y}`, target.color);
+                }
+            }
+        }
+
+        const deletedProvinceIds = sources.map(source => source.id);
+        const deletedSet = new Set(deletedProvinceIds);
+        this.rebuildCoverZonesFromPixels(target);
+        const changedStateIds = new Set<number>();
+        this.forEachState(state => {
+            const next = state.provinces.filter(id => !deletedSet.has(id));
+            if (next.length !== state.provinces.length) {
+                state.provinces = next;
+                changedStateIds.add(state.id);
+                this.recomputeStateGeometry(state);
+            }
+        });
+        const targetState = this.getStateByProvinceId(targetProvinceId);
+        if (targetState) {
+            changedStateIds.add(targetState.id);
+            this.recomputeStateGeometry(targetState);
+        }
+
+        const changedStrategicRegionIds = new Set<number>();
+        this.forEachStrategicRegion(region => {
+            const next = region.provinces.filter(id => !deletedSet.has(id));
+            if (next.length !== region.provinces.length) {
+                region.provinces = next;
+                changedStrategicRegionIds.add(region.id);
+                this.recomputeRegionGeometry(region);
+            }
+        });
+        const targetRegion = this.getStrategicRegionByProvinceId(targetProvinceId);
+        if (targetRegion) {
+            changedStrategicRegionIds.add(targetRegion.id);
+            this.recomputeRegionGeometry(targetRegion);
+        }
+
+        for (const source of sources) {
+            this.provinces[source.id] = undefined;
+        }
+
+        // Do not synthesize edge polylines for a merge in the webview. A
+        // merged province can contain multiple complex boundary components,
+        // and the optimistic point-ordering algorithm can connect unrelated
+        // fragments with long straight lines. The extension reloads the saved
+        // BMP immediately after persistence, at which point the authoritative
+        // province-map loader rebuilds all edges correctly.
+        const staleEdgeIds = new Set([target.id, ...deletedProvinceIds]);
+        this.forEachProvince(province => {
+            if (province.id === target.id) {
+                province.edges = [];
+            } else {
+                province.edges = province.edges.filter(edge => !staleEdgeIds.has(edge.to));
+            }
+        });
+
+        return {
+            paintedPixels,
+            deletedProvinceIds,
+            changedStateIds: Array.from(changedStateIds),
+            changedStrategicRegionIds: Array.from(changedStrategicRegionIds),
+        };
     }
 
     public findNextProvinceColor(): number | undefined {
@@ -1131,7 +1229,10 @@ class FEWorldMapClass implements FEWorldMap {
                 affectedProvinceIds.add(existingProvince.id);
             } else {
                 // New color: create a new province
-                const nextId = this.getNextProvinceId();
+                const nextId = Math.max(1, Math.floor(this.getNextProvinceId()));
+                if (this.provinces[nextId]) {
+                    throw new Error(`Refusing to overwrite existing province ID ${nextId}.`);
+                }
                 newProvinceId = nextId;
 
                 const sourceProvince = sourceProvinceId !== undefined ? this.getProvinceById(sourceProvinceId) : undefined;

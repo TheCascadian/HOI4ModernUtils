@@ -15,7 +15,12 @@ fromEvent(window, 'load').subscribe(function() {
     const topBar = new TopBar(mainCanvas, viewPoint, loader, state);
     const renderer = new Renderer(mainCanvas, viewPoint, loader, topBar);
 
-    fromEvent(mainCanvas, 'contextmenu').subscribe(event => event.preventDefault());
+    fromEvent<MouseEvent>(mainCanvas, 'contextmenu').subscribe(event => {
+        event.preventDefault();
+        if (event.shiftKey) {
+            topBar.showToolsContextMenu(event.clientX, event.clientY);
+        }
+    });
 
     viewPoint.observable$.subscribe(setStateForKey('viewPoint'));
     topBar.viewMode$.subscribe(setStateForKey('viewMode'));
@@ -24,6 +29,7 @@ fromEvent(window, 'load').subscribe(function() {
     topBar.selectedStateId$.subscribe(setStateForKey('selectedStateId'));
     topBar.selectedStrategicRegionId$.subscribe(setStateForKey('selectedStrategicRegionId'));
     topBar.selectedSupplyAreaId$.subscribe(setStateForKey('selectedSupplyAreaId'));
+    topBar.selectedCountryTag$.subscribe(setStateForKey('selectedCountryTag'));
     topBar.warningFilter.selectedValues$.subscribe(setStateForKey('warningFilter'));
     topBar.display.selectedValues$.subscribe(setStateForKey('display'));
     topBar.conditions.selectedValues$.subscribe(setStateForKey('selectedConditions'));

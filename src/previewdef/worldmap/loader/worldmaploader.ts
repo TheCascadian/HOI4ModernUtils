@@ -1,5 +1,6 @@
 import { WorldMapData, ProvinceMap } from "../definitions";
 import { CountriesLoader } from "./countries";
+import { CountryHistoryLoader } from "./countryhistory";
 import { Loader, LoadResult, mergeInLoadResult } from "./common";
 import { StatesLoader } from "./states";
 import { DefaultMapLoader } from "./provincemap";
@@ -18,6 +19,7 @@ export class WorldMapLoader extends Loader<WorldMapData> {
     private bookmarksLoader: BookmarksLoader;
     private statesLoader: StatesLoader;
     private countriesLoader: CountriesLoader;
+    private countryHistoryLoader: CountryHistoryLoader;
     private strategicRegionsLoader: StrategicRegionsLoader;
     private supplyAreasLoader: SupplyAreasLoader;
     private railwayLoader: RailwayLoader;
@@ -41,6 +43,9 @@ export class WorldMapLoader extends Loader<WorldMapData> {
 
         this.countriesLoader = new CountriesLoader();
         this.countriesLoader.onProgress(e => this.onProgressEmitter.fire(e));
+
+        this.countryHistoryLoader = new CountryHistoryLoader(this.bookmarksLoader);
+        this.countryHistoryLoader.onProgress(e => this.onProgressEmitter.fire(e));
 
         this.strategicRegionsLoader = new StrategicRegionsLoader(this.defaultMapLoader, this.statesLoader);
         this.strategicRegionsLoader.onProgress(e => this.onProgressEmitter.fire(e));
@@ -74,6 +79,9 @@ export class WorldMapLoader extends Loader<WorldMapData> {
         const countries = await this.countriesLoader.load(session);
         session.throwIfCancelled();
 
+        const countryHistories = await this.countryHistoryLoader.load(session);
+        session.throwIfCancelled();
+
         const strategicRegions = await this.strategicRegionsLoader.load(session);
         session.throwIfCancelled();
 
@@ -99,7 +107,7 @@ export class WorldMapLoader extends Loader<WorldMapData> {
         const loadedLoaders = Array.from((session as any).loadedLoader).map<string>(v => (v as any).toString());
         debug('Loader session', loadedLoaders);
 
-        const subLoaderResults = [ provinceMap, bookmarks, stateMap, countries, strategicRegions, supplyAreas, railways, supplyNodes, resources ];
+        const subLoaderResults = [ provinceMap, bookmarks, stateMap, countries, countryHistories, strategicRegions, supplyAreas, railways, supplyNodes, resources ];
         const warnings = mergeInLoadResult(subLoaderResults, 'warnings');
         const conditionExprs = mergeInLoadResultUnique(subLoaderResults, 'conditionExprs', isEqual);
 
@@ -117,6 +125,8 @@ export class WorldMapLoader extends Loader<WorldMapData> {
             strategicRegionsCount: strategicRegions.result.strategicRegions.length,
             supplyAreasCount: supplyAreas.result.supplyAreas.length,
             countries: countries.result,
+            diplomacyRelations: countryHistories.result.relations,
+            countryHistoryFiles: countryHistories.result.files,
             railwaysCount: railways.result.railways.length,
             supplyNodesCount: supplyNodes.result.supplyNodes.length,
             bookmarks: bookmarks.result.bookmarks,

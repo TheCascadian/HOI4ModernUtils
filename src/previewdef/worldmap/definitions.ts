@@ -29,7 +29,19 @@ export interface WorldMapData {
     rivers: River[];
     conditionExprs: ConditionItem[];
     bookmarks: Bookmark[];
+    diplomacyRelations: DiplomacyRelation[];
+    countryHistoryFiles: Record<string, string>;
     warnings: WorldMapWarning[];
+}
+
+export type DiplomacyLevel = 'puppet' | 'independent' | 'annexed' | string; // string: autonomy_state name, e.g. autonomy_dominion
+
+export interface DiplomacyRelation {
+    overlord: string;
+    subject: string;
+    level: DiplomacyLevel; // most recent entries for a given (overlord, subject) pair come first
+    condition: ConditionComplexExpr;
+    file: string;
 }
 
 export interface ProvinceBmp {
@@ -239,7 +251,7 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage | PersistProvincesMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | PersistVictoryPointLocalisationMessage;
+export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage | PersistProvincesMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | PersistVictoryPointLocalisationMessage | SetConfirmNewProvinceCreationMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
@@ -285,6 +297,26 @@ export interface OpenFileMessage {
 export interface ExportMapMessage {
     command: 'exportmap' | 'requestexportmap';
     dataUrl?: string;
+}
+
+export interface SetConfirmNewProvinceCreationMessage {
+    command: 'setconfirmnewprovincecreation';
+    value: boolean;
+}
+
+export interface PersistCountryDiplomacyMessage {
+    command: 'persistcountrydiplomacy';
+    action: 'puppet' | 'end_puppet';
+    file: string;
+    overlord: string;
+    subject: string;
+    autonomyState?: string;
+}
+
+export interface CountryDiplomacyUpdatedMessage {
+    command: 'countrydiplomacyupdated';
+    success: boolean;
+    error?: string;
 }
 
 export interface PersistedState {
@@ -354,6 +386,8 @@ export interface PersistProvinceBmpMessage {
     provinces: PersistedProvince[];
     /** Snapshot of previous province definitions for undo */
     previousProvinces?: PersistedProvince[];
+    /** Province definition rows removed by this operation. */
+    deletedProvinceIds?: number[];
     /** The province ID being painted from (source) */
     targetProvinceId: number;
 }
@@ -429,6 +463,8 @@ export interface ProvinceDraft {
     valid: boolean;
     /** Human-readable validation messages. */
     errors: string[];
+    /** True when this session is creating a brand-new province (fresh colour) rather than editing an existing one's boundary. */
+    isNewProvince: boolean;
 }
 
 export interface PersistVictoryPointLocalisationMessage {

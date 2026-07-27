@@ -4,7 +4,43 @@ export function parseLocalisationYaml(content: string, file?: string): any {
     content = preprocessYamlContent(content, file);
 
     // set "json: true" to allow duplicate keys
-    return yaml.safeLoad(content, { schema: yaml.JSON_SCHEMA, json: true });
+    try {
+        return yaml.safeLoad(content, { schema: yaml.JSON_SCHEMA, json: true });
+    } catch {
+        return parseParadoxLocalisationLines(content);
+    }
+}
+
+function parseParadoxLocalisationLines(content: string): Record<string, Record<string, string>> {
+    const lines = content.split(/\r?\n/);
+    const headerLine = lines.find(line => /^\s*l_[A-Za-z0-9_]+\s*:/.test(line));
+    const headerMatch = headerLine?.match(/^\s*(l_[A-Za-z0-9_]+)\s*:/);
+    if (!headerMatch) {
+        throw new Error('Localisation file has no language header.');
+    }
+
+    const entries: Record<string, string> = {};
+    for (const rawLine of lines) {
+        if (/^\s*(?:#|$)/.test(rawLine) || rawLine === headerLine) {
+            continue;
+        }
+
+        const match = rawLine.match(/^\s*([^:#][^:]*?):(?:\d+)?\s*(.*)$/);
+        if (!match) {
+            continue;
+        }
+
+        const key = match[1].trim();
+        let value = match[2].trim();
+        if (value.startsWith('"') && value.endsWith('"') && value.length >= 2) {
+            value = value.substring(1, value.length - 1)
+                .replace(/\\"/g, '"')
+                .replace(/\\\\/g, '\\');
+        }
+        entries[key] = value;
+    }
+
+    return { [headerMatch[1]]: entries };
 }
 
 function preprocessYamlContent(fileContent: string, file?: string): string {
