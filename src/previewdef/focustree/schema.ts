@@ -1,10 +1,10 @@
 import { Node, Token } from "../../hoiformat/hoiparser";
-import { HOIPartial, SchemaDef, Position, convertNodeToJson, positionSchema, Raw } from "../../hoiformat/schema";
+import { HOIPartial, SchemaDef, Position, convertNodeToJson, positionSchema, Raw, CustomMap } from "../../hoiformat/schema";
 import { normalizeNumberLike } from "../../util/hoi4gui/common";
 import { flatten, chain } from 'lodash';
 import { ConditionItem, ConditionComplexExpr, extractConditionValues, extractConditionValue, extractConditionalExprs } from "../../hoiformat/condition";
 import { countryScope } from "../../hoiformat/scope";
-import { useConditionInFocus } from "../../util/featureflags";
+import { isFeatureEnabled } from "../../util/featureflags";
 import { randomString, Warning } from "../../util/common";
 import { localize } from "../../util/i18n";
 
@@ -36,13 +36,27 @@ export interface Focus {
     allowBranch: ConditionComplexExpr | undefined;
     relativePositionId: string | undefined;
     offset: Offset[];
+    text: string | undefined;
+    overlay: string | undefined;
     token: Token | undefined;
+    xToken: Token | undefined;
+    yToken: Token | undefined;
     file: string;
-    text?: string;
 }
 
 export interface FocusWarning extends Warning<string> {
     navigations?: { file: string, start: number, end: number }[];
+}
+
+export interface UpdateFocusPositionsMessage {
+    command: 'updateFocusPositions';
+    lastDocumentChangeTimestamp: number;
+    focuses: {
+        focus: Focus;
+        file?: string;
+        x: number;
+        y: number;
+    }[];
 }
 
 interface Offset {
@@ -60,9 +74,10 @@ interface FocusTreeDef {
 
 interface FocusDef {
     id: string;
+    alternate_icon: string;
     icon: Raw[];
-    x: number;
-    y: number;
+    x: Raw;
+    y: Raw;
     prerequisite: FocusOrORList[];
     mutually_exclusive: FocusOrORList[];
     relative_position_id: string;
@@ -70,12 +85,15 @@ interface FocusDef {
     offset: OffsetDef[];
     _token: Token;
     text?: string;
+    overlay?: string;
 }
 
 interface FocusIconDef {
     trigger: Raw;
     value: string;
 }
+
+type FocusIconDefNew = CustomMap<Raw>;
 
 interface OffsetDef {
     x: number;
@@ -107,12 +125,13 @@ const focusOrORListSchema: SchemaDef<FocusOrORList> = {
 
 const focusSchema: SchemaDef<FocusDef> = {
     id: "string",
+    alternate_icon: "string",
     icon: {
         _innerType: 'raw',
         _type: 'array',
     },
-    x: "number",
-    y: "number",
+    x: "raw",
+    y: "raw",
     prerequisite: {
         _innerType: focusOrORListSchema,
         _type: 'array',
@@ -138,6 +157,7 @@ const focusSchema: SchemaDef<FocusDef> = {
         _type: 'array',
     },
     text: "string",
+    overlay: "string",
 };
 
 const focusTreeSchema: SchemaDef<FocusTreeDef> = {
@@ -173,6 +193,11 @@ const focusIconSchema: SchemaDef<FocusIconDef> = {
     value: "string",
 };
 
+const focusIconSchemaNew: SchemaDef<FocusIconDefNew> = {
+    _innerType: "raw",
+    _type: "map",
+};
+
 export function convertFocusFileNodeToJson(node: Node, constants: {}): HOIPartial<FocusFile> {
     return convertNodeToJson<FocusFile>(node, focusFileSchema, constants);
 }
@@ -180,7 +205,7 @@ export function convertFocusFileNodeToJson(node: Node, constants: {}): HOIPartia
 export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFocusTrees: FocusTree[], filePath: string, constants: {} ): FocusTree[] {
     const focusTrees: FocusTree[] = [];
 
-    if (file.shared_focus.length > 0) {
+    if (file.shared_focus.length > 0 || file.joint_focus.length > 0) {
         const conditionExprs: ConditionItem[] = [];
         const warnings: FocusWarning[] = [];
         const focuses = getFocuses([...file.shared_focus, ...file.joint_focus], conditionExprs, filePath, warnings, constants);
@@ -201,7 +226,7 @@ export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFoc
         const warnings: FocusWarning[] = [];
         const focuses = getFocuses(focusTree.focus, conditionExprs, filePath, warnings, constants);
         
-        if (useConditionInFocus) {
+        if (isFeatureEnabled('useConditionInFocus')) {
             for (const sharedFocus of focusTree.shared_focus) {
                 if (!sharedFocus) {
                     continue;
@@ -298,8 +323,8 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
         });
     }
 
-    const x = hoiFocus.x ?? 0;
-    const y = hoiFocus.y ?? 0;
+    const x = hoiFocus.x?._raw ? convertNodeToJson<number>(hoiFocus.x._raw, "number", constants) ?? 0 : 0;
+    const y = hoiFocus.y?._raw ? convertNodeToJson<number>(hoiFocus.y._raw, "number", constants) ?? 0 : 0;
     const relativePositionId = hoiFocus.relative_position_id;
 
     const exclusive = chain(hoiFocus.mutually_exclusive)
@@ -309,6 +334,11 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
     const prerequisite = hoiFocus.prerequisite
         .map(p => p.focus.concat(p.OR).filter((s): s is string => s !== undefined));
     const icon = parseFocusIcon(hoiFocus.icon.filter((v): v is Raw => v !== undefined).map(v => v._raw), constants, conditionExprs);
+    if (hoiFocus.alternate_icon) {
+        const condition = { scopeName: '', nodeContent: 'Show alternate icon' };
+        extractConditionalExprs(condition, conditionExprs);
+        icon.unshift({ icon: hoiFocus.alternate_icon, condition });
+    }
     const hasAllowBranch = hoiFocus.allow_branch.length > 0;
     const allowBranchCondition = extractConditionValues(hoiFocus.allow_branch.filter((v): v is Raw => v !== undefined).map(v => v._raw.value), countryScope, conditionExprs).condition;
     const offset: Offset[] = hoiFocus.offset.map(o => ({
@@ -318,6 +348,7 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
     }));
 
     const text = hoiFocus.text;
+    const overlay = hoiFocus.overlay;
 
     return {
         id,
@@ -334,6 +365,9 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
         token: hoiFocus._token,
         file: filePath,
         text,
+        overlay,
+        xToken: hoiFocus.x?._valueStartToken === hoiFocus.x?._valueEndToken ? hoiFocus.x?._valueEndToken : undefined,
+        yToken: hoiFocus.y?._valueStartToken === hoiFocus.y?._valueEndToken ? hoiFocus.y?._valueEndToken : undefined,
     };
 }
 
@@ -463,18 +497,36 @@ function validateRelativePositionId(focuses: Record<string, Focus>, warnings: Fo
 }
 
 function parseFocusIcon(nodes: Node[], constants: {}, conditionExprs: ConditionItem[]): FocusIconWithCondition[] {
-    return nodes.map(n => parseSingleFocusIcon(n, constants, conditionExprs)).filter((v): v is FocusIconWithCondition => v !== undefined);
+    return chain(nodes).flatMap(n => parseSingleFocusIcon(n, constants, conditionExprs)).filter((v): v is FocusIconWithCondition => v !== undefined).value();
 }
 
-function parseSingleFocusIcon(node: Node, constants: {}, conditionExprs: ConditionItem[]): FocusIconWithCondition {
+function parseSingleFocusIcon(node: Node, constants: {}, conditionExprs: ConditionItem[]): FocusIconWithCondition[] {
     const stringResult = convertNodeToJson<string>(node, 'string', constants);
     if (stringResult) {
-        return { icon: stringResult, condition: true };
+        return [{ icon: stringResult, condition: true }];
     }
     
     const iconWithCondition = convertNodeToJson<FocusIconDef>(node, focusIconSchema, constants);
-    return {
-        icon: iconWithCondition.value,
-        condition: iconWithCondition.trigger ? extractConditionValue(iconWithCondition.trigger._raw.value, countryScope, conditionExprs).condition : true,
-    };
+    if (iconWithCondition && iconWithCondition.value && iconWithCondition.trigger) {
+        return [{
+            icon: iconWithCondition.value,
+            condition: iconWithCondition.trigger ? extractConditionValue(iconWithCondition.trigger._raw.value, countryScope, conditionExprs).condition : true,
+        }];
+    }
+
+    const iconWithConditionNew = convertNodeToJson<FocusIconDefNew>(node, focusIconSchemaNew, constants);
+    if (iconWithConditionNew) {
+        const iconWithConditionList: FocusIconWithCondition[] = [];
+        for (const [icon, condition] of Object.entries(iconWithConditionNew._map)) {
+            if (icon && condition._value) {
+                iconWithConditionList.push({
+                    icon,
+                    condition: extractConditionValue(condition._value._raw.value, countryScope, conditionExprs).condition,
+                });
+            }
+        }
+        return iconWithConditionList;
+    }
+
+    return [];
 }

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { localize } from '../util/i18n';
-import { error, debug } from '../util/debug';
+import { error, debug, createStopwatch } from '../util/debug';
 import { dirUri, getDocumentByUri } from '../util/vsccommon';
 import { isEqual } from 'lodash';
 import { getFilePathFromMod, getHoiOpenedFileOriginalUri, readFileFromModOrHOI4 } from '../util/fileloader';
@@ -18,6 +18,9 @@ export abstract class PreviewBase {
     public onDispose = this.disposeEmitter.event;
 
     private disposed = false;
+    
+    protected lastDocumentChangeTimestamp: number = 0;
+    protected pendingChangeDocument: boolean = false;
 
     constructor(
         readonly uri: vscode.Uri,
@@ -26,12 +29,33 @@ export abstract class PreviewBase {
         this.registerEvents(panel);
     }
 
-    public async onDocumentChange(document: vscode.TextDocument): Promise<void> {
+    public onDocumentWillChange() {
+        if (this.disposed) {
+            return;
+        }
+        this.pendingChangeDocument = true;
+    }
+
+    public async onDocumentChange(document: vscode.TextDocument, timestamp: number): Promise<void> {
+        if (this.disposed || (timestamp <= this.lastDocumentChangeTimestamp && !this.pendingChangeDocument)) {
+            return;
+        }
+
+        this.lastDocumentChangeTimestamp = timestamp;
+
+        const stopwatch = createStopwatch();
         try {
-            this.panel.webview.html = await this.getContent(document);
+            const content = await this.getContent(document);
+            if (!this.disposed) {
+                this.panel.webview.html = content;
+            }
         } catch(e) {
             error(e);
         }
+
+        debug(`Preview base (${this.uri.toString()}) content loaded in ${stopwatch.getElapsed()} ms.`);
+
+        this.pendingChangeDocument = false;
     }
     
     public dispose(): void {
@@ -41,17 +65,13 @@ export abstract class PreviewBase {
         this.disposeEmitter.dispose();
     }
 
-    public get isDisposed(): boolean {
-        return this.disposed;
-    }
-
     public async initializePanelContent(document: vscode.TextDocument): Promise<void> {
         this.panel.webview.html = localize('loading', 'Loading...');
-        await this.onDocumentChange(document);
+        await this.onDocumentChange(document, Date.now());
     }
 
     protected registerEvents(panel: vscode.WebviewPanel): void {
-        panel.webview.onDidReceiveMessage((msg) => {
+        panel.webview.onDidReceiveMessage(async (msg) => {
             switch (msg.command) {
                 case 'navigate':
                     if (msg.start !== undefined) {
@@ -75,6 +95,9 @@ export abstract class PreviewBase {
                     break;
                 case 'reload':
                     this.reload();
+                    break;
+                default:
+                    await this.handleMessage(msg);
                     break;
             }
         });
@@ -144,7 +167,10 @@ export abstract class PreviewBase {
             return;
         }
 
-        this.onDocumentChange(document);
+        this.onDocumentChange(document, Date.now());
+    }
+
+    protected handleMessage(_msg: any): Promise<void> | void {
     }
 
     protected abstract getContent(document: vscode.TextDocument): Promise<string>;

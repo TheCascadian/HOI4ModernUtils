@@ -15,6 +15,8 @@ export interface Warning<T> {
     source: T;
 }
 
+export type Unarray<T> = T extends (infer U)[] ? U : never;
+
 export function arrayToMap<T, K extends keyof T>(items: T[], key: K):
     T[K] extends string ? Record<string, T> : T[K] extends number ? Record<number, T> : never;
 export function arrayToMap<T, K extends keyof T, V>(items: T[], key: K, valueSelector: (value: T) => V):
@@ -78,10 +80,14 @@ export function slice<T>(array: T[] | undefined, start: number, end: number): T[
     }
 }
 
-export function debounceByInput<TI extends any[], TO>(func: (...input: TI) => TO, keySelector: (...input: TI) => string, wait?: number, debounceSettings?: DebounceSettings): (...input: TI) => TO {
+export function debounceByInput<TI extends any[], TO>(func: (...input: TI) => TO, keySelector: (...input: TI) => string, wait?: number, debounceSettings?: DebounceSettings, funcImmediate?: (...input: TI) => TO): (...input: TI) => TO {
     const cachedMethods: Record<string, (input: TI) => TO> = {};
     
     function result(...input: TI): TO {
+        if (funcImmediate) {
+            funcImmediate(...input);
+        }
+
         const key = keySelector(...input);
         const method = cachedMethods[key];
         if (method) {

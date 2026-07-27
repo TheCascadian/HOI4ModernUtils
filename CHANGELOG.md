@@ -4,7 +4,87 @@ All notable changes to the "hoi4modernutils" extension will be documented in thi
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
-## [0.12.2] - 2024/12/07 - Latest
+## [0.15.1] - 2026/07/26 - Latest
+
+### Added
+* Add search box in event tree preview.
+* Add localised labels on world map preview.
+* Add state category color set in world map preview.
+
+### Update
+* Refine localisation file preprocessing to accept more files.
+
+## [0.15.0] - 2026/07/23
+
+### Updated
+* Indexing settings is moved from feature flags to dedicated settings.
+* Simplified event preview to reduce duplicate event when possible.
+* Preview windows are refreshed now when localisation files update.
+* Improve reading performance of files on local desktop.
+
+### Added
+* Indexing for event files.
+
+### Fixed
+* Performance issue when opening preview windows (especially noticeable in map preview) (#130) (#130) (since v0.12.4).
+
+## [0.14.2] - 2026/07/18
+
+### Updated
+* Large focus icons now won't be clipped on overflow.
+
+### Fixed
+* GFX index incorrectly fill DLC content to workspace index.
+
+## [0.14.1] - 2026/07/14
+
+### Fixed
+* Numbers starts with `.` or `+` can't be parsed.
+
+### Updated
+* Hide condition selection in world map preview if there is no condition to select.
+
+## [0.14.0] - 2026/07/13
+
+### Added
+* Add condition selection in world map preview. (#121)
+  * Limitation: only support previewing owner, controller and core.
+* Add bookmark/scenario selection in world map preview, along with condition selection. (#33)
+* Add "country (controller)" color set in world map preview. (#118)
+
+### Updated
+* Feature flag setting UI. Now you don't need to edit raw json.
+
+## [0.13.0] - 2026/07/10
+
+### Added
+* Support `force_use_small_tech_layout` in technology tree preview.
+* Add condition selection in technology tree preview.
+* Allow zooming in technology tree preview.
+* When localisation index is enabled, you can choose to show ID or localised text for focus and technology labels (#124) (Contributor: [1985312383(柯慕灵)](https://github.com/1985312383)).
+* Focus position editing by dragging in focus tree preview (#124) (Contributor: [1985312383(柯慕灵)](https://github.com/1985312383)).
+
+### Updated
+* Scrolling in preview window is now by dragging right mouse button. 
+  * You can switch to left mouse button dragging by disabling feature flag `rightButtonDrag`.
+
+## [0.12.4] - 2026/07/08
+
+### Fixed
+* Reorder file loading logic to "workspace > dlc > base game".
+
+### Added
+* Support `overlay` in focus tree preview (#123) (Contributor: [1985312383(柯慕灵)](https://github.com/1985312383)).
+* Enabled GFX index by default.
+
+## [0.12.3] - 2026/07/05
+
+### Fixed
+* Show `joint_focus` in focus tree preview like `shared_focus` (#116).
+* Loose parser syntax check to allow missing `}` or redundant `}` at the end of a file (#107).
+* Support new focus icon format and `alternate_icon` (#106).
+
+## [0.12.2] - 2024/12/07
 
 ### Fixed
 * Allow `|` in symbol type (to support the case `localization_key = building_state_modifier|dam`) (#105) (Contributor: [IShiraiKurokoI(Shirai_Kuroko)](https://github.com/IShiraiKurokoI)).

@@ -27,13 +27,13 @@ vsce package
 * The current package generated for this repository is:
 
 ```text
-hoi4modernutils-0.12.2.vsix
+hoi4modernutils-0.15.1.vsix
 ```
 
 * Users can install that package from a terminal:
 
 ```powershell
-code --install-extension hoi4modernutils-0.12.2.vsix
+code --install-extension hoi4modernutils-0.15.1.vsix
 ```
 
 * Or from inside VS Code:
@@ -43,13 +43,6 @@ Extensions -> ... -> Install from VSIX...
 ```
 
 This is the intended installation path for this fork. GitHub Releases can host the `.vsix` asset directly rather than an insanely complex Azure DevOps signup process for me to host the tool through VSC Marketplace "properly".
-
-## Contribute
-* If you have any suggestion, feel free to create an issue on this [Github repo](https://github.com/TheCascadian/HOI4ModernUtils/issues).
-
-# ORIGINAL README RETAINED BELOW
-
-> I'm disappointed by Paradox because of the Silk Road thing. I'll pause this project until they fix it.
 
 ## Features
 
@@ -62,7 +55,7 @@ This is the intended installation path for this fork. GitHub Releases can host t
 * `.gfx` file preview (sprites used by HOI4 are defined here)
 * `.dds`, `.tga` file preview (images files used by HOI4)
 
-For feature details and user manual, please refer to [HOI4 Mod Utilities Wiki](https://github.com/herbix/hoi4modernutils/wiki).
+For feature details and user manual, please refer to [HOI4 Mod Utilities Wiki](https://github.com/herbix/hoi4modutilities/wiki).
 
 ## Steps to start
 
@@ -107,26 +100,33 @@ If you installed the extension from a `.vsix` file instead of the Marketplace, t
 
 |Setting|Type|Description|
 |-------|----------|--------|
-|`hoi4modernutils.installPath`|`string`|Hearts of Iron IV install path. Without this, most features are broken.|
-|`hoi4modernutils.loadDlcContents`|`boolean`|Whether to load DLC images when previewing files. Enabling this will use more memory (All DLCs are around 600MB).|
-|`hoi4modernutils.modFile`|`string`|Path to the working `.mod` file. This file is used to read replace_path. If not specified, will use first `.mod` file in first folder of the workspace.|
-|`hoi4modernutils.enableSupplyArea`|`boolean`|If you are developing mod for HOI4(version<=1.10). Use this to check enable supply area.|
-|`hoi4modernutils.previewLocalisation`|`enum`|Language of content in event tree preview.|
-|`hoi4modernutils.featureFlags`|`array` of `string`|Feature flags are used to disable or enable features. Reloading is required after changing this. Please refer to [Wiki](https://github.com/herbix/hoi4modernutils/wiki/Feature-flags) on Github for details.|
+|`hoi4ModernUtils.installPath`|`string`|Hearts of Iron IV install path. Without this, most features are broken.|
+|`hoi4ModernUtils.loadDlcContents`|`boolean`|Whether to load DLC images when previewing files. Enabling this will use more memory (All DLCs are around 600MB).|
+|`hoi4ModernUtils.modFile`|`string`|Path to the working `.mod` file. This file is used to read replace_path. If not specified, will use first `.mod` file in first folder of the workspace.|
+|`hoi4ModernUtils.enableSupplyArea`|`boolean`|If you are developing mod for HOI4(version<=1.10). Use this to check enable supply area.|
+|`hoi4ModernUtils.previewLocalisation`|`enum`|Language of content in preview windows.|
+|`hoi4ModernUtils.indexing`|`array` of `string`|When enabled, the specified file types don't need to be manually added as reference.|
+|`hoi4ModernUtils.stateBoundaryColor`|`string`|CSS color for state boundary lines in province view.|
+|`hoi4ModernUtils.stateBoundaryWidth`|`number`|Line width multiplier for state boundary lines in province view.|
+|`hoi4ModernUtils.featureFlags`|`array` of `string`|Feature flags are used to disable or enable features. Reloading is required after changing this. Please refer to [Wiki](https://github.com/TheCascadian/HOI4ModernUtils/wiki/Feature-flags) on Github for details.|
 
 ## Known Issues
 
-* GUI of focus tree can't be configured like technology tree.
-* Edge lines on world map not alway fit edge of colors.
-* Event tree preview will duplicate events even they are same event if they are from different option.
+* GUI of focus tree and MIO can't be configured like technology tree.
+* Edge lines on world map not always fit edge of colors.
 
-## Release Notes - [0.12.2]
+## Release Notes - [0.15.1]
 
-### Fixed
-* Allow `|` in symbol type (to support the case `localization_key = building_state_modifier|dam`) (#105) (Contributor: [IShiraiKurokoI(Shirai_Kuroko)](https://github.com/IShiraiKurokoI)).
+### Added
+* Add search box in event tree preview.
+* Add localised labels on world map preview.
+* Add state category color set in world map preview.
+
+### Update
+* Refine localisation file preprocessing to accept more files.
 
 ## Contribute
 * If you have any suggestion, feel free to create an issue on this [Github repo](https://github.com/TheCascadian/HOI4ModernUtils/issues).
-* If you want to contribute translation, feel free to create pull request to this [Github repo](https://github.com/herbix/hoi4modernutils). All localization related files are under `i18n` folder.
+* If you want to contribute translation, feel free to create pull request to this [Github repo](https://github.com/TheCascadian/HOI4ModernUtils). All localization related files are under `i18n` folder.
 
-* Thanks to all contributors listed [here](https://github.com/herbix/hoi4modernutils/graphs/contributors).
+* Thanks to all contributors listed [here](https://github.com/herbix/hoi4modutilities/graphs/contributors).

@@ -16,6 +16,7 @@ import { chain } from 'lodash';
 import { sendEvent } from '../util/telemetry';
 import { guiPreviewDef } from './gui';
 import { mioPreviewDef } from './mio';
+import { indexManager } from '../indexing/indexmanager';
 
 export type PreviewProviderDef = PreviewProviderDefNormal | PreviewProviderDefAlternative;
 
@@ -31,7 +32,7 @@ interface PreviewProviderDefAlternative {
     onPreview(document: vscode.TextDocument): Promise<void>;
 }
 
-export class PreviewManager implements vscode.WebviewPanelSerializer {
+class PreviewManager implements vscode.WebviewPanelSerializer {
     private _previews: Record<string, PreviewBase> = {};
 
     private _previewProviders: PreviewProviderDef[] = [
@@ -54,6 +55,7 @@ export class PreviewManager implements vscode.WebviewPanelSerializer {
         disposables.push(vscode.workspace.onDidChangeTextDocument(this.onChangeTextDocument, this));
         disposables.push(vscode.window.onDidChangeActiveTextEditor(this.updateHoi4PreviewContextValue, this));
         disposables.push(vscode.window.registerWebviewPanelSerializer(WebviewType.Preview, this));
+        disposables.push(indexManager.onUpdated(this.onGfxIndexInitialized, this));
 
         // Trigger context value setting
         this.updateHoi4PreviewContextValue(vscode.window.activeTextEditor);
@@ -91,7 +93,7 @@ export class PreviewManager implements vscode.WebviewPanelSerializer {
             debug(`dispose panel ${key} because text document closed`);
         }
 
-        this.updatePreviewItemsInSubscription(document.uri);
+        this.updatePreviewItemsInSubscription(document.uri, Date.now());
     }
     
     private onChangeTextDocument(e: vscode.TextDocumentChangeEvent): void {
@@ -99,10 +101,10 @@ export class PreviewManager implements vscode.WebviewPanelSerializer {
         const key = document.uri.toString();
         const preview = this._previews[key];
         if (preview !== undefined) {
-            this.updatePreviewItem(preview, document);
+            this.updatePreviewItem(preview, document, Date.now());
         }
 
-        this.updatePreviewItemsInSubscription(document.uri);
+        this.updatePreviewItemsInSubscription(document.uri, Date.now());
     }
 
     private updateHoi4PreviewContextValue(textEditor: vscode.TextEditor | undefined): void {
@@ -119,6 +121,15 @@ export class PreviewManager implements vscode.WebviewPanelSerializer {
         setVscodeContext(ContextName.ShouldShowHoi4Preview, shouldShowPreviewButton);
         setVscodeContext(ContextName.ShouldHideHoi4Preview, !shouldShowPreviewButton);
         setVscodeContext(ContextName.Hoi4PreviewType, hoi4PreviewType);
+    }
+
+    private onGfxIndexInitialized(): void {
+        for (const preview of Object.values(this._previews)) {
+            const document = getDocumentByUri(preview.uri);
+            if (document) {
+                preview.onDocumentChange(document, Date.now());
+            }
+        }
     }
 
     private async showPreviewImpl(requestUri?: vscode.Uri, panel?: vscode.WebviewPanel): Promise<void> {
@@ -250,30 +261,39 @@ export class PreviewManager implements vscode.WebviewPanelSerializer {
     }
 
     private updatePreviewItemsInSubscription = debounceByInput(
-        (uri: vscode.Uri): void => {
+        (uri: vscode.Uri, timestamp: number): void => {
             for (const otherPreview of this.getPreviewItemsNeedsUpdate(uri.toString())) {
                 if (uri.toString() === otherPreview.uri.toString()) {
                     continue;
                 }
                 const otherDocument = getDocumentByUri(otherPreview.uri);
                 if (otherDocument) {
-                    otherPreview.onDocumentChange(otherDocument);
+                    otherPreview.onDocumentChange(otherDocument, timestamp);
                 }
             }
         },
         uri => uri.toString(),
-        1000,
-        { trailing: true });
+        300,
+        { trailing: true },
+        (uri: vscode.Uri, timestamp: number) => {
+            for (const otherPreview of this.getPreviewItemsNeedsUpdate(uri.toString())) {
+                if (uri.toString() === otherPreview.uri.toString()) {
+                    continue;
+                }
+                otherPreview.onDocumentWillChange();
+            }
+        });
 
     private updatePreviewItem = debounceByInput(
-        (previewItem: PreviewBase, document: vscode.TextDocument) => {
-            if (!previewItem.isDisposed) {
-                previewItem.onDocumentChange(document);
-            }
+        (previewItem: PreviewBase, document: vscode.TextDocument, timestamp: number) => {
+            previewItem.onDocumentChange(document, timestamp);
         },
         (preview) => preview.uri.toString(),
-        1000,
-        { trailing: true });
+        300,
+        { trailing: true },
+        (previewItem: PreviewBase, document: vscode.TextDocument, timestamp: number) => {
+            previewItem.onDocumentWillChange();
+        });
 }
 
 export const previewManager = new PreviewManager();

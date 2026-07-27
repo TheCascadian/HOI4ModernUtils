@@ -3,9 +3,8 @@ import { convertFocusFileNodeToJson, FocusTree, getFocusTreeWithFocusFile } from
 import { parseHoi4File } from "../../hoiformat/hoiparser";
 import { localize } from "../../util/i18n";
 import { uniq, flatten, chain } from "lodash";
-import { getGfxContainerFiles } from "../../util/gfxindex";
-import { sharedFocusIndex } from "../../util/featureflags";
-import { findFileByFocusKey } from "../../util/sharedFocusIndex";
+import { gfxIndex } from "../../indexing/gfxindex";
+import { sharedFocusIndex } from "../../indexing/sharedfocusindex";
 
 export interface FocusTreeLoaderResult {
     focusTrees: FocusTree[];
@@ -23,24 +22,22 @@ export class FocusTreeLoader extends ContentLoader<FocusTreeLoaderResult> {
         const constants = {};
 
         const file = convertFocusFileNodeToJson(parseHoi4File(content, localize('infile', 'In file {0}:\n', this.file)), constants);
+        const focusTreeDependencies = dependencies.filter(d => d.type === 'focus').map(d => d.path);
 
-        if (sharedFocusIndex) {
-            for (const focusTree of file.focus_tree) {
-                for (const sharedFocus of focusTree.shared_focus) {
-                    if (!sharedFocus) {
-                        continue;
-                    }
-                    const filePath = findFileByFocusKey(sharedFocus);
-                    if (filePath) {
-                        if (dependencies.findIndex((item) => item.path === filePath) === -1) {
-                            dependencies.push({type: 'focus', path: filePath});
-                        }
-                    }
-                }
+        const sharedFocusFilesFromIndex = chain(file.focus_tree)
+            .flatMap(focusTree => focusTree.shared_focus)
+            .filter((sharedFocus): sharedFocus is string => sharedFocus !== undefined)
+            .map(sharedFocus => sharedFocusIndex.get(sharedFocus))
+            .filter((filePath): filePath is string => filePath !== undefined)
+            .uniq()
+            .value();
+
+        for (const filePath of sharedFocusFilesFromIndex) {
+            if (!focusTreeDependencies.includes(filePath) && filePath !== this.file) {
+                focusTreeDependencies.push(filePath);
             }
         }
 
-        const focusTreeDependencies = dependencies.filter(d => d.type === 'focus').map(d => d.path);
         const focusTreeDepFiles = await this.loaderDependencies.loadMultiple(focusTreeDependencies, session, FocusTreeLoader);
 
         const sharedFocusTrees = chain(focusTreeDepFiles)
@@ -50,10 +47,15 @@ export class FocusTreeLoader extends ContentLoader<FocusTreeLoaderResult> {
 
         const focusTrees = getFocusTreeWithFocusFile(file, sharedFocusTrees, this.file, constants);
 
+        const focusGfxNames = chain(focusTrees)
+            .flatMap(ft => Object.values(ft.focuses))
+            .flatMap(f => [...f.icon.map(i => i.icon), f.overlay])
+            .value();
+
         const gfxDependencies = [
             ...dependencies.filter(d => d.type === 'gfx').map(d => d.path),
             ...flatten(focusTreeDepFiles.map(f => f.result.gfxFiles)),
-            ...await getGfxContainerFiles(chain(focusTrees).flatMap(ft => Object.values(ft.focuses)).flatMap(f => f.icon).map(i => i.icon).value()),
+            ...await gfxIndex.getGfxContainerFiles(focusGfxNames),
         ];
 
         return {

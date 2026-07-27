@@ -1,9 +1,28 @@
 import { getConfiguration } from "./vsccommon";
 
-const featureFlags = getConfiguration().featureFlags;
+const byDefaultEnabledFlags = [
+    'useConditionInFocus',
+    'eventTreePreview',
+    'rightButtonDrag',
+];
 
-export const useConditionInFocus = !featureFlags.includes('!useConditionInFocus');
-export const eventTreePreview = !featureFlags.includes('!eventTreePreview');
-export const sharedFocusIndex = !featureFlags.includes('!sharedFocusIndex');
-export const gfxIndex = featureFlags.includes('gfxIndex');
-export const localisationIndex = featureFlags.includes('localisationIndex');
+type FeatureFlag = 'useConditionInFocus' | 'eventTreePreview' | 'rightButtonDrag';
+
+export function isFeatureEnabled(feature: FeatureFlag, featureFlags?: string[]): boolean {
+    const ff = featureFlags ?? getConfiguration().featureFlags;
+    if (byDefaultEnabledFlags.includes(feature)) {
+        return !ff.includes('!' + feature);
+    } else {
+        return ff.includes(feature);
+    }
+}
+
+export function featureFlagsAsScript(): string {
+    const featureFlags = getConfiguration().featureFlags;
+    const featureFlagState: Record<FeatureFlag, boolean> = {
+        useConditionInFocus: isFeatureEnabled('useConditionInFocus', featureFlags),
+        eventTreePreview: isFeatureEnabled('eventTreePreview', featureFlags),
+        rightButtonDrag: isFeatureEnabled('rightButtonDrag', featureFlags),
+    };
+    return 'window.__featureflags = ' + JSON.stringify(featureFlagState) + ';';
+}

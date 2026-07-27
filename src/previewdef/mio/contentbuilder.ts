@@ -10,10 +10,11 @@ import { LoaderSession } from '../../util/loader/loader';
 import { debug } from '../../util/debug';
 import { StyleTable, normalizeForStyle } from '../../util/styletable';
 import { Mio, MioTrait, TraitEffect } from './schema';
-import { getLocalisedTextQuick } from "../../util/localisationIndex";
-import { localisationIndex } from "../../util/featureflags";
+import { featureFlagsAsScript } from "../../util/featureflags";
+import { indexManager } from '../../indexing/indexmanager';
+import { localisationIndex } from '../../indexing/localisationindex';
 
-const defaultTraitIcon = 'gfx/interface/goals/goal_unknown.dds';
+const defaultTraitIcon = 'gfx/interface/traits/trait_unknown.dds';
 const traitEffectIconMap: Record<TraitEffect, string> = {
     equiment: 'GFX_design_team_icon',
     production: 'GFX_industrial_manufacturer_icon',
@@ -43,6 +44,7 @@ export async function renderMioFile(loader: MioLoader, uri: vscode.Uri, webview:
         const styleNonce = randomString(32);
         const baseContent = await renderMios(mios, styleTable, loadResult.result.gfxFiles, jsCodes, styleNonce, loader.file);
         jsCodes.push(i18nTableAsScript());
+        jsCodes.push(featureFlagsAsScript());
 
         return html(
             webview,
@@ -96,7 +98,7 @@ async function renderMios(mios: Mio[], styleTable: StyleTable, gfxFiles: string[
     jsCodes.push('window.xGridSize = ' + xGridSize);
 
     return (
-        `<div id="dragger" class="${styleTable.oneTimeStyle('dragger', () => `
+        `<div id="dragger" additionalDraggerHostId="miopreviewcontent" class="${styleTable.oneTimeStyle('dragger', () => `
             width: 100vw;
             height: 100vh;
             position: fixed;
@@ -146,7 +148,7 @@ async function renderToolBar(mios: Mio[], styleTable: StyleTable): Promise<strin
         <div class="select-container ${styleTable.style('marginRight10', () => `margin-right:10px`)}">
             <select id="mios" class="select multiple-select" tabindex="0" role="combobox">
                 ${await Promise.all(mios.map(async (mio, i) => {
-                    const localizedText = localisationIndex ? `(${mio.id}) ${await getLocalisedTextQuick(mio.id)}` : mio.id;
+                    const localizedText = indexManager.isIndexEnabled('localisation') ? `(${mio.id}) ${localisationIndex.getLocalisedText(mio.name)}` : mio.id;
                     return `<option value="${i}">${localizedText}</option>`;
                 })).then(options => options.join(''))}
             </select>
@@ -223,7 +225,7 @@ async function renderTrait(trait: MioTrait, styleTable: StyleTable, gfxFiles: st
         start="${trait.token?.start}"
         end="${trait.token?.end}"
         ${file === trait.file ? '' : `file="${trait.file}"`}
-        title="${trait.id}${localisationIndex ? `\n${await getLocalisedTextQuick(trait.name)}` : ''}\n({{position}})">
+        title="${trait.id}${indexManager.isIndexEnabled('localisation') ? `\n${localisationIndex.getLocalisedText(trait.name)}` : ''}\n({{position}})">
             <div class="
                 ${styleTable.style('effect-host', () => `
                     text-align: center;
@@ -256,18 +258,7 @@ async function renderTrait(trait: MioTrait, styleTable: StyleTable, gfxFiles: st
                 z-index: 5;
             `)}">
             ${trait.id}
-            </span>
-            <br/>
-            <span
-            class="${styleTable.style('trait-span-display', () => `
-                margin: 10px -400px;
-                margin-top: 84px;
-                text-align: center;
-                display: inline-block;
-                position: relative;
-                z-index: 5;
-            `)}">
-            ${localisationIndex ? `${await getLocalisedTextQuick(trait.name)}` : ''}
+            ${indexManager.isIndexEnabled('localisation') ? `<br/>${localisationIndex.getLocalisedText(trait.name)}` : ''}
             </span>
         </div>
     </div>`;

@@ -1,6 +1,7 @@
 import { UserError } from '../util/common';
+import { Logger } from '../util/logger';
 
-export type NodeValue = string | number | Node[] | SymbolNode | null;
+export type NodeValue = string | Node[] | SymbolNode | null;
 
 export interface Node {
     name: string | null;
@@ -103,14 +104,12 @@ function tokenizer<T extends string>(input: string, tokenRegexStrings: Record<T,
     };
 }
 
-type HOITokenType = 'comment' | 'symbol' | 'operator' | 'string' | 'number' | 'unitnumber' | 'eof';
+type HOITokenType = 'comment' | 'symbol' | 'operator' | 'string' | 'eof';
 const tokenRegexStrings: Record<HOITokenType, [string, number]> = {
     comment: ['#.*(?:[\\r\\n]|$)', 0],
-    symbol: ['(?:\\d+\\.)?[a-zA-Z_@\\[\\]][\\w:\\._@\\[\\]\\-\\?\\^\\/\\u00A0-\\u024F|]*', 40],
+    symbol: ['[-\\w@\\[\\]\\u00A0-\\u024F\\.+][\\w:\\._@\\[\\]\\-\\?\\^\\/\\u00A0-\\u024F|%+]*', 40],
     operator: ['[={}<>;,]|>=|<=|!=', 10],
     string: ['"(?:\\\\"|\\\\\\\\|[^"])*"', 10],
-    number: ['-?\\d*\\.\\d+|-?\\d+|0x\\d+', 50],
-    unitnumber: ['(?:-?\\d*\\.\\d+|-?\\d+)(?:%%?)', 49],
     eof: ['$', 1000],
 };
 
@@ -119,7 +118,7 @@ export function parseHoi4File(input: string, errorMessagePrefix: string = ''): N
     const value = parseBlockContent(tokens);
 
     if (tokens.peek().type !== 'eof') {
-        tokens.throw("File content can't be completely parsed");
+        Logger.warn(errorMessagePrefix + "File content can't be completely parsed");
     }
 
     return {
@@ -136,11 +135,27 @@ export function parseHoi4File(input: string, errorMessagePrefix: string = ''): N
 }
 
 function parseNode(tokens: Tokenizer<HOITokenType>): Node {
-    const name = tokens.next();
-    if (name.type !== 'string' && name.type !== 'symbol' && name.type !== 'number') {
-        tokens.throw("Expect name to be symbol, string or number", true);
+    const name = tokens.peek();
+    if (name.type !== 'string' && name.type !== 'symbol' && name.value !== '{') {
+        tokens.throw("Expect name to be symbol or string", true);
     }
 
+    if (name.value === '{') {
+        const [value, valueStartToken, valueEndToken] = parseNodeValue(tokens);
+        return {
+            name: null,
+            nameToken: null,
+            operator: null,
+            operatorToken: null,
+            value,
+            valueStartToken,
+            valueEndToken,
+            valueAttachment: null,
+            valueAttachmentToken: null,
+        };
+    }
+
+    tokens.next();
     let nextToken = tokens.peek();
     if (nextToken.type !== 'operator' || nextToken.value.match(/^[,;}]$/)) {
         while (nextToken.value.match(/^[,;]$/)) {
@@ -216,15 +231,7 @@ function parseNodeValue(tokens: Tokenizer<HOITokenType>): [ NodeValue, Token<HOI
                 nextToken,
                 nextToken,
             ];
-        case 'number':
-            const nextTokenValue = nextToken.value;
-            return [
-                nextTokenValue.startsWith('0x') ? parseInt(nextTokenValue.substr(2), 16) : parseFloat(nextTokenValue),
-                nextToken,
-                nextToken,
-            ];
         case 'symbol':
-        case 'unitnumber':
             return [
                 { name: nextToken.value },
                 nextToken,
@@ -234,7 +241,7 @@ function parseNodeValue(tokens: Tokenizer<HOITokenType>): [ NodeValue, Token<HOI
             if (nextToken.value === '{') {
                 const result = parseBlockContent(tokens);
                 const right = tokens.next();
-                if (right.value !== '}') {
+                if (right.value !== '}' && right.type !== 'eof') {
                     tokens.throw("Expect a '}'", true);
                 }
                 return [

@@ -2,7 +2,7 @@
 	"name": "hoi4modernutils",
 	"displayName": "%hoi4modernutils.displayName%",
 	"description": "Utilities for Heart of Iron IV mods developers",
-	"version": "0.3.1",
+	"version": "0.15.1",
 	"author": "TheCascadian",
 	"publisher": "thecascadian",
 	"icon": "icon.png",
@@ -35,7 +35,9 @@
 		"workspaceContains:**/*.gfx",
 		"workspaceContains:common/national_focus/*.txt",
 		"workspaceContains:common/technologies/*.txt",
+		"workspaceContains:common/military_industrial_organization/organizations/*.txt",
 		"workspaceContains:events/*.txt",
+		"workspaceContains:interface/*.gui",
 		"workspaceContains:map/default.map"
 	],
 	"main": "./dist/extension.js",
@@ -63,6 +65,33 @@
 						"default": true,
 						"description": "%hoi4modernutils.loadDlcContents.desc%"
 					},
+					"hoi4ModernUtils.indexing": {
+						"title": "%hoi4modernutils.indexing.title%",
+						"type": "array",
+						"default": [
+							"gfx",
+							"sharedfocus",
+							"localisation",
+							"event"
+						],
+						"uniqueItems": true,
+						"items": {
+							"type": "string",
+							"enum": [
+								"gfx",
+								"sharedfocus",
+								"localisation",
+								"event"
+							],
+							"enumDescriptions": [
+								"%hoi4modernutils.indexing.gfx%",
+								"%hoi4modernutils.indexing.sharedfocus%",
+								"%hoi4modernutils.indexing.localisation%",
+								"%hoi4modernutils.indexing.event%"
+							]
+						},
+						"description": "%hoi4modernutils.indexing.desc%"
+					},
 					"hoi4ModernUtils.modFile": {
 						"title": "%hoi4modernutils.modFile.title%",
 						"type": "string",
@@ -78,35 +107,51 @@
 					"hoi4ModernUtils.previewLocalisation": {
 						"title": "%hoi4modernutils.previewLocalisation.title%",
 						"type": "string",
-						"default": "English",
+						"default": "Use Visual Studio Code Language",
 						"enum": [
+							"Use Visual Studio Code Language",
 							"Brazilian Portuguese",
 							"English",
 							"French",
 							"German",
 							"Japanese",
+							"Korean",
 							"Polish",
 							"Russian",
 							"Simplified Chinese",
 							"Spanish"
 						],
-					"description": "%hoi4modernutils.previewLocalisation.desc%"
-				},				"hoi4ModernUtils.stateBoundaryColor": {
-					"title": "%hoi4modernutils.stateBoundaryColor.title%",
-					"type": "string",
-					"default": "rgba(0, 0, 0, 0.4)",
-					"description": "%hoi4modernutils.stateBoundaryColor.desc%"
-				},
-				"hoi4ModernUtils.stateBoundaryWidth": {
-					"title": "%hoi4modernutils.stateBoundaryWidth.title%",
-					"type": "number",
-					"default": 1.5,
-					"description": "%hoi4modernutils.stateBoundaryWidth.desc%"
-				},				"hoi4ModernUtils.featureFlags": {
-					"title": "%hoi4modernutils.featureFlags.title%",
-					"type": "array",
-					"default": [],
-					"description": "%hoi4modernutils.featureFlags.desc%"
+						"description": "%hoi4modernutils.previewLocalisation.desc%"
+					},
+					"hoi4ModernUtils.stateBoundaryColor": {
+						"title": "%hoi4modernutils.stateBoundaryColor.title%",
+						"type": "string",
+						"default": "rgba(0, 0, 0, 0.4)",
+						"description": "%hoi4modernutils.stateBoundaryColor.desc%"
+					},
+					"hoi4ModernUtils.stateBoundaryWidth": {
+						"title": "%hoi4modernutils.stateBoundaryWidth.title%",
+						"type": "number",
+						"default": 1.5,
+						"description": "%hoi4modernutils.stateBoundaryWidth.desc%"
+					},
+					"hoi4ModernUtils.featureFlags": {
+						"title": "%hoi4modernutils.featureFlags.title%",
+						"type": "array",
+						"default": [],
+						"uniqueItems": true,
+						"items": {
+							"type": "string",
+							"enum": [
+								"useConditionInFocus",
+								"eventTreePreview",
+								"rightButtonDrag",
+								"!useConditionInFocus",
+								"!eventTreePreview",
+								"!rightButtonDrag"
+							]
+						},
+						"description": "%hoi4modernutils.featureFlags.desc%"
 					}
 				}
 			}
@@ -222,21 +267,20 @@
 		"geni18n": "npm run compile-ts && node scripts/genzhi18n.js"
 	},
 	"devDependencies": {
-		"@types/adm-zip": "^0.4.33",
 		"@types/copy-webpack-plugin": "^8.0.0",
 		"@types/glob": "^7.1.1",
 		"@types/js-yaml": "^3.12.5",
 		"@types/lodash": "^4.14.149",
 		"@types/mocha": "^7.0.2",
-		"@types/node": "^13.11.0",
+		"@types/node": "^22.9.0",
 		"@types/pngjs": "^3.4.2",
 		"@types/vscode": "^1.52.0",
 		"@typescript-eslint/eslint-plugin": "^4.9.0",
 		"@typescript-eslint/parser": "^4.9.0",
-		"copy-webpack-plugin": "^9.1.0",
+		"copy-webpack-plugin": "^14.0.0",
 		"eslint": "^7.32.0",
 		"glob": "^7.1.6",
-		"mocha": "^11.1.0",
+		"mocha": "^8.1.3",
 		"raw-loader": "^4.0.1",
 		"rimraf": "^3.0.2",
 		"serve": "^14.2.0",
@@ -245,13 +289,13 @@
 		"tslib": "^2.2.0",
 		"typescript": "^4.9.0",
 		"vscode-test": "^1.3.0",
-		"webpack": "^5.94.0",
+		"webpack": "^5.108.4",
 		"webpack-cli": "^4.7.0"
 	},
 	"dependencies": {
 		"@vscode/codicons": "^0.0.33",
 		"@vscode/extension-telemetry": "^0.4.6",
-		"adm-zip": "^0.4.14",
+		"adm-zip": "^0.6.0",
 		"assert": "^2.0.0",
 		"browserify-zlib": "^0.2.0",
 		"buffer": "^6.0.3",

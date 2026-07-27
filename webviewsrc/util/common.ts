@@ -28,8 +28,8 @@ export function copyArray<T>(src: T[], dst: T[], offsetSrc: number, offsetDst: n
     }
 }
 
-export function subscribeNavigators() {
-    const navigators = document.getElementsByClassName("navigator");
+export function subscribeNavigators(container: HTMLElement | Document = document): void {
+    const navigators = container.getElementsByClassName("navigator");
     for (let i = 0; i < navigators.length; i++) {
         const navigator = navigators[i] as HTMLDivElement;
         navigator.addEventListener('click', function(e) {
@@ -67,7 +67,7 @@ export function tryRun<T extends (...args: any[]) => any>(func: T): (...args: Pa
 }
 
 let shouldDisableZoom = false;
-export function enableZoom(contentElement: HTMLDivElement, xOffset: number, yOffset: number): void {
+export function enableZoom(contentElement: HTMLDivElement, xOffset: number, yOffset: number, onZoomed?: (scale: number) => void): void {
     let scale = getState().scale || 1;
     contentElement.style.transform = `scale(${scale})`;
     contentElement.style.transformOrigin = '0 0';
@@ -94,6 +94,9 @@ export function enableZoom(contentElement: HTMLDivElement, xOffset: number, yOff
         const nextScrollX = (e.pageX - xOffset) * scale / oldScale + xOffset - (e.pageX - oldScrollX);
         const nextScrollY = (e.pageY - yOffset) * scale / oldScale + yOffset - (e.pageY - oldScrollY);
         window.scrollTo(nextScrollX, nextScrollY);
+        if (onZoomed) {
+            onZoomed(scale);
+        }
     },
     {
         passive: false
@@ -115,6 +118,53 @@ export function subscribeRefreshButton() {
         vscode.postMessage({ command: 'reload' });
         button.disabled = true;
     });
+}
+
+export type PreviewLabelMode = 'id' | 'name';
+
+export function subscribePreviewLabelToggle(): void {
+    const controls = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-preview-label-mode-value]'));
+    if (controls.length === 0) {
+        return;
+    }
+
+    const initialMode = getState().previewLabelMode === 'name' ? 'name' : 'id';
+    applyPreviewLabelMode(initialMode);
+
+    for (const control of controls) {
+        control.addEventListener('click', () => {
+            const mode = control.dataset.previewLabelModeValue === 'name' ? 'name' : 'id';
+            applyPreviewLabelMode(mode);
+        });
+    }
+}
+
+export function refreshPreviewLabelMode(): void {
+    const mode = document.body.dataset.previewLabelMode === 'name' ? 'name' : 'id';
+    applyPreviewLabelMode(mode);
+}
+
+function applyPreviewLabelMode(mode: PreviewLabelMode): void {
+    document.body.dataset.previewLabelMode = mode;
+    setState({ previewLabelMode: mode });
+
+    for (const control of Array.from(document.querySelectorAll<HTMLButtonElement>('[data-preview-label-mode-value]'))) {
+        const active = control.dataset.previewLabelModeValue === mode;
+        control.classList.toggle('active', active);
+        control.setAttribute('aria-pressed', active ? 'true' : 'false');
+    }
+
+    for (const element of Array.from(document.querySelectorAll<HTMLElement>('[data-preview-label-id][data-preview-label-name]'))) {
+        element.textContent = mode === 'name'
+            ? element.dataset.previewLabelName ?? element.dataset.previewLabelId ?? ''
+            : element.dataset.previewLabelId ?? '';
+    }
+
+    for (const element of Array.from(document.querySelectorAll<HTMLElement>('[data-preview-title-id][data-preview-title-name]'))) {
+        element.title = mode === 'name'
+            ? element.dataset.previewTitleName ?? element.dataset.previewTitleId ?? ''
+            : element.dataset.previewTitleId ?? '';
+    }
 }
 
 if (window.previewedFileUri) {
@@ -139,22 +189,42 @@ window.addEventListener('load', function() {
 
     // Drag to scroll
     (function() {
-        // Dragger should be like this: <div id="dragger" style="width:100vw;height:100vh;position:fixed;left:0;top:0;"></div>
+        // Dragger should be like this: <div id="dragger" additionalDraggerHostId="optionalid" style="width:100vw;height:100vh;position:fixed;left:0;top:0;"></div>
         const dragger = document.getElementById("dragger");
         if (!dragger) {
             return;
         }
 
-        dragger.addEventListener('contextmenu', event => event.preventDefault());
+        const rightButtonDrag: boolean = (window as any).__featureflags.rightButtonDrag;
+
+        const hosts = [ dragger ];
+        if (rightButtonDrag) {
+            const hostId = dragger.getAttribute("additionalDraggerHostId");
+            if (hostId) {
+                const hostElement = document.getElementById(hostId);
+                if (hostElement) {
+                    hosts.push(hostElement);
+                }
+            }
+        }
 
         let mdx = -1;
         let mdy = -1;
         let pressed = false;
-        dragger.addEventListener('mousedown', function(e) {
-            mdx = e.pageX;
-            mdy = e.pageY;
-            pressed = true;
-        });
+        const button = rightButtonDrag ? 2 : 0;
+        const buttonMask = rightButtonDrag ? 2 : 1;
+        for (const host of hosts) {
+            host.addEventListener('contextmenu', event => event.preventDefault());
+            host.addEventListener('mousedown', function(e) {
+                if (e.button !== button) {
+                    return;
+                }
+
+                mdx = e.pageX;
+                mdy = e.pageY;
+                pressed = true;
+            });
+        }
 
         document.body.addEventListener('mousemove', function(e) {
             if (pressed) {
@@ -167,7 +237,7 @@ window.addEventListener('load', function() {
         });
 
         document.body.addEventListener('mouseenter', function(e) {
-            if (pressed && (e.buttons & 1) !== 1) {
+            if (pressed && (e.buttons & buttonMask) !== buttonMask) {
                 pressed = false;
             }
         });

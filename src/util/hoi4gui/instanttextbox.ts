@@ -2,10 +2,11 @@ import { HOIPartial } from "../../hoiformat/schema";
 import { ParentInfo, calculateBBox, RenderCommonOptions, normalizeNumberLike } from "./common";
 import { htmlEscape } from "../html";
 import { InstantTextBoxType } from "../../hoiformat/gui";
-import { getLocalisedTextQuick } from "../localisationIndex";
-import { localisationIndex } from "../featureflags";
+import { localisationIndex } from "../../indexing/localisationindex";
 
 export interface RenderInstantTextBoxOptions extends RenderCommonOptions {
+    localise?: boolean;
+    rawText?: boolean;
 }
 
 export async function renderInstantTextBox(textbox: HOIPartial<InstantTextBoxType>, parentInfo: ParentInfo, options: RenderInstantTextBoxOptions): Promise<string> {
@@ -16,6 +17,11 @@ export async function renderInstantTextBox(textbox: HOIPartial<InstantTextBoxTyp
     const font = textbox.font ?? '';
     const fontMatch = /\d+/.exec(font.replace('hoi4', ''));
     const fontSize = Math.ceil(parseInt(fontMatch?.find(() => true) ?? '16') * 0.7);
+
+    const textContent = options.localise === false
+        ? (textbox.text ?? '')
+        : (localisationIndex.getLocalisedText(textbox.text) ?? ' ');
+    const renderedText = options.rawText ? textContent : htmlEscape(textContent);
 
     return `<div
     ${options.id ? `id="${options.id}"` : ''}
@@ -41,6 +47,6 @@ export async function renderInstantTextBox(textbox: HOIPartial<InstantTextBoxTyp
         `)}
         ${options.enableNavigator ? 'navigator navigator-highlight' : ''}
     ">
-        ${htmlEscape(localisationIndex ? (await getLocalisedTextQuick(textbox.text) ?? ' ') : (textbox.text ?? ''))}
+        ${renderedText}
     </div>`;
 }

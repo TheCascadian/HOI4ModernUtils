@@ -2,9 +2,10 @@ import { WorldMapMessage, Province, WorldMapData, RequestMapItemMessage, State, 
 import { copyArray } from "../util/common";
 import { inBBox } from "./graphutils";
 import { Subscriber } from "../util/event";
-import { WorldMapWarning, Terrain, StrategicRegion, SupplyArea, Railway, SupplyNode, Resource, River } from "../../src/previewdef/worldmap/definitions";
+import { WorldMapWarning, Terrain, StrategicRegion, SupplyArea, Railway, SupplyNode, Resource, River, Bookmark } from "../../src/previewdef/worldmap/definitions";
 import { vscode } from "../util/vscode";
 import { BehaviorSubject, fromEvent, Observable, ObservedValueOf, Subject } from 'rxjs';
+import { ConditionItem } from "../../src/hoiformat/condition";
 
 interface ExtraMapData {
     provincesCount: number;
@@ -139,7 +140,6 @@ export class Loader extends Subscriber {
                     this.loadingProvinceMap.states = new Array(this.loadingProvinceMap.statesCount);
                     this.loadingProvinceMap.countries = new Array(this.loadingProvinceMap.countriesCount);
                     this.loadingProvinceMap.strategicRegions = new Array(this.loadingProvinceMap.strategicRegionsCount);
-                    console.log(message.data);
                     this.startLoading();
                     break;
                 case 'provinces':
@@ -191,6 +191,18 @@ export class Loader extends Subscriber {
                 case 'resources':
                     if (this.loadingProvinceMap) {
                         this.loadingProvinceMap.resources = JSON.parse(message.data);
+                        this.loadNext();
+                    }
+                    break;
+                case 'rivers':
+                    if (this.loadingProvinceMap) {
+                        this.loadingProvinceMap.rivers = JSON.parse(message.data);
+                        this.loadNext();
+                    }
+                    break;
+                case 'conditionexprs':
+                    if (this.loadingProvinceMap) {
+                        this.loadingProvinceMap.conditionExprs = JSON.parse(message.data);
                         this.loadNext();
                     }
                     break;
@@ -289,6 +301,8 @@ class FEWorldMapClass implements FEWorldMap {
     resources!: Resource[];
     rivers!: River[];
     colorByPosition!: number[];
+    conditionExprs!: ConditionItem[];
+    bookmarks!: Bookmark[];
 
     private provinces!: (Province | null | undefined)[];
     private states!: (State | null | undefined)[];
@@ -305,6 +319,7 @@ class FEWorldMapClass implements FEWorldMap {
             provincesCount: 0, statesCount: 0, countriesCount: 0, strategicRegionsCount: 0, supplyAreasCount: 0,
             badProvincesCount: 0, badStatesCount: 0, badStrategicRegionsCount: 0, badSupplyAreasCount: 0,
             railwaysCount: 0, supplyNodesCount: 0,
+            conditionExprs: [], bookmarks: []
         } as WorldMapData & ExtraMapData));
     }
 

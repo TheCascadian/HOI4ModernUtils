@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { forceError } from '../common';
 import { PNG } from 'pngjs';
 import { parseHoi4File } from '../../hoiformat/hoiparser';
 import { getSpriteTypes } from '../../hoiformat/spritetype';
@@ -11,7 +12,7 @@ import { localize } from '../i18n';
 import { error } from '../debug';
 import { DDS } from './dds';
 import { UserError } from '../common';
-import { getGfxContainerFile } from '../gfxindex';
+import { gfxIndex } from '../../indexing/gfxindex';
 export { Sprite, Image };
 
 const imageCache = new PromiseCache({
@@ -36,8 +37,14 @@ export function getImageByPath(relativePath: string): Promise<Image | undefined>
     return imageCache.get(relativePath);
 }
 
+export function clearImageCache(): void {
+    imageCache.clear();
+    spriteCache.clear();
+    gfxMapCache.clear();
+}
+
 export async function getSpriteByGfxName(name: string, gfxFilePath: string | string[]): Promise<Sprite | undefined> {
-    const pathFromIndex = await getGfxContainerFile(name);
+    const pathFromIndex = await gfxIndex.getGfxContainerFile(name);
     if (pathFromIndex) {
         return await spriteCache.get(pathFromIndex + '?' + name);
     } else if (Array.isArray(gfxFilePath)) {
@@ -133,10 +140,15 @@ async function getImage(relativePath: string): Promise<Image | undefined> {
         return new Image(pngBuffer, png.width, png.height, realPath);
 
     } catch (e) {
-        if (!(e instanceof UserError)) {
+        let err = forceError(e);
+        // From PNG parser
+        if (err.message === 'Invalid file signature') {
+            err = new UserError(err.message);
+        }
+        if (!(err instanceof UserError)) {
             error("Failed to get image " + relativePath);
         }
-        error(e);
+        error(err);
         return undefined;
     }
 }

@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
-import * as path from 'path';;
+import * as path from 'path';
 import { hoiFileExpiryToken, listFilesFromModOrHOI4, readFileFromModOrHOI4 } from '../fileloader';
-import { error } from '../debug';
-import { UserError } from '../common';
+import { createStopwatch, debug, error } from '../debug';
+import { Unarray, UserError } from '../common';
 import { Dependency, getDependenciesFromText } from '../dependency';
 import { sendEvent } from '../telemetry';
+import { Comparator, uniqWith } from 'lodash';
 export { Dependency } from '../dependency';
 
 export class LoaderSession {
@@ -82,12 +83,11 @@ export abstract class Loader<T, E = {}> {
     }
 
     async load(session: LoaderSession): Promise<LoadResult<T, E>> {
+        const stopwatch = createStopwatch();
         session = session.forChild();
 
         // Load each loader at most one time in one session
         if (this.cachedValue === undefined || (!session.isLoaded(this) && (session.force || await this.shouldReload(session)))) {
-            const loadStartTime = Date.now();
-
             session.loadingLoader.push(this);
             try {
                 this.beforeLoadImpl(session);
@@ -104,13 +104,15 @@ export abstract class Loader<T, E = {}> {
                 }
             }
 
-            const timeElapsed = Date.now() - loadStartTime;
+            const timeElapsed = stopwatch.getElapsed();
 
             if (timeElapsed > 500 && !this.disableTelemetry) {
                 sendEvent('loader.loaddone',
                     { loaderType: this.constructor.name },
                     { timeElapsed, ...this.extraMesurements(this.cachedValue) });
             }
+
+            debug(`${this} load done in ${timeElapsed} ms.`);
         }
 
         this.onLoadDoneEmitter.fire(this.cachedValue);
@@ -186,15 +188,18 @@ export abstract class FileLoader<T, E={}> extends Loader<T, E> {
     protected abstract loadFromFile(session: LoaderSession): Promise<LoadResultOD<T, E>>;
 }
 
-export abstract class FolderLoader<T, TFile, E={}, EFile={}> extends Loader<T, E> {
+export abstract class FolderLoader<T, TFile, E={}, EFile={}, FileConstructorArgs extends unknown[]=[]> extends Loader<T, E> {
     private fileCount: number = 0;
     private subLoaders: Record<string, FileLoader<TFile, EFile>> = {};
+    private fileConstructorArgs: FileConstructorArgs;
 
     constructor(
         public folder: string,
-        private subLoaderConstructor: { new (file: string): FileLoader<TFile, EFile> },
+        private subLoaderConstructor: { new (file: string, ...args: FileConstructorArgs): FileLoader<TFile, EFile> },
+        ...fileConstructorArgs: FileConstructorArgs
     ) {
         super();
+        this.fileConstructorArgs = fileConstructorArgs;
     }
 
     public async shouldReloadImpl(session: LoaderSession): Promise<boolean> {
@@ -217,7 +222,7 @@ export abstract class FolderLoader<T, TFile, E={}, EFile={}> extends Loader<T, E
         for (const file of files) {
             let subLoader = subLoaders[file];
             if (!subLoader) {
-                subLoader = new this.subLoaderConstructor(path.join(this.folder, file));
+                subLoader = new this.subLoaderConstructor(path.join(this.folder, file), ...this.fileConstructorArgs);
                 subLoader.disableTelemetry = true;
                 subLoader.onProgress(e => this.onProgressEmitter.fire(e));
             }
@@ -349,8 +354,12 @@ class LoaderDependencies {
     }
 }
 
-export function mergeInLoadResult<K extends string, T extends { [k in K]: any[] }>(loadResults: T[], key: K): T[K] {
-    return loadResults.reduce<T[K]>((p, c) => (p as any).concat(c[key]), [] as unknown as T[K]);
+export function mergeInLoadResult<K extends string, T extends { [k in K]?: any[] }>(loadResults: T[], key: K): Exclude<T[K], undefined> {
+    return loadResults.reduce<Exclude<T[K], undefined>>((p, c) => (p as any).concat(c[key] ?? []), [] as unknown as Exclude<T[K], undefined>);
+}
+
+export function mergeInLoadResultUnique<K extends string, T extends { [k in K]?: any[] }>(loadResults: T[], key: K, comparator: Comparator<Unarray<T[K]>>): Exclude<T[K], undefined> {
+    return loadResults.reduce<Exclude<T[K], undefined>>((p, c) => uniqWith((p as any).concat(c[key] ?? []), comparator) as Exclude<T[K], undefined>, [] as unknown as Exclude<T[K], undefined>);
 }
 
 function checkLoaderSessionLoadingFile(session: LoaderSession, file: string) {
