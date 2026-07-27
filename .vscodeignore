@@ -23,3 +23,7 @@ test-ui/**
 static/test.js
 Plan.md
 .github/**
+map/**
+build-and-install.ps1
+repomix-output.md
+repomix.config.json
