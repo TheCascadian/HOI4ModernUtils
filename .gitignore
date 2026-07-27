@@ -6,6 +6,8 @@ out/
 /src/util/debug.shouldignore.ts
 /scripts/*
 !/scripts/*.js
+/profiles/*.json
+!/scripts/profile-worldmap-render.ts
 /static/
 /prod/
 /.vscode-test

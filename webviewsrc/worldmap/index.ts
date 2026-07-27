@@ -4,6 +4,7 @@ import { topBarHeight, TopBar } from './topbar';
 import { getState, setState } from '../util/common';
 import { Renderer } from './renderer';
 import { fromEvent } from 'rxjs';
+import { registerWorldMapRuntimeTest } from './runtimetest';
 
 fromEvent(window, 'load').subscribe(function() {
     hideBySupplyAreaFlag((window as any)['__enableSupplyArea']);
@@ -14,6 +15,7 @@ fromEvent(window, 'load').subscribe(function() {
     const viewPoint = new ViewPoint(mainCanvas, loader, topBarHeight, state.viewPoint || { x: 0, y: -topBarHeight, scale: 1 });
     const topBar = new TopBar(mainCanvas, viewPoint, loader, state);
     const renderer = new Renderer(mainCanvas, viewPoint, loader, topBar);
+    registerWorldMapRuntimeTest(loader, topBar, viewPoint);
 
     fromEvent<MouseEvent>(mainCanvas, 'contextmenu').subscribe(event => {
         event.preventDefault();
@@ -33,6 +35,12 @@ fromEvent(window, 'load').subscribe(function() {
     topBar.warningFilter.selectedValues$.subscribe(setStateForKey('warningFilter'));
     topBar.display.selectedValues$.subscribe(setStateForKey('display'));
     topBar.conditions.selectedValues$.subscribe(setStateForKey('selectedConditions'));
+    topBar.renderOptimizations$.subscribe(value => {
+        setState({ renderOptimizations: Array.from(value) });
+    });
+    topBar.renderOptimizationConfirmationRequired$.subscribe(
+        setStateForKey('renderOptimizationConfirmationRequired')
+    );
 });
 
 function setStateForKey<T>(key: string): (newValue: T) => void {

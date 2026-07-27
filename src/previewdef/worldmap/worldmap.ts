@@ -4,7 +4,7 @@ import worldmapviewstyles from './worldmapview.css';
 import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistVictoryPointLocalisationMessage, PersistCountryDiplomacyMessage } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistVictoryPointLocalisationMessage, PersistCountryDiplomacyMessage, WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest, WorldMapRuntimeTestResultMessage } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
@@ -15,6 +15,14 @@ import { LoaderSession } from '../../util/loader/loader';
 import { TelemetryMessage, sendByMessage } from '../../util/telemetry';
 import { getConfiguration } from '../../util/vsccommon';
 
+export const WorldMapRuntimeTestCommand = 'hoi4modernutils.test.worldmap.renderCases';
+
+export function isWorldMapRuntimeTestEnabled(): boolean {
+    return !IS_WEB_EXT &&
+        typeof process !== 'undefined' &&
+        process.env.HOI4MU_WORLD_MAP_TEST === '1';
+}
+
 export class WorldMap {
     public panel: vscode.WebviewPanel | undefined;
 
@@ -23,6 +31,14 @@ export class WorldMap {
     private cachedWorldMap: WorldMapData | undefined;
 
     private lastRequestedExportUri: vscode.Uri | undefined;
+    private runtimeTestReady = false;
+    private runtimeTestRequestCounter = 0;
+    private runtimeTestReadyWaiters: (() => void)[] = [];
+    private runtimeTestRequests = new Map<string, {
+        resolve: (report: WorldMapRuntimeTestReport) => void;
+        reject: (error: Error) => void;
+        timeout: NodeJS.Timeout;
+    }>();
 
     /** Undo stack for province BMP edits: stores raw BMP buffers and CSV snapshots */
     private bmpUndoStack: { bmpBuffer: Buffer; provinces: PersistedProvince[]; deletedProvinceIds?: number[] }[] = [];
@@ -64,7 +80,48 @@ export class WorldMap {
         { trailing: true });
 
     public dispose() {
+        const disposedError = new Error('World-map runtime test webview was disposed.');
+        for (const pending of this.runtimeTestRequests.values()) {
+            clearTimeout(pending.timeout);
+            pending.reject(disposedError);
+        }
+        this.runtimeTestRequests.clear();
+        this.runtimeTestReadyWaiters.length = 0;
         this.panel = undefined;
+    }
+
+    public async runRuntimeTest(request: WorldMapRuntimeTestRequest): Promise<WorldMapRuntimeTestReport> {
+        if (!isWorldMapRuntimeTestEnabled()) {
+            throw new Error('World-map runtime testing is disabled. Set HOI4MU_WORLD_MAP_TEST=1 before launching VS Code.');
+        }
+
+        await this.waitForRuntimeTestReady(Math.min(request.timeoutMs ?? 360000, 360000));
+
+        const requestId = `${Date.now()}-${++this.runtimeTestRequestCounter}`;
+        const timeoutMs = Math.min(request.timeoutMs ?? 360000, 360000);
+        const result = new Promise<WorldMapRuntimeTestReport>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                this.runtimeTestRequests.delete(requestId);
+                reject(new Error(`World-map runtime test ${requestId} timed out after ${timeoutMs}ms.`));
+            }, timeoutMs);
+            this.runtimeTestRequests.set(requestId, { resolve, reject, timeout });
+        });
+
+        const posted = await this.postMessageToWebview({
+            command: 'worldmapruntimetest',
+            requestId,
+            request,
+        });
+        if (!posted) {
+            const pending = this.runtimeTestRequests.get(requestId);
+            if (pending) {
+                clearTimeout(pending.timeout);
+                this.runtimeTestRequests.delete(requestId);
+                pending.reject(new Error('Failed to post the world-map runtime test request to the webview.'));
+            }
+        }
+
+        return await result;
     }
 
     private renderWorldMap(webview: vscode.Webview): string {
@@ -89,6 +146,7 @@ export class WorldMap {
                 { content: 'window.__stateBoundaryWidth = ' + getConfiguration().stateBoundaryWidth + ';' },
                 { content: 'window.__worldMapKeybinds = ' + JSON.stringify(worldMapKeybinds) + ';' },
                 { content: 'window.__confirmNewProvinceCreation = ' + (conf.get<boolean>('worldMapConfirmNewProvinceCreation', true)) + ';' },
+                { content: 'window.__worldMapRuntimeTestEnabled = ' + isWorldMapRuntimeTestEnabled() + ';' },
                 'common.js',
                 'worldmap.js'
             ],
@@ -100,6 +158,19 @@ export class WorldMap {
         try {
             debug('worldmap message ' + JSON.stringify(msg));
             switch (msg.command) {
+                case 'worldmapruntimetestready':
+                    if (isWorldMapRuntimeTestEnabled()) {
+                        this.runtimeTestReady = true;
+                        for (const resolve of this.runtimeTestReadyWaiters.splice(0)) {
+                            resolve();
+                        }
+                    }
+                    break;
+                case 'worldmapruntimetestresult':
+                    if (isWorldMapRuntimeTestEnabled()) {
+                        this.resolveRuntimeTest(msg);
+                    }
+                    break;
                 case 'loaded':
                     await this.sendProvinceMapSummaryToWebview(msg.force);
                     break;
@@ -444,6 +515,44 @@ export class WorldMap {
         }
 
         return await this.panel.webview.postMessage(message);
+    }
+
+    private async waitForRuntimeTestReady(timeoutMs: number): Promise<void> {
+        if (this.runtimeTestReady) {
+            return;
+        }
+
+        await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => {
+                const index = this.runtimeTestReadyWaiters.indexOf(onReady);
+                if (index >= 0) {
+                    this.runtimeTestReadyWaiters.splice(index, 1);
+                }
+                reject(new Error(`World-map runtime test controller was not ready after ${timeoutMs}ms.`));
+            }, timeoutMs);
+            const onReady = () => {
+                clearTimeout(timeout);
+                resolve();
+            };
+            this.runtimeTestReadyWaiters.push(onReady);
+        });
+    }
+
+    private resolveRuntimeTest(message: WorldMapRuntimeTestResultMessage): void {
+        const pending = this.runtimeTestRequests.get(message.requestId);
+        if (!pending) {
+            return;
+        }
+
+        clearTimeout(pending.timeout);
+        this.runtimeTestRequests.delete(message.requestId);
+        if (message.error) {
+            pending.reject(new Error(message.error));
+        } else if (message.report) {
+            pending.resolve(message.report);
+        } else {
+            pending.reject(new Error('World-map runtime test returned neither a report nor an error.'));
+        }
     }
 
     private async setConfirmNewProvinceCreation(value: boolean) {

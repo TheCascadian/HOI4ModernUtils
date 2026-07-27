@@ -94,6 +94,41 @@
                 </button>
             </div>
 
+            <div class="group render-optimizations">
+                <button id="render-optimizations-button" type="button" aria-haspopup="true" aria-expanded="false" title="%worldmap.topbar.optimizations.title|Experimental performance options%">
+                    <i class="codicon codicon-dashboard"></i>
+                    <span>%worldmap.topbar.optimizations|Performance%</span>
+                    <span id="render-optimizations-count" class="render-optimizations-count hidden"></span>
+                    <i class="codicon codicon-chevron-down"></i>
+                </button>
+                <div id="render-optimizations-menu" class="render-optimizations-menu" hidden>
+                    <div class="render-optimizations-heading">%worldmap.topbar.optimizations.heading|Experimental rendering%</div>
+                    <div class="render-optimizations-note">%worldmap.topbar.optimizations.note|Off by default. Enable only after reviewing the visual impact.%</div>
+                    <div class="render-optimizations-section">%worldmap.topbar.optimizations.fidelity|Fidelity preserving%</div>
+                    <label class="render-optimization-option">
+                        <input type="checkbox" data-render-optimization="warning-index" data-optimization-name="Warning index" data-optimization-impact="Indexes warning lookups. Intended to preserve the rendered image exactly."/>
+                        <span><strong>%worldmap.topbar.optimizations.warningindex|Warning index%</strong><small>%worldmap.topbar.optimizations.warningindex.detail|Faster warning color lookups; intended to preserve visuals.%</small></span>
+                    </label>
+                    <div class="render-optimizations-section warning">%worldmap.topbar.optimizations.lossy|Visually lossy%</div>
+                    <label class="render-optimization-option">
+                        <input type="checkbox" data-render-optimization="edge-decimation" data-optimization-name="Edge decimation" data-optimization-impact="Reduces boundary detail, especially at low zoom."/>
+                        <span><strong>%worldmap.topbar.optimizations.edgedecimation|Edge decimation%</strong><small>%worldmap.topbar.optimizations.edgedecimation.detail|Draws fewer boundary samples at low zoom.%</small></span>
+                    </label>
+                    <label class="render-optimization-option">
+                        <input type="checkbox" data-render-optimization="river-device-pixel-collapse" data-optimization-name="River pixel collapse" data-optimization-impact="Merges river samples that land on the same device pixel at low zoom."/>
+                        <span><strong>%worldmap.topbar.optimizations.rivercollapse|River pixel collapse%</strong><small>%worldmap.topbar.optimizations.rivercollapse.detail|Merges river pixels at low zoom.%</small></span>
+                    </label>
+                    <label class="render-optimization-option">
+                        <input type="checkbox" data-render-optimization="label-grid-dedupe" data-optimization-name="Label grid dedupe" data-optimization-impact="Removes overlapping or nearby labels and can hide map text."/>
+                        <span><strong>%worldmap.topbar.optimizations.labeldedupe|Label grid dedupe%</strong><small>%worldmap.topbar.optimizations.labeldedupe.detail|Suppresses overlapping or nearby labels.%</small></span>
+                    </label>
+                    <label class="render-optimization-option">
+                        <input type="checkbox" data-render-optimization="coarse-provinces" data-optimization-name="Coarse provinces" data-optimization-impact="Aggressively simplifies province rasterization and has the greatest fidelity impact."/>
+                        <span><strong>%worldmap.topbar.optimizations.coarseprovinces|Coarse provinces%</strong><small>%worldmap.topbar.optimizations.coarseprovinces.detail|Most aggressive province simplification.%</small></span>
+                    </label>
+                </div>
+            </div>
+
             <div class="group" viewmode="state strategicregion supplyarea">
                 <button id="open" title="%worldmap.topbar.open.title|Open in workspace (double-click)%">
                     <i class="codicon codicon-link-external"></i>
@@ -169,6 +204,24 @@
             <div style="display:flex;gap:8px;justify-content:flex-end;">
                 <button id="new-province-confirm-cancel" style="background:#555;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer;">%worldmap.paintbrush.confirm.cancel|Cancel%</button>
                 <button id="new-province-confirm-ok" style="background:#0e639c;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer;">%worldmap.paintbrush.confirm.ok|Create Province%</button>
+            </div>
+        </div>
+    </div>
+    <div id="render-optimization-confirm-modal" class="worldmap-modal" hidden style="display:none;">
+        <div class="worldmap-modal-card render-optimization-confirm-card" role="dialog" aria-modal="true" aria-labelledby="render-optimization-confirm-title">
+            <div id="render-optimization-confirm-title" class="worldmap-modal-title">%worldmap.optimizations.confirm.title|Enable experimental optimization?%</div>
+            <div class="worldmap-modal-summary">
+                <strong id="render-optimization-confirm-name"></strong>
+                <p id="render-optimization-confirm-impact"></p>
+                <p>%worldmap.optimizations.confirm.warning|This option changes normal map rendering and may reduce visual fidelity. It can be disabled at any time.%</p>
+            </div>
+            <label class="render-optimization-dontask">
+                <input id="render-optimization-confirm-dontask" type="checkbox"/>
+                <span>%worldmap.optimizations.confirm.dontask|Don't show this confirmation again%</span>
+            </label>
+            <div class="worldmap-modal-actions">
+                <button id="render-optimization-confirm-cancel">%worldmap.optimizations.confirm.cancel|Cancel%</button>
+                <button id="render-optimization-confirm-ok" class="primary">%worldmap.optimizations.confirm.ok|Enable option%</button>
             </div>
         </div>
     </div>

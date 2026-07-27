@@ -2,7 +2,7 @@ import { Subscriber, toBehaviorSubject } from "../util/event";
 import { Loader, FEWorldMap, StateSnapshot, StrategicRegionSnapshot, ProvinceSnapshot } from "./loader";
 import { ViewPoint } from "./viewpoint";
 import { vscode } from "../util/vscode";
-import { PersistedState, WorldMapMessage, WorldMapWarning, ProvinceDraft } from "../../src/previewdef/worldmap/definitions";
+import { PersistedState, WorldMapMessage, WorldMapWarning, ProvinceDraft, WorldMapRuntimeTestOptimization } from "../../src/previewdef/worldmap/definitions";
 import { feLocalize } from "../util/i18n";
 import { DivDropdown } from "../util/dropdown";
 import { ContextMenu, ContextMenuItem } from "../util/contextmenu";
@@ -19,6 +19,14 @@ export type ColorSet = 'provinceid' | 'provincetype' | 'terrain' | 'owner' | 'co
     'victorypoint' | 'continent' | 'warnings' | 'strategicregionid' | 'supplyareaid' | 'supplyvalue' | 'resources' | 'statecategory';
 
 export const topBarHeight = 68;
+
+const renderOptimizationValues = new Set<WorldMapRuntimeTestOptimization>([
+    'warning-index',
+    'edge-decimation',
+    'river-device-pixel-collapse',
+    'label-grid-dedupe',
+    'coarse-provinces',
+]);
 
 interface MapEditAction {
     type: 'state' | 'strategicregion' | 'province';
@@ -147,6 +155,10 @@ export class TopBar extends Subscriber {
     public warningFilter: DivDropdown;
     public display: DivDropdown;
     public conditions: DivDropdown;
+    /** Explicitly enabled experimental render optimizations. Empty by default. */
+    public renderOptimizations$: BehaviorSubject<ReadonlySet<WorldMapRuntimeTestOptimization>>;
+    /** Whether enabling an experimental render optimization requires confirmation. */
+    public renderOptimizationConfirmationRequired$: BehaviorSubject<boolean>;
 
     /** Paintbrush mode state */
     public paintbrushActive$: BehaviorSubject<boolean>;
@@ -290,6 +302,18 @@ export class TopBar extends Subscriber {
         this.hoverMapY$ = new BehaviorSubject<number>(0);
         this.paintbrushCanUndo$ = new BehaviorSubject<boolean>(false);
         this.paintbrushCanRedo$ = new BehaviorSubject<boolean>(false);
+        this.renderOptimizations$ = new BehaviorSubject<ReadonlySet<WorldMapRuntimeTestOptimization>>(
+            new Set<WorldMapRuntimeTestOptimization>(
+                (state.renderOptimizations ?? []).filter(
+                    (value: unknown): value is WorldMapRuntimeTestOptimization =>
+                        typeof value === 'string' &&
+                        renderOptimizationValues.has(value as WorldMapRuntimeTestOptimization)
+                )
+            )
+        );
+        this.renderOptimizationConfirmationRequired$ = new BehaviorSubject<boolean>(
+            state.renderOptimizationConfirmationRequired !== false
+        );
         this.dragProcessedProvinceIds = new Set<number>();
         this.dragProcessedStateIds = new Set<number>();
         this.selectionUndoStack = [];
@@ -473,8 +497,159 @@ export class TopBar extends Subscriber {
         this.loadPaintbrushToggleButton();
         this.loadPaintbrushPanel();
         this.loadNewProvinceConfirmModal();
+        this.loadRenderOptimizationControls();
         this.loadCountryPuppetModal();
         this.initExportMapMessageListener();
+    }
+
+    private loadRenderOptimizationControls() {
+        const button = document.getElementById('render-optimizations-button') as HTMLButtonElement | null;
+        const menu = document.getElementById('render-optimizations-menu') as HTMLDivElement | null;
+        const badge = document.getElementById('render-optimizations-count');
+        const modal = document.getElementById('render-optimization-confirm-modal') as HTMLDivElement | null;
+        const modalName = document.getElementById('render-optimization-confirm-name');
+        const modalImpact = document.getElementById('render-optimization-confirm-impact');
+        const dontAsk = document.getElementById('render-optimization-confirm-dontask') as HTMLInputElement | null;
+        const cancel = document.getElementById('render-optimization-confirm-cancel') as HTMLButtonElement | null;
+        const confirm = document.getElementById('render-optimization-confirm-ok') as HTMLButtonElement | null;
+
+        if (!button || !menu || !modal || !cancel || !confirm) {
+            return;
+        }
+
+        const checkboxes = Array.from(
+            menu.querySelectorAll<HTMLInputElement>('input[data-render-optimization]')
+        );
+        let pending: WorldMapRuntimeTestOptimization | undefined;
+
+        const updateMenu = (selected: ReadonlySet<WorldMapRuntimeTestOptimization>) => {
+            for (const checkbox of checkboxes) {
+                checkbox.checked = selected.has(
+                    checkbox.dataset.renderOptimization as WorldMapRuntimeTestOptimization
+                );
+            }
+            if (badge) {
+                badge.textContent = selected.size > 0 ? String(selected.size) : '';
+                badge.classList.toggle('hidden', selected.size === 0);
+            }
+            button.classList.toggle('active', selected.size > 0);
+            button.setAttribute(
+                'aria-label',
+                selected.size > 0
+                    ? `Experimental performance options, ${selected.size} enabled`
+                    : 'Experimental performance options'
+            );
+        };
+
+        const closeMenu = () => {
+            menu.hidden = true;
+            button.setAttribute('aria-expanded', 'false');
+        };
+
+        const closeModal = () => {
+            pending = undefined;
+            modal.hidden = true;
+            modal.style.display = 'none';
+            if (dontAsk) {
+                dontAsk.checked = false;
+            }
+        };
+
+        const setOptimization = (optimization: WorldMapRuntimeTestOptimization, enabled: boolean) => {
+            const next = new Set(this.renderOptimizations$.value);
+            if (enabled) {
+                next.add(optimization);
+            } else {
+                next.delete(optimization);
+            }
+            this.renderOptimizations$.next(next);
+        };
+
+        const showConfirmation = (checkbox: HTMLInputElement, optimization: WorldMapRuntimeTestOptimization) => {
+            pending = optimization;
+            const name = checkbox.dataset.optimizationName ?? optimization;
+            const impact = checkbox.dataset.optimizationImpact ?? '';
+            if (modalName) {
+                modalName.textContent = name;
+            }
+            if (modalImpact) {
+                modalImpact.textContent = impact;
+            }
+            modal.hidden = false;
+            modal.style.display = 'flex';
+            confirm.focus();
+        };
+
+        this.addSubscription(this.renderOptimizations$.subscribe(updateMenu));
+
+        this.addSubscription(fromEvent<MouseEvent>(button, 'click').subscribe(event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const opening = menu.hidden;
+            menu.hidden = !opening;
+            button.setAttribute('aria-expanded', String(opening));
+        }));
+
+        for (const checkbox of checkboxes) {
+            this.addSubscription(fromEvent<Event>(checkbox, 'change').subscribe(() => {
+                const optimization = checkbox.dataset.renderOptimization as WorldMapRuntimeTestOptimization;
+                if (!checkbox.checked) {
+                    setOptimization(optimization, false);
+                    return;
+                }
+
+                checkbox.checked = false;
+                if (this.renderOptimizationConfirmationRequired$.value) {
+                    showConfirmation(checkbox, optimization);
+                } else {
+                    setOptimization(optimization, true);
+                }
+            }));
+        }
+
+        this.addSubscription(fromEvent<MouseEvent>(cancel, 'click').subscribe(event => {
+            event.preventDefault();
+            closeModal();
+        }));
+
+        this.addSubscription(fromEvent<MouseEvent>(confirm, 'click').subscribe(event => {
+            event.preventDefault();
+            if (pending) {
+                setOptimization(pending, true);
+                if (dontAsk?.checked) {
+                    this.renderOptimizationConfirmationRequired$.next(false);
+                }
+            }
+            closeModal();
+        }));
+
+        this.addSubscription(fromEvent<PointerEvent>(modal, 'pointerdown').subscribe(event => {
+            if (event.target === modal) {
+                closeModal();
+            }
+        }));
+
+        this.addSubscription(fromEvent<PointerEvent>(document, 'pointerdown').subscribe(event => {
+            const target = event.target as Node;
+            if (!menu.hidden && !menu.contains(target) && !button.contains(target)) {
+                closeMenu();
+            }
+        }));
+
+        this.addSubscription(fromEvent<KeyboardEvent>(document, 'keydown').subscribe(event => {
+            if (event.key !== 'Escape') {
+                return;
+            }
+            if (!modal.hidden) {
+                event.preventDefault();
+                closeModal();
+                button.focus();
+            } else if (!menu.hidden) {
+                event.preventDefault();
+                closeMenu();
+                button.focus();
+            }
+        }));
     }
 
     /**

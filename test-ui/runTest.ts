@@ -6,7 +6,7 @@ async function main() {
     try {
         // The folder containing the Extension Manifest package.json
         // Passed to `--extensionDevelopmentPath`
-        const extensionDevelopmentPath = path.resolve(__dirname, '../');
+        const extensionDevelopmentPath = path.resolve(__dirname, '../../');
 
         // The path to test runner
         // Passed to --extensionTestsPath
@@ -17,7 +17,20 @@ async function main() {
             process.env['VSCODE_EXECUTABLE_PATH'] ??
             'C:\\Users\\Don McCann\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe'
         );
-        await runTests({ extensionDevelopmentPath, extensionTestsPath, vscodeExecutablePath });
+        const userDataDir = path.resolve(extensionDevelopmentPath, '.vscode-test', 'user-data');
+        const extensionsDir = path.resolve(extensionDevelopmentPath, '.vscode-test', 'extensions');
+        await runTests({
+            extensionDevelopmentPath,
+            extensionTestsPath,
+            vscodeExecutablePath,
+            launchArgs: [
+                extensionDevelopmentPath,
+                `--user-data-dir=${userDataDir}`,
+                `--extensions-dir=${extensionsDir}`,
+                '--disable-workspace-trust',
+                '--skip-welcome',
+            ],
+        });
     } catch (err) {
         console.error('Failed to run tests');
         process.exit(1);

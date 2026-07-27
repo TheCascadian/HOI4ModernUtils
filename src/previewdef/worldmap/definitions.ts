@@ -251,11 +251,99 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage | PersistProvincesMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | PersistVictoryPointLocalisationMessage | SetConfirmNewProvinceCreationMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage;
+export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage | PersistProvincesMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | PersistVictoryPointLocalisationMessage | SetConfirmNewProvinceCreationMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage | WorldMapRuntimeTestReadyMessage | WorldMapRuntimeTestRequestMessage | WorldMapRuntimeTestResultMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
     force: boolean;
+}
+
+export interface WorldMapRuntimeTestViewport {
+    scale: number;
+    x?: number;
+    y?: number;
+    xRatio?: number;
+    yRatio?: number;
+}
+
+export type WorldMapRuntimeTestOptimization =
+    | 'warning-index'
+    | 'edge-decimation'
+    | 'river-device-pixel-collapse'
+    | 'label-grid-dedupe'
+    | 'coarse-provinces';
+
+export interface WorldMapRuntimeTestCase {
+    id: string;
+    viewMode: string;
+    colorSet: string;
+    display: string[];
+    viewport: WorldMapRuntimeTestViewport;
+}
+
+export interface WorldMapRuntimeTestRequest {
+    cases: WorldMapRuntimeTestCase[];
+    canvasWidth?: number;
+    canvasHeight?: number;
+    samples?: number;
+    warmups?: number;
+    capturePixelHash?: boolean;
+    timeoutMs?: number;
+    optimizations?: WorldMapRuntimeTestOptimization[];
+}
+
+export interface WorldMapRuntimeTestCaseResult {
+    id: string;
+    viewMode: string;
+    colorSet: string;
+    display: string[];
+    viewport: {
+        x: number;
+        y: number;
+        scale: number;
+    };
+    durationMsMedian: number;
+    durationMsSamples: number[];
+    heapDeltaBytesMedian?: number;
+    pixelHash?: string;
+    riverFillRects: number;
+    riverFullyOutsideViewport: number;
+    riverDuplicateRects: number;
+    riverCoordinateHash: string;
+    error?: string;
+}
+
+export interface WorldMapRuntimeTestReport {
+    environment: {
+        canvasWidth: number;
+        canvasHeight: number;
+        devicePixelRatio: number;
+        userAgent: string;
+        mapWidth: number;
+        mapHeight: number;
+        provinces: number;
+        rivers: number;
+        optimizations: WorldMapRuntimeTestOptimization[];
+    };
+    results: WorldMapRuntimeTestCaseResult[];
+    runtimeErrors: string[];
+}
+
+export interface WorldMapRuntimeTestReadyMessage {
+    command: 'worldmapruntimetestready';
+}
+
+export interface WorldMapRuntimeTestRequestMessage {
+    command: 'worldmapruntimetest';
+    requestId: string;
+    request: WorldMapRuntimeTestRequest;
+}
+
+export interface WorldMapRuntimeTestResultMessage {
+    command: 'worldmapruntimetestresult';
+    requestId: string;
+    report?: WorldMapRuntimeTestReport;
+    error?: string;
 }
 
 export interface RequestMapItemMessage {

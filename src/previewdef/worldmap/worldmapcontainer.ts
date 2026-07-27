@@ -1,9 +1,10 @@
 import * as vscode from 'vscode';
 import { Commands, WebviewType } from '../../constants';
-import { WorldMap } from './worldmap';
+import { isWorldMapRuntimeTestEnabled, WorldMap, WorldMapRuntimeTestCommand } from './worldmap';
 import { contextContainer } from '../../context';
 import { localize } from '../../util/i18n';
 import { sendEvent } from '../../util/telemetry';
+import { WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest } from './definitions';
 
 export class WorldMapContainer implements vscode.WebviewPanelSerializer {
     private worldMap: WorldMap | undefined = undefined;
@@ -14,6 +15,13 @@ export class WorldMapContainer implements vscode.WebviewPanelSerializer {
         disposables.push(vscode.window.registerWebviewPanelSerializer(WebviewType.PreviewWorldMap, this));
         disposables.push(vscode.workspace.onDidCloseTextDocument(this.onCloseTextDocument, this));
         disposables.push(vscode.workspace.onDidChangeTextDocument(this.onChangeTextDocument, this));
+        if (isWorldMapRuntimeTestEnabled()) {
+            disposables.push(vscode.commands.registerCommand(
+                WorldMapRuntimeTestCommand,
+                this.runRuntimeTest,
+                this,
+            ));
+        }
         return vscode.Disposable.from(...disposables);
     }
 
@@ -24,6 +32,14 @@ export class WorldMapContainer implements vscode.WebviewPanelSerializer {
     
     public deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel, state: any): Promise<void> {
         return this.openWorldMapView(webviewPanel);
+    }
+
+    private async runRuntimeTest(request: WorldMapRuntimeTestRequest): Promise<WorldMapRuntimeTestReport> {
+        await this.openWorldMapView();
+        if (!this.worldMap) {
+            throw new Error('World-map webview did not initialize.');
+        }
+        return await this.worldMap.runRuntimeTest(request);
     }
 
     private async openWorldMapView(panel?: vscode.WebviewPanel): Promise<void> {
