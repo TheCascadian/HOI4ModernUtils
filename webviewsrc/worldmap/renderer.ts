@@ -84,6 +84,11 @@ export class Renderer extends Subscriber {
                 topBar.mapMutation$,
                 topBar.warningFilter.selectedValues$,
                 topBar.display.selectedValues$,
+                topBar.paintbrushActive$,
+                topBar.paintedPixels$,
+                topBar.brushSize$,
+                topBar.hoverMapX$,
+                topBar.hoverMapY$,
             ]).pipe(
                 distinctUntilChanged((x, y) => x.every((v, i) => v === y[i]))
             ).subscribe(this.renderCanvas)
@@ -130,6 +135,11 @@ export class Renderer extends Subscriber {
             case 'supplyarea':
                 this.renderSupplyAreaHoverSelection(this.loader.worldMap);
                 break;
+        }
+
+        // Render paintbrush overlay
+        if (this.topBar.paintbrushActive$.value) {
+            this.renderPaintbrushOverlay(this.loader.worldMap);
         }
 
         if (this.loader.progressText !== '') {
@@ -256,6 +266,10 @@ export class Renderer extends Subscriber {
             Renderer.renderAllEdges(renderContext, worldMap, context, xOffset);
         }
 
+        if (Renderer.isStateBoundaryVisible(topBar) && topBar.viewMode$.value === 'province') {
+            Renderer.renderStateBoundaries(renderContext, worldMap, context, xOffset);
+        }
+
         if (Renderer.isSupplyVisible(topBar)) {
             Renderer.renderSupplyRelated(renderContext, worldMap, context, xOffset);
         }
@@ -295,8 +309,168 @@ export class Renderer extends Subscriber {
         return this.topBar.display.selectedValues$.value.includes('tooltip');
     }
 
+    private static isStateBoundaryVisible(topBar: TopBar) {
+        return topBar.display.selectedValues$.value.includes('stateboundary');
+    }
+
     private static isSupplyVisible(topBar: TopBar) {
         return topBar.display.selectedValues$.value.includes('supply');
+    }
+
+    /**
+     * Render the paintbrush overlay: shows brush cursor highlight and painted pixels.
+     */
+    private renderPaintbrushOverlay(_worldMap: FEWorldMap): void {
+        const context = this.backCanvasContext;
+        const paintedPixels = this.topBar.paintedPixels$.value;
+        const brushColor = this.topBar.paintbrushColor$.value;
+
+        context.save();
+        context.imageSmoothingEnabled = false;
+
+        // Render committed-but-unsaved painted pixels.
+        context.fillStyle = toColorWithAlpha(brushColor, 0.5);
+
+        for (const key of paintedPixels.keys()) {
+            const [mapX, mapY] = key.split(',').map(Number);
+            this.fillMapPixel(context, mapX, mapY);
+        }
+
+        // Render the brush cursor from the exact same map-pixel bounds.
+        if (this.topBar.paintbrushActive$.value) {
+            const centerX = this.topBar.hoverMapX$.value;
+            const centerY = this.topBar.hoverMapY$.value;
+            const brushSize = Math.max(
+                1,
+                Math.floor(this.topBar.brushSize$.value)
+            );
+
+            // This assumes the painting routine uses the same radius rule.
+            const radius = Math.floor((brushSize - 1) / 2);
+            const startX = centerX - radius;
+            const startY = centerY - radius;
+            const endX = centerX + radius + 1;
+            const endY = centerY + radius + 1;
+
+            const bounds = this.mapRectToCanvasBounds(
+                startX,
+                startY,
+                endX,
+                endY
+            );
+
+            context.fillStyle = toColorWithAlpha(brushColor, 0.3);
+            context.fillRect(
+                bounds.x,
+                bounds.y,
+                bounds.width,
+                bounds.height
+            );
+
+            // Half-pixel alignment keeps a one-device-pixel stroke crisp.
+            context.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+            context.lineWidth = 1;
+            context.strokeRect(
+                bounds.x + 0.5,
+                bounds.y + 0.5,
+                Math.max(0, bounds.width - 1),
+                Math.max(0, bounds.height - 1)
+            );
+        }
+
+        context.restore();
+    }
+
+    private fillMapPixel(
+        context: CanvasRenderingContext2D,
+        mapX: number,
+        mapY: number
+    ): void {
+        const bounds = this.mapRectToCanvasBounds(
+            mapX,
+            mapY,
+            mapX + 1,
+            mapY + 1
+        );
+
+        context.fillRect(
+            bounds.x,
+            bounds.y,
+            bounds.width,
+            bounds.height
+        );
+    }
+
+    private mapRectToCanvasBounds(
+        mapX1: number,
+        mapY1: number,
+        mapX2: number,
+        mapY2: number
+    ): {
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+    } {
+        /*
+        * Transform both edges using one consistent outward-snapping rule.
+        * Never derive rendered size from Math.ceil(scale).
+        */
+        const x1 = Math.floor((mapX1 - this.viewPoint.x) * this.viewPoint.scale);
+        const y1 = Math.floor((mapY1 - this.viewPoint.y) * this.viewPoint.scale);
+        const x2 = Math.ceil((mapX2 - this.viewPoint.x) * this.viewPoint.scale);
+        const y2 = Math.ceil((mapY2 - this.viewPoint.y) * this.viewPoint.scale);
+
+        return {
+            x: x1,
+            y: y1,
+            width: Math.max(1, x2 - x1),
+            height: Math.max(1, y2 - y1),
+        };
+    }
+    
+    private static renderStateBoundaries(
+        renderContext: RenderContext,
+        worldMap: FEWorldMap,
+        context: CanvasRenderingContext2D,
+        xOffset: number
+    ): void {
+        const { provinceToState, renderedProvincesById, viewPoint } = renderContext;
+        const scale = viewPoint.scale;
+
+        const configColor = (window as any)['__stateBoundaryColor'] || 'rgba(0, 0, 0, 0.4)';
+        const configWidth = (window as any)['__stateBoundaryWidth'] ?? 1.5;
+        context.strokeStyle = configColor;
+        context.lineWidth = Math.max(1, configWidth * scale);
+        context.beginPath();
+
+        for (const provinceId in renderedProvincesById) {
+            const province = renderedProvincesById[provinceId];
+            const stateFromId = provinceToState[province.id];
+
+            for (const edge of province.edges) {
+                if (edge.to <= province.id) {
+                    continue;
+                }
+                const stateToId = provinceToState[edge.to];
+                if (stateFromId === stateToId && stateFromId !== undefined) {
+                    continue;
+                }
+
+                for (const path of edge.path) {
+                    if (path.length === 0) {
+                        continue;
+                    }
+                    context.moveTo(viewPoint.convertX(path[0].x + xOffset), viewPoint.convertY(path[0].y));
+                    for (let j = 1; j < path.length; j++) {
+                        const pos = path[j];
+                        context.lineTo(viewPoint.convertX(pos.x + xOffset), viewPoint.convertY(pos.y));
+                    }
+                }
+            }
+        }
+
+        context.stroke();
     }
 
     private static isRiverVisible(topBar: TopBar, viewPoint: ViewPoint) {
@@ -554,28 +728,67 @@ export class Renderer extends Subscriber {
         overwriteRenderPrecision?: number
     ): void {
         scale = scale ?? viewPoint.scale;
+
         const renderPrecisionBase = 2;
-        const renderPrecision = 
-            scale < 1 ? Math.pow(2, Math.floor(Math.log2((1 / scale))) + (overwriteRenderPrecision !== undefined ? 0 : renderPrecisionBase)) :
-            overwriteRenderPrecision ?? (scale <= renderPrecisionBase ? Math.pow(2, renderPrecisionBase + 1 - Math.round(scale)) : 1);
+        const renderPrecision =
+            scale < 1
+                ? Math.pow(
+                    2,
+                    Math.floor(Math.log2(1 / scale)) +
+                        (overwriteRenderPrecision !== undefined
+                            ? 0
+                            : renderPrecisionBase)
+                )
+                : overwriteRenderPrecision ??
+                  (scale <= renderPrecisionBase
+                      ? Math.pow(
+                          2,
+                          renderPrecisionBase + 1 - Math.round(scale)
+                      )
+                      : 1);
+
         const renderPrecisionMask = renderPrecision - 1;
         const renderPrecisionOffset = (renderPrecision - 1) / 2;
+
         for (const zone of province.coverZones) {
-            if (zone.w < renderPrecision) {
-                if ((zone.x & renderPrecisionMask) === 0 && (zone.y & renderPrecisionMask) === 0) {
-                    context.fillRect(
-                        viewPoint.convertX(zone.x + xOffset - renderPrecisionOffset),
-                        viewPoint.convertY(zone.y - renderPrecisionOffset),
-                        renderPrecision * scale,
-                        renderPrecision * scale);
-                }
-            } else {
-                context.fillRect(
-                    viewPoint.convertX(zone.x + xOffset - renderPrecisionOffset),
-                    viewPoint.convertY(zone.y - renderPrecisionOffset),
-                    zone.w * scale,
-                    zone.h * scale);
+            if (
+                zone.w < renderPrecision &&
+                (
+                    (zone.x & renderPrecisionMask) !== 0 ||
+                    (zone.y & renderPrecisionMask) !== 0
+                )
+            ) {
+                continue;
             }
+
+            const mapX1 = zone.x + xOffset - renderPrecisionOffset;
+            const mapY1 = zone.y - renderPrecisionOffset;
+
+            const renderedWidth =
+                zone.w < renderPrecision ? renderPrecision : zone.w;
+
+            const renderedHeight =
+                zone.w < renderPrecision ? renderPrecision : zone.h;
+
+            /*
+             * Transform both edges, then snap outward. Never calculate the
+             * right/bottom edge as transformed-start + scaled-size.
+             */
+            const x1 = Math.floor(viewPoint.convertX(mapX1));
+            const y1 = Math.floor(viewPoint.convertY(mapY1));
+            const x2 = Math.ceil(
+                viewPoint.convertX(mapX1 + renderedWidth)
+            );
+            const y2 = Math.ceil(
+                viewPoint.convertY(mapY1 + renderedHeight)
+            );
+
+            context.fillRect(
+                x1,
+                y1,
+                Math.max(1, x2 - x1),
+                Math.max(1, y2 - y1)
+            );
         }
     }
 
@@ -947,6 +1160,13 @@ ${worldMap.getSupplyAreaWarnings(supplyArea).map(v => '|r|' + v).join('\n')}`);
 
 function toColor(colorNum: number) {
     return '#' + padStart(colorNum.toString(16), 6, '0');
+}
+
+function toColorWithAlpha(colorNum: number, alpha: number) {
+    const r = (colorNum >> 16) & 0xFF;
+    const g = (colorNum >> 8) & 0xFF;
+    const b = colorNum & 0xFF;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function findNearestPoints(start: Point | undefined, end: Point | undefined, a: Province, b: Province | undefined): [Point, Point] {

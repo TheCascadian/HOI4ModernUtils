@@ -170,6 +170,7 @@ const internalTable = /* SOT Do not remove this comment */{
     "worldmap.topbar.display.label": "Show label",
     "worldmap.topbar.display.mousehighlight": "Mouse highlight",
     "worldmap.topbar.display.river": "Show River",
+    "worldmap.topbar.display.stateboundary": "Show State Boundaries",
     "worldmap.topbar.display.supply": "Show Supply",
     "worldmap.topbar.display.tooltip": "Show tooltip",
     "worldmap.topbar.open.title": "Open in workspace",

@@ -16,33 +16,33 @@ This extension add tools for Heart of Iron IV modding. Some of the tools may wor
 
 ## Install Without Marketplace
 
-This fork can be distributed directly as a VS Code extension package, without using the Visual Studio Marketplace.
+This fork can be installed directly as a VS Code extension package, without using the Visual Studio Marketplace.
 
-To build the installable package from the repository root:
+* To build the installable package from the repository root:
 
 ```powershell
 vsce package
 ```
 
-The current package generated for this repository is:
+* The current package generated for this repository is:
 
 ```text
-hoi4modutilities-0.12.2.vsix
+hoi4modernutils-0.12.2.vsix
 ```
 
-Users can install that package from a terminal:
+* Users can install that package from a terminal:
 
 ```powershell
-code --install-extension hoi4modutilities-0.12.2.vsix
+code --install-extension hoi4modernutils-0.12.2.vsix
 ```
 
-Or from inside VS Code:
+* Or from inside VS Code:
 
 ```text
 Extensions -> ... -> Install from VSIX...
 ```
 
-This is the intended distribution path for this fork. GitHub Releases can host the `.vsix` asset directly, so no Azure DevOps publisher setup is required.
+This is the intended installation path for this fork. GitHub Releases can host the `.vsix` asset directly rather than an insanely complex Azure DevOps signup process for me to host the tool through VSC Marketplace "properly".
 
 ## Contribute
 * If you have any suggestion, feel free to create an issue on this [Github repo](https://github.com/TheCascadian/HOI4ModernUtils/issues).
@@ -62,7 +62,7 @@ This is the intended distribution path for this fork. GitHub Releases can host t
 * `.gfx` file preview (sprites used by HOI4 are defined here)
 * `.dds`, `.tga` file preview (images files used by HOI4)
 
-For feature details and user manual, please refer to [HOI4 Mod Utilities Wiki](https://github.com/herbix/hoi4modutilities/wiki).
+For feature details and user manual, please refer to [HOI4 Mod Utilities Wiki](https://github.com/herbix/hoi4modernutils/wiki).
 
 ## Steps to start
 
@@ -71,7 +71,7 @@ If you installed the extension from a `.vsix` file instead of the Marketplace, t
 1. Install and enable this extension in VSCode.
 2. Set Heart of Iron IV install path. You can:
     * (Since v0.7.0, or on [vscode web](https://vscode.dev)) Open command palette using `Ctrl+Shift+P`. Use command `Select HOI4 install path` to browse the folder that installed Heart of Iron IV.
-    * Update setting `hoi4ModUtilities.installPath` (you can open settings page of VSCode using `Ctrl+,`) to the folder that installed Heart of Iron IV.
+    * Update setting `hoi4modernutils.installPath` (you can open settings page of VSCode using `Ctrl+,`) to the folder that installed Heart of Iron IV.
 3. Open your mod develop folder.
 4. (*Optional*) Open command palette using `Ctrl+Shift+P`. Use command `Select mod file` to set working mod descriptor (the `.mod` file).
 5. Use these entries:
@@ -107,12 +107,12 @@ If you installed the extension from a `.vsix` file instead of the Marketplace, t
 
 |Setting|Type|Description|
 |-------|----------|--------|
-|`hoi4ModUtilities.installPath`|`string`|Hearts of Iron IV install path. Without this, most features are broken.|
-|`hoi4ModUtilities.loadDlcContents`|`boolean`|Whether to load DLC images when previewing files. Enabling this will use more memory (All DLCs are around 600MB).|
-|`hoi4ModUtilities.modFile`|`string`|Path to the working `.mod` file. This file is used to read replace_path. If not specified, will use first `.mod` file in first folder of the workspace.|
-|`hoi4ModUtilities.enableSupplyArea`|`boolean`|If you are developing mod for HOI4(version<=1.10). Use this to check enable supply area.|
-|`hoi4ModUtilities.previewLocalisation`|`enum`|Language of content in event tree preview.|
-|`hoi4ModUtilities.featureFlags`|`array` of `string`|Feature flags are used to disable or enable features. Reloading is required after changing this. Please refer to [Wiki](https://github.com/herbix/hoi4modutilities/wiki/Feature-flags) on Github for details.|
+|`hoi4modernutils.installPath`|`string`|Hearts of Iron IV install path. Without this, most features are broken.|
+|`hoi4modernutils.loadDlcContents`|`boolean`|Whether to load DLC images when previewing files. Enabling this will use more memory (All DLCs are around 600MB).|
+|`hoi4modernutils.modFile`|`string`|Path to the working `.mod` file. This file is used to read replace_path. If not specified, will use first `.mod` file in first folder of the workspace.|
+|`hoi4modernutils.enableSupplyArea`|`boolean`|If you are developing mod for HOI4(version<=1.10). Use this to check enable supply area.|
+|`hoi4modernutils.previewLocalisation`|`enum`|Language of content in event tree preview.|
+|`hoi4modernutils.featureFlags`|`array` of `string`|Feature flags are used to disable or enable features. Reloading is required after changing this. Please refer to [Wiki](https://github.com/herbix/hoi4modernutils/wiki/Feature-flags) on Github for details.|
 
 ## Known Issues
 
@@ -127,6 +127,6 @@ If you installed the extension from a `.vsix` file instead of the Marketplace, t
 
 ## Contribute
 * If you have any suggestion, feel free to create an issue on this [Github repo](https://github.com/TheCascadian/HOI4ModernUtils/issues).
-* If you want to contribute translation, feel free to create pull request to this [Github repo](https://github.com/herbix/hoi4modutilities). All localization related files are under `i18n` folder.
+* If you want to contribute translation, feel free to create pull request to this [Github repo](https://github.com/herbix/hoi4modernutils). All localization related files are under `i18n` folder.
 
-* Thanks to all contributors listed [here](https://github.com/herbix/hoi4modutilities/graphs/contributors).
+* Thanks to all contributors listed [here](https://github.com/herbix/hoi4modernutils/graphs/contributors).

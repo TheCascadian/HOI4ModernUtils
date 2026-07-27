@@ -174,6 +174,7 @@ const table: Partial<typeof __table> = {
     "worldmap.topbar.display.mousehighlight": "Mouse highlight",
     "worldmap.topbar.display.river": "Show River",
     "worldmap.topbar.display.supply": "Show Supply",
+    "worldmap.topbar.display.stateboundary": "Show State Boundaries",
     "worldmap.topbar.display.tooltip": "Show tooltip",
     "worldmap.topbar.open.title": "Open in Workspace",
     "worldmap.topbar.refresh.title": "Refresh",

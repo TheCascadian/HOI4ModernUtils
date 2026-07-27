@@ -45,6 +45,7 @@
                         <div class="option" value="tooltip">%worldmap.topbar.display.tooltip|Show tooltip%</div>
                         <div class="option" value="supply" enablesupplyarea="false">%worldmap.topbar.display.supply|Show Supply%</div>
                         <div class="option" value="river">%worldmap.topbar.display.river|Show River%</div>
+                        <div class="option" value="stateboundary">%worldmap.topbar.display.stateboundary|Show State Boundaries%</div>
                         <div class="option" value="mousehighlight">%worldmap.topbar.display.mousehighlight|Mouse highlight%</div>
                         <div class="option" value="fastrending">%worldmap.topbar.display.fastrendering|Fast rendering%</div>
                         <div class="option" value="adaptzooming">%worldmap.topbar.display.adaptzooming|Adapt zooming%</div>
@@ -103,9 +104,59 @@
                     <i class="codicon codicon-arrow-right"></i>
                 </button>
             </div>
+
+            <div class="group" viewmode="province strategicregion">
+                <button id="assign-to-strategicregion" type="button" title="%worldmap.topbar.assignstrategicregion.title|Assign selected provinces to selected strategic region (Ctrl+Shift+R)%">
+                    <i class="codicon codicon-globe"></i>
+                </button>
+            </div>
+
+            <div class="group" viewmode="province">
+                <button id="new-province" type="button" title="%worldmap.topbar.newprovince.title|Create new province from selected (Ctrl+Alt+P)%">
+                    <i class="codicon codicon-add"></i>
+                </button>
+                <button id="toggle-paintbrush" type="button" title="%worldmap.topbar.paintbrush.title|Toggle paintbrush mode (P)%">
+                    <i class="codicon codicon-edit"></i>
+                </button>
+                <label for="brushsize" style="margin-left:8px;font-size:11px;color:#ccc;">%worldmap.topbar.brushsize|Brush:%</label>
+                <div class="select-container" style="width:50px;">
+                    <select id="brushsize" style="font-size:11px;padding:1px 2px;">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                        <option value="5">5</option>
+                        <option value="6">6</option>
+                        <option value="7">7</option>
+                        <option value="8">8</option>
+                        <option value="9">9</option>
+                    </select>
+                </div>
+            </div>
         </div>
     </div>
     <canvas id="main-canvas"></canvas>
+    <div id="paintbrush-panel" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(30,30,30,0.95);border:1px solid #555;border-radius:6px;padding:12px 18px;z-index:9999;font-size:13px;color:#ccc;box-shadow:0 4px 16px rgba(0,0,0,0.6);min-width:340px;max-width:420px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <span style="font-weight:bold;color:#fff;">Paintbrush</span>
+            <span id="paintbrush-pixel-count" style="color:#888;">0 pixels</span>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+            <span>Color: <span id="paintbrush-color-preview" style="display:inline-block;width:14px;height:14px;border:1px solid #888;vertical-align:middle;margin-left:4px;"></span></span>
+            <span id="paintbrush-province-info" style="color:#aaa;"></span>
+        </div>
+        <div id="paintbrush-draft-details" style="font-size:11px;color:#999;margin-bottom:8px;line-height:1.5;">
+            <span id="paintbrush-draft-type"></span>
+            <span id="paintbrush-draft-terrain"></span>
+            <span id="paintbrush-draft-coastal"></span>
+            <span id="paintbrush-draft-continent"></span>
+        </div>
+        <div id="paintbrush-draft-errors" style="display:none;font-size:11px;color:#e06060;margin-bottom:8px;max-height:60px;overflow-y:auto;"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button id="paintbrush-cancel" style="background:#555;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer;">Cancel (Esc)</button>
+            <button id="paintbrush-apply" style="background:#0e639c;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer;">Apply &amp; Exit</button>
+        </div>
+    </div>
     <div id="warnings-container">
         <textarea id="warnings" readonly wrap="off"></textarea>
     </div>

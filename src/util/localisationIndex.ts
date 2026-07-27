@@ -65,7 +65,7 @@ export function registerLocalisationIndex(): vscode.Disposable {
 }
 
 export async function getLocalisedTextQuick(localisationKey: string | undefined): Promise<string | undefined> {
-    const previewLocalisation = vscode.workspace.getConfiguration('hoi4ModUtilities').previewLocalisation;
+    const previewLocalisation = vscode.workspace.getConfiguration('hoi4ModernUtils').previewLocalisation;
     if (previewLocalisation){
         return getLocalisedText(localisationKey, localeISOMapping[previewLocalisation]?? vscode.env.language);
     }

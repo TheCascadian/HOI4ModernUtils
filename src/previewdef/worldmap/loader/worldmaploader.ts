@@ -112,8 +112,6 @@ export class WorldMapLoader extends Loader<WorldMapData> {
             warnings,
         };
 
-        delete (worldMap as unknown as Partial<ProvinceMap>)['colorByPosition'];
-
         const dependencies = mergeInLoadResult(subLoaderResults, 'dependencies');
         debug('World map dependencies', dependencies);
 

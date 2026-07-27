@@ -160,6 +160,7 @@ const table: Partial<typeof __table> = {
     "worldmap.topbar.display.mousehighlight": "Выделение мыши",
     "worldmap.topbar.display.river": "Show River",
     "worldmap.topbar.display.supply": "Показать снабжение",
+    "worldmap.topbar.display.stateboundary": "Показать границы штатов",
     "worldmap.topbar.display.tooltip": "Показать подсказку",
     "worldmap.topbar.open.title": "Открыть в рабочем пространстве",
     "worldmap.topbar.refresh.title": "Обновить",

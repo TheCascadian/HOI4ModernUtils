@@ -4,11 +4,11 @@ import worldmapviewstyles from './worldmapview.css';
 import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
-import { getFilePathFromMod, getHoiOpenedFileOriginalUri, readFileFromModOrHOI4, readFileFromPath } from '../../util/fileloader';
+import { getFilePathFromMod, getHoiOpenedFileOriginalUri, readFileFromModOrHOI4, readFileFromPath, getModPathFromDescriptor } from '../../util/fileloader';
 import { WorldMapLoader } from './loader/worldmaploader';
 import { isEqual } from 'lodash';
 import { LoaderSession } from '../../util/loader/loader';
@@ -23,6 +23,15 @@ export class WorldMap {
     private cachedWorldMap: WorldMapData | undefined;
 
     private lastRequestedExportUri: vscode.Uri | undefined;
+
+    /** Undo stack for province BMP edits: stores raw BMP buffers and CSV snapshots */
+    private bmpUndoStack: { bmpBuffer: Buffer; provinces: PersistedProvince[] }[] = [];
+    /** Redo stack for province BMP edits */
+    private bmpRedoStack: { bmpBuffer: Buffer; provinces: PersistedProvince[] }[] = [];
+
+    private getMaxUndoSteps(): number {
+        return (getConfiguration() as any).paintbrushMaxUndoSteps ?? 5;
+    }
 
     constructor(panel: vscode.WebviewPanel) {
         this.panel = panel;
@@ -65,6 +74,8 @@ export class WorldMap {
             [
                 { content: i18nTableAsScript() },
                 { content: 'window.__enableSupplyArea = ' + getConfiguration().enableSupplyArea + ';' },
+                { content: 'window.__stateBoundaryColor = ' + JSON.stringify(getConfiguration().stateBoundaryColor) + ';' },
+                { content: 'window.__stateBoundaryWidth = ' + getConfiguration().stateBoundaryWidth + ';' },
                 'common.js',
                 'worldmap.js'
             ],
@@ -114,6 +125,63 @@ export class WorldMap {
                     break;
                 case 'persiststates':
                     await this.persistStates(msg.states, msg.deletedFiles ?? []);
+                    break;
+                case 'persiststrategicregions':
+                    await this.persistStrategicRegions((msg as any).strategicRegions, (msg as any).deletedFiles ?? []);
+                    break;
+                case 'persistprovinces':
+                    await this.persistProvinces((msg as any).provinces, (msg as any).deletedFiles ?? []);
+                    break;
+                case 'persistprovincebmp':
+                    try {
+                        await this.persistProvinceBmp(msg as any);
+
+                        await this.postMessageToWebview({
+                            command: 'provincebmpupdated',
+                            data: JSON.stringify({
+                                success: true,
+                                canUndo: this.bmpUndoStack.length > 0,
+                                canRedo: this.bmpRedoStack.length > 0,
+                                forceReload: true,
+                            }),
+                            start: 0,
+                            end: 0,
+                        } as any);
+
+                        // Remind the user to assign the new province to a
+                        // strategic region and state.
+                        vscode.window.showInformationMessage(
+                            'Province BMP updated. ' +
+                            'Remember to assign any new province(s) to a strategic region and state.'
+                        );
+                    } catch (e) {
+                        error(e);
+
+                        await this.postMessageToWebview({
+                            command: 'provincebmpupdated',
+                            data: JSON.stringify({
+                                success: false,
+                                error:
+                                    e instanceof Error
+                                        ? e.message
+                                        : String(e),
+                                canUndo: this.bmpUndoStack.length > 0,
+                                canRedo: this.bmpRedoStack.length > 0,
+                                forceReload: false,
+                            }),
+                            start: 0,
+                            end: 0,
+                        } as any);
+                    }
+                    break;
+                case 'requestprovincebmp':
+                    await this.sendProvinceBmpData();
+                    break;
+                case 'undoprovincebmp':
+                    await this.undoProvinceBmp();
+                    break;
+                case 'redoprovincebmp':
+                    await this.redoProvinceBmp();
                     break;
             }
         } catch (e) {
@@ -428,6 +496,13 @@ export class WorldMap {
             return getHoiOpenedFileOriginalUri(modFile);
         }
 
+        // File doesn't exist in the mod yet — write into the mod folder determined
+        // by the selected .mod descriptor's `path` attribute.
+        const modPath = await getModPathFromDescriptor();
+        if (modPath) {
+            return vscode.Uri.joinPath(modPath, relativePath);
+        }
+
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) {
             throw new Error('Must open a folder before saving state changes.');
@@ -576,5 +651,544 @@ export class WorldMap {
         lines.push('}');
 
         return lines.join(eol);
+    }
+
+    private async persistStrategicRegions(strategicRegions: PersistedStrategicRegion[], deletedFiles: string[]) {
+        const uniqueDeletedFiles = Array.from(new Set(deletedFiles));
+        for (const relativePath of uniqueDeletedFiles) {
+            const targetFile = await this.resolveTargetFile(relativePath);
+            try {
+                await vscode.workspace.fs.delete(targetFile, { useTrash: false, recursive: false });
+            } catch {
+                // Ignore if file does not exist or cannot be deleted.
+            }
+        }
+
+        if (strategicRegions.length === 0) {
+            return;
+        }
+
+        const groupedByFile = new Map<string, PersistedStrategicRegion[]>();
+        for (const sr of strategicRegions) {
+            const existing = groupedByFile.get(sr.file);
+            if (existing) {
+                existing.push(sr);
+            } else {
+                groupedByFile.set(sr.file, [sr]);
+            }
+        }
+
+        for (const [relativePath, fileSRs] of groupedByFile) {
+            const targetFile = await this.resolveTargetFile(relativePath);
+            let sourceText = '';
+            try {
+                const sourcePath = await getFilePathFromMod(relativePath);
+                if (sourcePath) {
+                    sourceText = (await readFileFromPath(sourcePath))[0].toString('utf-8').replace(/^\uFEFF/, '');
+                } else {
+                    sourceText = (await readFileFromModOrHOI4(relativePath))[0].toString('utf-8').replace(/^\uFEFF/, '');
+                }
+            } catch {
+                // If file does not exist yet, we'll create it from sr data.
+            }
+
+            const eol = sourceText.includes('\r\n') ? '\r\n' : '\n';
+            const newContent = this.applyStrategicRegionUpdates(sourceText, fileSRs, eol, relativePath);
+
+            await mkdirs(dirUri(targetFile));
+            await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
+        }
+    }
+
+    private applyStrategicRegionUpdates(sourceText: string, srs: PersistedStrategicRegion[], eol: string, relativePath: string): string {
+        let text = sourceText;
+        const replacementSRs = srs.filter(s => s.tokenStart !== undefined && s.tokenEnd !== undefined);
+
+        for (const sr of replacementSRs) {
+            const range = this.findStrategicRegionBlockRangeById(text, sr.id);
+            if (!range) {
+                throw new Error(`Failed to locate existing strategic region block by id ${sr.id} in ${relativePath}`);
+            }
+
+            const serialized = this.serializeStrategicRegion(sr, eol);
+            text = text.substring(0, range.start) + serialized + text.substring(range.end);
+        }
+
+        const tokenlessSRs = srs.filter(s => s.tokenStart === undefined || s.tokenEnd === undefined);
+        if (tokenlessSRs.length > 0) {
+            const chunks = tokenlessSRs.map(sr => this.serializeStrategicRegion(sr, eol));
+            const body = chunks.join(eol + eol);
+
+            if (replacementSRs.length > 0) {
+                throw new Error(`Refusing to mix tokenless and tokened strategic region writes in one file: ${relativePath}`);
+            }
+
+            text = body + eol;
+        }
+
+        return text;
+    }
+
+    private findStrategicRegionBlockRangeById(text: string, srId: number): { start: number; end: number } | undefined {
+        let cursor = 0;
+        while (cursor < text.length) {
+            const srIndex = text.indexOf('strategic_region', cursor);
+            if (srIndex === -1) {
+                return undefined;
+            }
+
+            const before = srIndex > 0 ? text[srIndex - 1] : ' ';
+            const after = srIndex + 16 < text.length ? text[srIndex + 16] : ' ';
+            if ((/[A-Za-z0-9_]/.test(before)) || (/[A-Za-z0-9_]/.test(after))) {
+                cursor = srIndex + 16;
+                continue;
+            }
+
+            let index = srIndex + 16;
+            while (index < text.length && /\s/.test(text[index])) {
+                index++;
+            }
+
+            if (index >= text.length || text[index] !== '=') {
+                cursor = srIndex + 16;
+                continue;
+            }
+
+            index++;
+            while (index < text.length && /\s/.test(text[index])) {
+                index++;
+            }
+
+            if (index >= text.length || text[index] !== '{') {
+                cursor = srIndex + 16;
+                continue;
+            }
+
+            const blockStart = srIndex;
+            let depth = 0;
+            let blockEnd = index;
+            for (let i = index; i < text.length; i++) {
+                const ch = text[i];
+                if (ch === '{') {
+                    depth++;
+                } else if (ch === '}') {
+                    depth--;
+                    if (depth === 0) {
+                        blockEnd = i + 1;
+                        break;
+                    }
+                }
+            }
+
+            if (depth !== 0) {
+                return undefined;
+            }
+
+            const blockText = text.substring(blockStart, blockEnd);
+            const idRegex = new RegExp(`\\bid\\s*=\\s*${srId}\\b`);
+            if (idRegex.test(blockText)) {
+                return { start: blockStart, end: blockEnd };
+            }
+
+            cursor = blockEnd;
+        }
+
+        return undefined;
+    }
+
+    private serializeStrategicRegion(sr: PersistedStrategicRegion, eol: string): string {
+        const provinces = [...sr.provinces].sort((a, b) => a - b).join(' ');
+        const lines: string[] = [
+            'strategic_region = {',
+            `\tid = ${sr.id}`,
+            `\tname = "${sr.name}"`,
+            `\tprovinces = { ${provinces} }`,
+        ];
+
+        if (sr.navalTerrain) {
+            lines.push(`\tnaval_terrain = ${sr.navalTerrain}`);
+        }
+
+        lines.push('}');
+        return lines.join(eol);
+    }
+
+    private async persistProvinces(
+        provinces: PersistedProvince[],
+        deletedFiles: string[]
+    ): Promise<void> {
+        const definitionPath = 'map/definition.csv';
+        const targetFile = await this.resolveTargetFile(definitionPath);
+
+        let sourceText: string;
+
+        try {
+            const sourcePath = await getFilePathFromMod(definitionPath);
+
+            sourceText = sourcePath
+                ? (await readFileFromPath(sourcePath))[0]
+                    .toString('utf-8')
+                    .replace(/^\uFEFF/, '')
+                : (await readFileFromModOrHOI4(definitionPath))[0]
+                    .toString('utf-8')
+                    .replace(/^\uFEFF/, '');
+        } catch {
+            throw new Error('Unable to read map/definition.csv.');
+        }
+
+        const eol = sourceText.includes('\r\n') ? '\r\n' : '\n';
+        const lines = sourceText.split(/\r?\n/);
+
+        const rowById = new Map<number, number>();
+
+        for (let i = 0; i < lines.length; i++) {
+            const fields = lines[i].split(';');
+            const id = Number.parseInt(fields[0], 10);
+
+            if (Number.isInteger(id) && id >= 0) {
+                rowById.set(id, i);
+            }
+        }
+
+        for (const province of provinces) {
+            if (!Number.isInteger(province.id) || province.id <= 0) {
+                throw new Error(
+                    `Refusing to persist invalid province ID ${province.id}.`
+                );
+            }
+
+            const color = province.color >>> 0;
+
+            const red = (color >>> 16) & 0xff;
+            const green = (color >>> 8) & 0xff;
+            const blue = color & 0xff;
+
+            if (!province.terrain) {
+                throw new Error(
+                    `Province ${province.id} has no terrain.`
+                );
+            }
+
+            const row = [
+                province.id.toString(),
+                red.toString(),
+                green.toString(),
+                blue.toString(),
+                province.type,
+                province.coastal ? 'true' : 'false',
+                province.terrain,
+                province.continent.toString(),
+            ].join(';');
+
+            const existingIndex = rowById.get(province.id);
+
+            if (existingIndex !== undefined) {
+                lines[existingIndex] = row;
+            } else {
+                rowById.set(province.id, lines.length);
+                lines.push(row);
+            }
+        }
+
+        const deletedSet = new Set(deletedFiles);
+
+        const output = lines.filter(line => {
+            if (deletedSet.size === 0) {
+                return true;
+            }
+
+            const id = Number.parseInt(line.split(';')[0], 10);
+            return !deletedSet.has(id.toString());
+        });
+
+        await mkdirs(dirUri(targetFile));
+        await writeFile(
+            targetFile,
+            Buffer.from(output.join(eol), 'utf-8')
+        );
+    }
+
+    /**
+     * Atomically persist the province BMP and definition.csv after a paintbrush edit.
+     * Applies pixel diffs to the existing BMP and saves the old BMP for undo.
+     */
+    private async persistProvinceBmp(msg: {
+        paintedPixels: number[][];
+        width: number;
+        height: number;
+        provinces: PersistedProvince[];
+        previousProvinces?: PersistedProvince[];
+        targetProvinceId: number;
+    }) {
+        const defaultMap = await this.readDefaultMapConfig();
+        const bmpRelativePath = 'map/' + (defaultMap?.provinces ?? 'provinces.bmp');
+
+        // Read current BMP to save for undo
+        const oldBmpBuffer = await this.readBmpFile(bmpRelativePath);
+        if (!oldBmpBuffer) {
+            return; // Can't proceed without existing BMP
+        }
+
+        // Save undo snapshot
+        if (msg.previousProvinces) {
+            this.bmpUndoStack.push({
+                bmpBuffer: oldBmpBuffer,
+                provinces: msg.previousProvinces,
+            });
+            const maxSteps = this.getMaxUndoSteps();
+            while (this.bmpUndoStack.length > maxSteps) {
+                this.bmpUndoStack.shift();
+            }
+            this.bmpRedoStack.length = 0;
+        }
+
+        // Apply pixel diffs
+        const newBmpBuffer = this.applyPixelDiffsToBmp(oldBmpBuffer, msg.paintedPixels);
+
+        // Write BMP atomically
+        await this.writeBmpAtomic(bmpRelativePath, newBmpBuffer);
+
+        // Write definition.csv
+        await this.persistProvinces(msg.provinces, []);
+    }
+
+    /**
+     * Send the current province BMP pixel data to the webview (for paintbrush initialization).
+     */
+    private async sendProvinceBmpData() {
+        try {
+            const worldMap = await this.worldMapLoader.getWorldMap();
+            const provinceMap = worldMap as any;
+            if (provinceMap.colorByPosition && provinceMap.width && provinceMap.height) {
+                await this.postMessageToWebview({
+                    command: 'provincebmpdata',
+                    colorByPosition: provinceMap.colorByPosition,
+                    width: worldMap.width,
+                    height: worldMap.height,
+                } as any);
+            }
+        } catch (e) {
+            error(e);
+        }
+    }
+
+    /**
+     * Undo the last province BMP edit by restoring the previous BMP and CSV.
+     */
+    private async undoProvinceBmp() {
+        const snapshot = this.bmpUndoStack.pop();
+        if (!snapshot) {
+            return;
+        }
+
+        const defaultMap = await this.readDefaultMapConfig();
+        const bmpRelativePath = 'map/' + (defaultMap?.provinces ?? 'provinces.bmp');
+
+        // Save current BMP and CSV for redo
+        const currentBmp = await this.readBmpFile(bmpRelativePath);
+        const currentProvinces = await this.readCurrentProvinceDefs();
+        if (currentBmp) {
+            this.bmpRedoStack.push({
+                bmpBuffer: currentBmp,
+                provinces: currentProvinces,
+            });
+            const maxSteps = this.getMaxUndoSteps();
+            while (this.bmpRedoStack.length > maxSteps) {
+                this.bmpRedoStack.shift();
+            }
+        }
+
+        // Restore old BMP
+        await this.writeBmpAtomic(bmpRelativePath, snapshot.bmpBuffer);
+
+        // Restore old CSV
+        await this.persistProvinces(snapshot.provinces, []);
+
+        // Signal webview to reload
+        await this.postMessageToWebview({
+            command: 'provincebmpupdated',
+            data: JSON.stringify({ canUndo: this.bmpUndoStack.length > 0, canRedo: this.bmpRedoStack.length > 0, forceReload: true }),
+            start: 0,
+            end: 0,
+        } as any);
+    }
+
+    /**
+     * Redo the last undone province BMP edit.
+     */
+    private async redoProvinceBmp() {
+        const snapshot = this.bmpRedoStack.pop();
+        if (!snapshot) {
+            return;
+        }
+
+        const defaultMap = await this.readDefaultMapConfig();
+        const bmpRelativePath = 'map/' + (defaultMap?.provinces ?? 'provinces.bmp');
+
+        // Save current BMP and CSV for undo
+        const currentBmp = await this.readBmpFile(bmpRelativePath);
+        const currentProvinces = await this.readCurrentProvinceDefs();
+        if (currentBmp) {
+            this.bmpUndoStack.push({
+                bmpBuffer: currentBmp,
+                provinces: currentProvinces,
+            });
+            const maxSteps = this.getMaxUndoSteps();
+            while (this.bmpUndoStack.length > maxSteps) {
+                this.bmpUndoStack.shift();
+            }
+        }
+
+        // Restore redo BMP
+        await this.writeBmpAtomic(bmpRelativePath, snapshot.bmpBuffer);
+
+        // Restore redo CSV
+        await this.persistProvinces(snapshot.provinces, []);
+
+        await this.postMessageToWebview({
+            command: 'provincebmpupdated',
+            data: JSON.stringify({ canUndo: this.bmpUndoStack.length > 0, canRedo: this.bmpRedoStack.length > 0, forceReload: true }),
+            start: 0,
+            end: 0,
+        } as any);
+    }
+
+    /**
+     * Read current province definitions from definition.csv.
+     * HOI4 format: id;red;green;blue;type;coastal;terrain;continent
+     * Returns an array of PersistedProvince objects representing the current state.
+     */
+    private async readCurrentProvinceDefs(): Promise<PersistedProvince[]> {
+        const definitionPath = 'map/definition.csv';
+        try {
+            const [buffer] = await readFileFromModOrHOI4(definitionPath);
+            const text = buffer.toString('utf-8').replace(/^\uFEFF/, '');
+            const lines = text.split(/\r?\n/);
+            const provinces: PersistedProvince[] = [];
+
+            // Skip header line (index 0)
+            for (let i = 1; i < lines.length; i++) {
+                const fields = lines[i].split(';');
+                if (fields.length >= 8) {
+                    const id = parseInt(fields[0], 10);
+                    if (!isNaN(id) && id > 0) {
+                        const r = parseInt(fields[1], 10) || 0;
+                        const g = parseInt(fields[2], 10) || 0;
+                        const b = parseInt(fields[3], 10) || 0;
+                        const color = ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF);
+
+                        provinces.push({
+                            id,
+                            color,
+                            type: fields[4] || 'land',
+                            coastal: fields[5]?.toLowerCase() === 'true',
+                            terrain: fields[6] || '',
+                            continent: parseInt(fields[7], 10) || 0,
+                        });
+                    }
+                }
+            }
+            return provinces;
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Read the BMP file as a binary buffer.
+     * Tries the mod folder first, then falls back to the base game.
+     * This ensures paintbrush edits work even when the mod doesn't yet
+     * have its own copy of the provinces BMP.
+     */
+    private async readBmpFile(bmpRelativePath: string): Promise<Buffer | undefined> {
+        try {
+            // First, try to read from the mod folder
+            const modFile = await getFilePathFromMod(bmpRelativePath);
+            if (modFile) {
+                const data = await vscode.workspace.fs.readFile(
+                    getHoiOpenedFileOriginalUri(modFile)
+                );
+                return Buffer.from(data);
+            }
+
+            // Fall back to the base game installation
+            const [buffer] = await readFileFromModOrHOI4(bmpRelativePath);
+            return buffer;
+        } catch {
+            return undefined;
+        }
+    }
+
+    /**
+     * Write a BMP buffer atomically (temp file + rename).
+     */
+    private async writeBmpAtomic(bmpRelativePath: string, buffer: Buffer): Promise<void> {
+        const targetFile = await this.resolveTargetFile(bmpRelativePath);
+        const tempFile = vscode.Uri.parse(targetFile.toString() + '.tmp');
+        await mkdirs(dirUri(targetFile));
+        await writeFile(tempFile, buffer);
+        try {
+            await vscode.workspace.fs.rename(tempFile, targetFile, { overwrite: true });
+        } catch {
+            await vscode.workspace.fs.copy(tempFile, targetFile, { overwrite: true });
+            try { await vscode.workspace.fs.delete(tempFile); } catch { /* ignore */ }
+        }
+    }
+
+    /**
+     * Apply painted pixel diffs to a raw BMP file buffer in-place.
+     * Supports 24-bit and 32-bit BMPs.
+     */
+    private applyPixelDiffsToBmp(bmpBuffer: Buffer, paintedPixels: number[][]): Buffer {
+        const result = Buffer.from(bmpBuffer);
+
+        if (result[0] !== 0x42 || result[1] !== 0x4D) {
+            debug('applyPixelDiffsToBmp: not a valid BMP file (missing BM header)');
+            return result;
+        }
+
+        const dataOffset = result.readUInt32LE(10);
+        const width = result.readInt32LE(18);
+        const height = result.readInt32LE(22);
+        const bitsPerPixel = result.readUInt16LE(28);
+        const bytesPerPixel = bitsPerPixel / 8;
+        const rowSize = ((width * bitsPerPixel + 7 >> 3) + 3) & 0xFFFFFFFC;
+
+        if (bitsPerPixel !== 24 && bitsPerPixel !== 32) {
+            debug(`applyPixelDiffsToBmp: unsupported BMP bit depth ${bitsPerPixel} (only 24-bit and 32-bit are supported)`);
+            return result;
+        }
+
+        for (const [x, y, newColor] of paintedPixels) {
+            if (x < 0 || x >= width || y < 0 || y >= height) continue;
+
+            // BMP is bottom-up: row (height - 1 - y)
+            const row = height - 1 - y;
+            const pixelOffset = dataOffset + row * rowSize + x * bytesPerPixel;
+
+            if (pixelOffset + bytesPerPixel - 1 < result.length) {
+                result[pixelOffset] = newColor & 0xFF;           // B
+                result[pixelOffset + 1] = (newColor >> 8) & 0xFF; // G
+                result[pixelOffset + 2] = (newColor >> 16) & 0xFF; // R
+                // For 32-bit, leave the alpha byte unchanged
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Read the default.map configuration to get the provinces BMP filename.
+     */
+    private async readDefaultMapConfig(): Promise<{ provinces: string } | undefined> {
+        try {
+            const [buffer] = await readFileFromModOrHOI4('map/default.map');
+            const text = buffer.toString('utf-8');
+            const match = text.match(/provinces\s*=\s*"([^"]+)"/);
+            if (match) {
+                return { provinces: match[1] };
+            }
+        } catch { /* ignore */ }
+        return undefined;
     }
 }

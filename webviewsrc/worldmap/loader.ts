@@ -1,4 +1,4 @@
-import { WorldMapMessage, Province, WorldMapData, RequestMapItemMessage, State, Country, Point, Zone } from "./definitions";
+import { WorldMapMessage, Province, WorldMapData, RequestMapItemMessage, State, Country, Point, Zone, ProvinceEdge } from "./definitions";
 import { copyArray } from "../util/common";
 import { inBBox } from "./graphutils";
 import { Subscriber } from "../util/event";
@@ -47,6 +47,32 @@ interface FEWorldMapClassExtra {
     snapshotStates(stateIds: number[]): StateSnapshot[];
     restoreStates(snapshots: StateSnapshot[]): void;
 
+    assignProvincesToStrategicRegion(provinceIds: number[], targetSRId: number): number[] | undefined;
+    assignStatesToStrategicRegion(stateIds: number[], targetSRId: number): number[] | undefined;
+    getNextStrategicRegionId(): number;
+    snapshotStrategicRegions(srIds: number[]): StrategicRegionSnapshot[];
+    restoreStrategicRegions(snapshots: StrategicRegionSnapshot[]): void;
+
+    createProvinceAt(targetProvinceId: number): Province | undefined;
+    getNextProvinceId(): number;
+    snapshotProvinces(provinceIds: number[]): ProvinceSnapshot[];
+    restoreProvinces(snapshots: ProvinceSnapshot[]): void;
+
+    /** Paintbrush: get the color at a pixel position */
+    getColorAt(x: number, y: number): number | undefined;
+    /** Paintbrush: set the color at a pixel position */
+    setColorAt(x: number, y: number, color: number): void;
+    /** Paintbrush: get province type ('land','sea',etc.) at a pixel position */
+    getProvinceTypeAt(x: number, y: number): string | undefined;
+    /** Paintbrush: get the full colorByPosition array */
+    getColorByPosition(): number[];
+    /** Paintbrush: set the full colorByPosition array */
+    setColorByPosition(colors: number[]): void;
+    /** Paintbrush: apply painted pixels to province data structures */
+    applyPaintbrushEdits(paintedPixels: Map<string, number>, sourceProvinceId?: number): { affectedProvinceIds: number[]; newProvinceId?: number };
+    /** Find the next available color for a new province */
+    findNextProvinceColor(): number | undefined;
+
     forEachProvince(callback: (province: Province) => boolean | void): void;
     forEachState(callback: (state: State) => boolean | void): void;
     forEachStrategicRegion(callback: (strategicRegion: StrategicRegion) => boolean | void): void;
@@ -61,6 +87,16 @@ export type FEWorldMap = Omit<WorldMapData, 'states' | 'provinces' | 'strategicR
 export interface StateSnapshot {
     id: number;
     state: State | undefined;
+}
+
+export interface StrategicRegionSnapshot {
+    id: number;
+    strategicRegion: StrategicRegion | undefined;
+}
+
+export interface ProvinceSnapshot {
+    id: number;
+    province: Province | undefined;
 }
 
 export class Loader extends Subscriber {
@@ -252,6 +288,7 @@ class FEWorldMapClass implements FEWorldMap {
     terrains!: Terrain[];
     resources!: Resource[];
     rivers!: River[];
+    colorByPosition!: number[];
 
     private provinces!: (Province | null | undefined)[];
     private states!: (State | null | undefined)[];
@@ -272,7 +309,10 @@ class FEWorldMapClass implements FEWorldMap {
     }
 
     public getProvinceById = (provinceId: number | undefined): Province | undefined => {
-        return provinceId ? this.provinces[provinceId] ?? undefined : undefined;
+        if (provinceId === undefined || provinceId === null) {
+            return undefined;
+        }
+        return this.provinces[provinceId] ?? undefined;
     };
 
     public getStateById = (stateId: number | undefined): State | undefined => {
@@ -646,6 +686,832 @@ class FEWorldMapClass implements FEWorldMap {
         state.boundingBox = bbox;
         state.mass = totalMass;
         state.centerOfMass = {
+            x: weightedX / totalMass,
+            y: weightedY / totalMass,
+        };
+    }
+
+    // ======== Strategic Region Methods ========
+
+    public assignProvincesToStrategicRegion(provinceIds: number[], targetSRId: number): number[] | undefined {
+        const target = this.getStrategicRegionById(targetSRId);
+        if (!target) {
+            return undefined;
+        }
+
+        const normalizedIds = this.normalizeProvinceIds(provinceIds);
+        if (normalizedIds.length === 0) {
+            return undefined;
+        }
+
+        let changed = false;
+        const changedSRIds = new Set<number>();
+
+        this.forEachStrategicRegion(sr => {
+            if (sr.id === targetSRId) {
+                return;
+            }
+
+            const beforeLength = sr.provinces.length;
+            sr.provinces = sr.provinces.filter(id => !normalizedIds.includes(id));
+            if (sr.provinces.length !== beforeLength) {
+                changed = true;
+                changedSRIds.add(sr.id);
+            }
+        });
+
+        for (const provinceId of normalizedIds) {
+            if (!target.provinces.includes(provinceId)) {
+                target.provinces.push(provinceId);
+                changed = true;
+            }
+        }
+
+        if (!changed) {
+            return undefined;
+        }
+
+        target.provinces.sort((a, b) => a - b);
+        changedSRIds.add(targetSRId);
+        changedSRIds.forEach(srId => {
+            const sr = this.getStrategicRegionById(srId);
+            if (sr) {
+                this.recomputeRegionGeometry(sr);
+            }
+        });
+
+        return Array.from(changedSRIds.values());
+    }
+
+    public assignStatesToStrategicRegion(stateIds: number[], targetSRId: number): number[] | undefined {
+        const allProvinceIds: number[] = [];
+        for (const stateId of stateIds) {
+            const state = this.getStateById(stateId);
+            if (state) {
+                allProvinceIds.push(...state.provinces);
+            }
+        }
+        return this.assignProvincesToStrategicRegion(allProvinceIds, targetSRId);
+    }
+
+    public getNextStrategicRegionId(): number {
+        for (let id = 1; id < this.strategicRegions.length; id++) {
+            if (!this.strategicRegions[id]) {
+                return id;
+            }
+        }
+        return Math.max(1, this.strategicRegions.length);
+    }
+
+    public snapshotStrategicRegions(srIds: number[]): StrategicRegionSnapshot[] {
+        const uniqueSrIds = Array.from(new Set(srIds));
+        return uniqueSrIds.map(id => ({
+            id,
+            strategicRegion: this.cloneStrategicRegion(this.getStrategicRegionById(id)),
+        }));
+    }
+
+    public restoreStrategicRegions(snapshots: StrategicRegionSnapshot[]): void {
+        for (const snapshot of snapshots) {
+            this.strategicRegions[snapshot.id] = this.cloneStrategicRegion(snapshot.strategicRegion);
+        }
+
+        let lastSRId = this.badStrategicRegionsCount - 1;
+        for (let i = this.strategicRegions.length - 1; i >= this.badStrategicRegionsCount; i--) {
+            if (this.strategicRegions[i]) {
+                lastSRId = i;
+                break;
+            }
+        }
+        this.strategicRegionsCount = Math.max(this.badStrategicRegionsCount, lastSRId + 1);
+    }
+
+    private recomputeRegionGeometry(region: StrategicRegion | State): void {
+        const provinces = region.provinces
+            .map(id => this.getProvinceById(id))
+            .filter((p): p is Province => !!p);
+
+        if (provinces.length === 0) {
+            region.boundingBox = { x: 0, y: 0, w: 0, h: 0 };
+            region.centerOfMass = { x: 0, y: 0 };
+            region.mass = 0;
+            return;
+        }
+
+        const bbox = this.computeBoundingBox(provinces.map(p => p.boundingBox));
+        let totalMass = 0;
+        let weightedX = 0;
+        let weightedY = 0;
+        for (const province of provinces) {
+            const mass = Math.max(1, province.mass);
+            totalMass += mass;
+            weightedX += province.centerOfMass.x * mass;
+            weightedY += province.centerOfMass.y * mass;
+        }
+
+        region.boundingBox = bbox;
+        region.mass = totalMass;
+        region.centerOfMass = {
+            x: weightedX / totalMass,
+            y: weightedY / totalMass,
+        };
+    }
+
+    private cloneStrategicRegion(sr: StrategicRegion | undefined): StrategicRegion | undefined {
+        if (!sr) {
+            return undefined;
+        }
+        return {
+            ...sr,
+            provinces: [...sr.provinces],
+            boundingBox: { ...sr.boundingBox },
+            centerOfMass: { ...sr.centerOfMass },
+            token: sr.token ? { ...sr.token } : null,
+        };
+    }
+
+    // ======== Province Creation Methods ========
+
+    public createProvinceAt(targetProvinceId: number): Province | undefined {
+        const sourceProvince = this.getProvinceById(targetProvinceId);
+        if (!sourceProvince) {
+            return undefined;
+        }
+
+        const newProvinceId = this.getNextProvinceId();
+        const newColor = this.findNextProvinceColor();
+
+        if (newColor === undefined) {
+            return undefined;
+        }
+
+        // Split the source province's cover zones: take roughly half
+        const halfIndex = Math.floor(sourceProvince.coverZones.length / 2);
+        const newZones = sourceProvince.coverZones.splice(halfIndex);
+
+        // Create the new province
+        const newProvince: Province = {
+            id: newProvinceId,
+            color: newColor,
+            type: sourceProvince.type,
+            coastal: sourceProvince.coastal,
+            terrain: sourceProvince.terrain,
+            continent: sourceProvince.continent,
+            coverZones: newZones,
+            edges: [],
+            boundingBox: this.computeBoundingBox(newZones),
+            centerOfMass: this.computeCenterOfMass(newZones),
+            mass: newZones.reduce((sum, z) => sum + z.w * z.h, 0),
+        };
+
+        // Recompute source province after losing zones
+        if (sourceProvince.coverZones.length > 0) {
+            sourceProvince.boundingBox = this.computeBoundingBox(sourceProvince.coverZones);
+            sourceProvince.centerOfMass = this.computeCenterOfMass(sourceProvince.coverZones);
+            sourceProvince.mass = sourceProvince.coverZones.reduce((sum, z) => sum + z.w * z.h, 0);
+        }
+
+        // Add edge between new and source province
+        newProvince.edges.push({
+            to: sourceProvince.id,
+            type: 'land',
+            path: [],
+            rule: undefined,
+        } as ProvinceEdge);
+        sourceProvince.edges.push({
+            to: newProvinceId,
+            type: 'land',
+            path: [],
+            rule: undefined,
+        } as ProvinceEdge);
+
+        // Add edges to all provinces that were adjacent to source
+        for (const edge of sourceProvince.edges) {
+            if (edge.to === newProvinceId) {
+                continue;
+            }
+            newProvince.edges.push({
+                to: edge.to,
+                type: edge.type,
+                path: edge.path.length > 0 ? edge.path.map(p => [...p]) : [],
+                rule: edge.rule,
+            } as ProvinceEdge);
+
+            const neighbor = this.getProvinceById(edge.to);
+            if (neighbor) {
+                const existingEdge = neighbor.edges.find(e => e.to === sourceProvince.id);
+                if (existingEdge && !neighbor.edges.some(e => e.to === newProvinceId)) {
+                    neighbor.edges.push({
+                        to: newProvinceId,
+                        type: existingEdge.type,
+                        path: existingEdge.path.length > 0 ? existingEdge.path.map(p => [...p]) : [],
+                        rule: existingEdge.rule,
+                    } as ProvinceEdge);
+                }
+            }
+        }
+
+        // Store the new province
+        this.provinces[newProvinceId] = newProvince;
+        if (newProvinceId >= this.provincesCount) {
+            this.provincesCount = newProvinceId + 1;
+        }
+
+        // Add new province to the source province's state (if any)
+        const sourceState = this.getStateByProvinceId(sourceProvince.id);
+        if (sourceState && !sourceState.provinces.includes(newProvinceId)) {
+            sourceState.provinces.push(newProvinceId);
+            sourceState.provinces.sort((a, b) => a - b);
+            this.recomputeStateGeometry(sourceState);
+        }
+
+        // Add new province to the source province's strategic region (if any)
+        const sourceSR = this.getStrategicRegionByProvinceId(sourceProvince.id);
+        if (sourceSR && !sourceSR.provinces.includes(newProvinceId)) {
+            sourceSR.provinces.push(newProvinceId);
+            sourceSR.provinces.sort((a, b) => a - b);
+            this.recomputeRegionGeometry(sourceSR);
+        }
+
+        return newProvince;
+    }
+
+    public getNextProvinceId(): number {
+        // HOI4 province IDs start at 1.  Bad provinces occupy negative
+        // indices in the array, so start scanning from index 1 at minimum.
+        const startId = Math.max(1, this.badProvincesCount + 1);
+        for (let id = startId; id < this.provinces.length; id++) {
+            if (!this.provinces[id]) {
+                return id;
+            }
+        }
+        return Math.max(startId, this.provinces.length);
+    }
+
+    public snapshotProvinces(provinceIds: number[]): ProvinceSnapshot[] {
+        const uniqueIds = Array.from(new Set(provinceIds));
+        return uniqueIds.map(id => ({
+            id,
+            province: this.cloneProvince(this.getProvinceById(id)),
+        }));
+    }
+
+    public restoreProvinces(snapshots: ProvinceSnapshot[]): void {
+        for (const snapshot of snapshots) {
+            if (snapshot.id >= 1) {
+                this.provinces[snapshot.id] = this.cloneProvince(snapshot.province);
+            }
+        }
+
+        // Only scan non-negative, non-zero IDs to find the last valid province
+        const startScan = Math.max(1, this.badProvincesCount + 1);
+        let lastProvinceId = startScan - 1;
+        for (let i = this.provinces.length - 1; i >= startScan; i--) {
+            if (this.provinces[i]) {
+                lastProvinceId = i;
+                break;
+            }
+        }
+        this.provincesCount = Math.max(startScan, lastProvinceId + 1);
+    }
+
+    public findNextProvinceColor(): number | undefined {
+        // Find the maximum color in use and return the next available value.
+        // HOI4 province colors are packed RGB values; we use max+1.
+        let maxColor = 0;
+        this.forEachProvince(p => {
+            if (p.color > maxColor) {
+                maxColor = p.color;
+            }
+        });
+
+        // Avoid overflow
+        if (maxColor >= 0xFFFFFF) {
+            // Try to find a gap by scanning used colors
+            const usedColors = new Set<number>();
+            this.forEachProvince(p => { usedColors.add(p.color); });
+            for (let c = 1; c < 0xFFFFFF; c++) {
+                if (!usedColors.has(c)) {
+                    return c;
+                }
+            }
+            return undefined;
+        }
+
+        return maxColor + 1;
+    }
+
+    private cloneProvince(province: Province | undefined): Province | undefined {
+        if (!province) {
+            return undefined;
+        }
+        return {
+            ...province,
+            coverZones: province.coverZones.map(z => ({ ...z })),
+            edges: province.edges.map(e => ({
+                ...e,
+                path: e.path.map(p => [...p]),
+                start: e.start ? { ...e.start } : undefined,
+                stop: e.stop ? { ...e.stop } : undefined,
+            })),
+            boundingBox: { ...province.boundingBox },
+            centerOfMass: { ...province.centerOfMass },
+        };
+    }
+
+    // ======== Paintbrush / Pixel-Level Methods ========
+
+    /**
+     * Get the province color at a specific pixel position.
+     */
+    public getColorAt(x: number, y: number): number | undefined {
+        if (x < 0 || x >= this.width || y < 0 || y >= this.height) {
+            return undefined;
+        }
+        if (!this.colorByPosition) {
+            return undefined;
+        }
+        return this.colorByPosition[y * this.width + x];
+    }
+
+    /**
+     * Set the province color at a specific pixel position.
+     */
+    public setColorAt(x: number, y: number, color: number): void {
+        if (x < 0 || x >= this.width || y < 0 || y >= this.height) {
+            return;
+        }
+        if (!this.colorByPosition) {
+            this.colorByPosition = new Array(this.width * this.height).fill(0);
+        }
+        this.colorByPosition[y * this.width + x] = color;
+    }
+
+    /**
+     * Get the province type ('land', 'sea', etc.) at a pixel position.
+     * Returns undefined if the position is out of bounds or no province is found.
+     */
+    public getProvinceTypeAt(x: number, y: number): string | undefined {
+        const color = this.getColorAt(x, y);
+        if (color === undefined) {
+            return undefined;
+        }
+        const province = this.getProvinceByColor(color);
+        return province?.type;
+    }
+
+    /**
+     * Get the full colorByPosition array (a copy for safety).
+     */
+    public getColorByPosition(): number[] {
+        return this.colorByPosition ? [...this.colorByPosition] : [];
+    }
+
+    /**
+     * Set the full colorByPosition array.
+     */
+    public setColorByPosition(colors: number[]): void {
+        this.colorByPosition = [...colors];
+    }
+
+    /**
+     * Apply painted pixels to province data structures.
+     * First writes the pixels into the live colorByPosition buffer,
+     * then rebuilds coverZones, edges, and province records.
+     * @param paintedPixels - Map of "x,y" -> new color
+     * @returns Affected province IDs and new province ID if one was created
+     */
+    public applyPaintbrushEdits(paintedPixels: Map<string, number>, sourceProvinceId?: number): { affectedProvinceIds: number[]; newProvinceId?: number } {
+        // --- Write draft pixels into the live colour buffer ---------------
+        for (const [key, color] of paintedPixels) {
+            const [x, y] = key.split(',').map(Number);
+            this.setColorAt(x, y, color);
+        }
+
+        const affectedProvinceIds = new Set<number>();
+        let newProvinceId: number | undefined;
+
+        // Collect unique colors used in paint operations
+        const newColorSet = new Set<number>();
+        for (const color of paintedPixels.values()) {
+            newColorSet.add(color);
+        }
+
+        // For each unique new color, handle the province update
+        for (const newColor of newColorSet) {
+            // Check if this color already corresponds to a province
+            const existingProvince = this.getProvinceByColor(newColor);
+
+            if (existingProvince) {
+                // Existing province: we're adding pixels to it
+                affectedProvinceIds.add(existingProvince.id);
+            } else {
+                // New color: create a new province
+                const nextId = this.getNextProvinceId();
+                newProvinceId = nextId;
+
+                const sourceProvince = sourceProvinceId !== undefined ? this.getProvinceById(sourceProvinceId) : undefined;
+
+                const newProvince: Province = {
+                    id: nextId,
+                    color: newColor,
+                    type: sourceProvince?.type ?? 'land',
+                    coastal: sourceProvince?.coastal ?? false,
+                    terrain: sourceProvince?.terrain ?? '',
+                    continent: sourceProvince?.continent ?? 0,
+                    coverZones: [],
+                    edges: [],
+                    boundingBox: { x: 0, y: 0, w: 0, h: 0 },
+                    centerOfMass: { x: 0, y: 0 },
+                    mass: 0,
+                };
+
+                this.provinces[nextId] = newProvince;
+                if (nextId >= this.provincesCount) {
+                    this.provincesCount = nextId + 1;
+                }
+                affectedProvinceIds.add(nextId);
+                if (sourceProvinceId !== undefined) {
+                    affectedProvinceIds.add(sourceProvinceId);
+                }
+            }
+        }
+
+        // Rebuild coverZones for all affected provinces from the updated colorByPosition
+        for (const provId of affectedProvinceIds) {
+            const province = this.getProvinceById(provId);
+            if (province) {
+                this.rebuildCoverZonesFromPixels(province);
+            }
+        }
+
+        // Atomic edge rebuild: expand to neighbors, clear once, scan once, install pairs
+        this.rebuildAffectedProvinceEdges(affectedProvinceIds);
+
+        return { affectedProvinceIds: Array.from(affectedProvinceIds), newProvinceId };
+    }
+
+    /**
+     * Find a province by its color value.
+     */
+    private getProvinceByColor(color: number): Province | undefined {
+        for (let i = 0; i < this.provinces.length; i++) {
+            const p = this.provinces[i];
+            if (p && p.color === color) {
+                return p;
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * Rebuild coverZones for a province from the current colorByPosition pixel data.
+     */
+    private rebuildCoverZonesFromPixels(province: Province): void {
+        const zones: Zone[] = [];
+        const color = province.color;
+        const width = this.width;
+        const height = this.height;
+        const pixels = this.colorByPosition;
+
+        if (!pixels) {
+            return;
+        }
+
+        const visited = new Uint8Array(width * height);
+
+        for (let y = 0; y < height; y++) {
+            for (let x = 0; x < width; x++) {
+                const index = y * width + x;
+
+                if (visited[index] || pixels[index] !== color) {
+                    continue;
+                }
+
+                let zoneWidth = 1;
+
+                while (
+                    x + zoneWidth < width &&
+                    pixels[y * width + x + zoneWidth] === color &&
+                    !visited[y * width + x + zoneWidth]
+                ) {
+                    zoneWidth++;
+                }
+
+                let zoneHeight = 1;
+                let canExpand = true;
+
+                while (canExpand && y + zoneHeight < height) {
+                    for (let dx = 0; dx < zoneWidth; dx++) {
+                        const checkIndex =
+                            (y + zoneHeight) * width + x + dx;
+
+                        if (
+                            pixels[checkIndex] !== color ||
+                            visited[checkIndex]
+                        ) {
+                            canExpand = false;
+                            break;
+                        }
+                    }
+
+                    if (canExpand) {
+                        zoneHeight++;
+                    }
+                }
+
+                for (let dy = 0; dy < zoneHeight; dy++) {
+                    const rowIndex = (y + dy) * width + x;
+
+                    for (let dx = 0; dx < zoneWidth; dx++) {
+                        visited[rowIndex + dx] = 1;
+                    }
+                }
+
+                zones.push({
+                    x,
+                    y,
+                    w: zoneWidth,
+                    h: zoneHeight,
+                });
+            }
+        }
+
+        province.coverZones = zones;
+        province.mass = zones.reduce(
+            (sum, zone) => sum + zone.w * zone.h,
+            0
+        );
+
+        if (zones.length === 0) {
+            province.boundingBox = {
+                x: 0,
+                y: 0,
+                w: 0,
+                h: 0,
+            };
+
+            province.centerOfMass = {
+                x: 0,
+                y: 0,
+            };
+
+            return;
+        }
+
+        province.boundingBox = this.computeBoundingBox(zones);
+        province.centerOfMass = this.computeCenterOfMass(zones);
+    }
+
+    /**
+     * Atomically rebuild edges for every province touched by a paintbrush edit
+     * (including all immediate neighbours of directly-affected provinces).
+     *
+     * Two-phase approach:
+     *   1. Expand the affected set and clear *all* old edges once.
+     *   2. Scan the pixel buffer once, build canonical boundary polylines
+     *      per colour-pair, then install matching forward/reverse edges
+     *      from the same shared geometry.
+     *
+     * Invariant after this call: for every edge A→B there is a corresponding
+     * edge B→A with reversed (but geometrically identical) paths.
+     */
+    private rebuildAffectedProvinceEdges(seedIds: Set<number>): void {
+        // --- Phase 1: expand the affected set and clear old edges ----------
+        const allAffected = new Set(seedIds);
+
+        for (const id of seedIds) {
+            const province = this.getProvinceById(id);
+            if (!province) continue;
+
+            for (const edge of province.edges) {
+                allAffected.add(edge.to);
+            }
+        }
+
+        for (const id of allAffected) {
+            const province = this.getProvinceById(id);
+            if (!province) continue;
+
+            // Remove reverse edges that point AT this province from neighbours
+            for (const edge of province.edges) {
+                const neighbor = this.getProvinceById(edge.to);
+                if (neighbor) {
+                    neighbor.edges = neighbor.edges.filter(
+                        e => e.to !== province.id
+                    );
+                }
+            }
+
+            province.edges = [];
+        }
+
+        // --- Phase 2: scan pixels once, build canonical boundary data ------
+        const w = this.width;
+        const h = this.height;
+        const pixels = this.colorByPosition;
+        if (!pixels) return;
+
+        // Key: "fromColor|toColor" → array of boundary segment pairs.
+        // A segment pair is { x1,y1 (our pixel), x2,y2 (adjacent pixel) }.
+        type Segment = { x1: number; y1: number; x2: number; y2: number };
+        const segmentsByPair = new Map<string, Segment[]>();
+
+        for (const id of allAffected) {
+            const province = this.getProvinceById(id);
+            if (!province) continue;
+
+            const color = province.color;
+
+            for (const zone of province.coverZones) {
+                for (let dy = 0; dy < zone.h; dy++) {
+                    for (let dx = 0; dx < zone.w; dx++) {
+                        const x = zone.x + dx;
+                        const y = zone.y + dy;
+                        const idx = y * w + x;
+
+                        if (pixels[idx] !== color) continue;
+
+                        const neighbors: [number, number][] = [
+                            [x + 1, y], [x - 1, y], [x, y + 1], [x, y - 1]
+                        ];
+
+                        for (const [nx, ny] of neighbors) {
+                            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+                            const nColor = pixels[ny * w + nx];
+                            if (nColor === color || nColor === 0) continue;
+
+                            const key = `${color}|${nColor}`;
+                            if (!segmentsByPair.has(key)) {
+                                segmentsByPair.set(key, []);
+                            }
+                            segmentsByPair.get(key)!.push({
+                                x1: x, y1: y,
+                                x2: nx, y2: ny,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Phase 3: install matched edge pairs from shared geometry ------
+        for (const [key, segments] of segmentsByPair) {
+            const [fromColorStr, toColorStr] = key.split('|');
+            const fromColor = Number(fromColorStr);
+            const toColor = Number(toColorStr);
+
+            const fromProvince = this.getProvinceByColor(fromColor);
+            const toProvince = this.getProvinceByColor(toColor);
+            if (!fromProvince || !toProvince) continue;
+
+            // Build the shared forward polyline (from-province → to-province).
+            const forwardPaths = this.buildBoundaryPolylines(segments);
+
+            // Forward edge: fromProvince → toProvince.
+            // Paths trace "our side" points; the renderer draws lines between
+            // consecutive points, which produces the boundary stroke.
+            fromProvince.edges.push({
+                to: toProvince.id,
+                type: 'land',
+                path: forwardPaths,
+                rule: undefined,
+            });
+
+            // Reverse edge: toProvince → fromProvince.
+            // Same geometry, reversed point order.
+            toProvince.edges.push({
+                to: fromProvince.id,
+                type: 'land',
+                path: forwardPaths.map(p => [...p].reverse().map(pt => ({ ...pt }))),
+                rule: undefined,
+            });
+        }
+    }
+
+    /**
+     * Convert raw boundary segments into contiguous polylines.
+     *
+     * Each segment records a boundary pixel (x1,y1) that belongs to our
+     * province and touches a neighbour pixel (x2,y2).  We collect the
+     * (x1,y1) points, find connected components via 8-neighbour BFS,
+     * then greedily order each component into a polyline.
+     */
+    private buildBoundaryPolylines(
+        segments: { x1: number; y1: number; x2: number; y2: number }[]
+    ): Point[][] {
+        if (segments.length === 0) return [];
+
+        // Deduplicate "our side" points.
+        const pointSet = new Set<string>();
+        for (const s of segments) {
+            pointSet.add(`${s.x1},${s.y1}`);
+        }
+
+        const grid = new Map<string, Point>();
+        for (const key of pointSet) {
+            const [px, py] = key.split(',').map(Number);
+            grid.set(key, { x: px, y: py });
+        }
+
+        const visited = new Set<string>();
+        const result: Point[][] = [];
+
+        for (const [key, pt] of grid) {
+            if (visited.has(key)) continue;
+
+            // BFS to find the connected component.
+            const component: Point[] = [];
+            const queue: Point[] = [pt];
+            visited.add(key);
+
+            while (queue.length > 0) {
+                const cur = queue.shift()!;
+                component.push(cur);
+
+                for (let dy = -1; dy <= 1; dy++) {
+                    for (let dx = -1; dx <= 1; dx++) {
+                        if (dx === 0 && dy === 0) continue;
+                        const nk = `${cur.x + dx},${cur.y + dy}`;
+                        if (!visited.has(nk) && grid.has(nk)) {
+                            visited.add(nk);
+                            queue.push(grid.get(nk)!);
+                        }
+                    }
+                }
+            }
+
+            // Order the component into a coherent polyline.
+            if (component.length >= 2) {
+                const ordered = this.orderBoundaryPoints(component);
+                if (ordered.length >= 2) {
+                    result.push(ordered);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /**
+     * Greedily order a set of boundary points into a polyline by
+     * repeatedly moving to the nearest unvisited point.
+     */
+    private orderBoundaryPoints(points: Point[]): Point[] {
+        if (points.length <= 2) return [...points];
+
+        const remaining = new Set(points.map((_p, i) => i));
+
+        // Start from the top-left-most point.
+        let curIdx = 0;
+        let minKey = Infinity;
+        for (let i = 0; i < points.length; i++) {
+            const k = points[i].y * 100000 + points[i].x;
+            if (k < minKey) {
+                minKey = k;
+                curIdx = i;
+            }
+        }
+
+        const ordered: Point[] = [points[curIdx]];
+        remaining.delete(curIdx);
+
+        while (remaining.size > 0) {
+            const last = ordered[ordered.length - 1];
+            let bestIdx = -1;
+            let bestDist = Infinity;
+
+            for (const idx of remaining) {
+                const d = Math.abs(points[idx].x - last.x) + Math.abs(points[idx].y - last.y);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestIdx = idx;
+                }
+            }
+
+            if (bestIdx < 0 || bestDist > 3) break;
+
+            ordered.push(points[bestIdx]);
+            remaining.delete(bestIdx);
+        }
+
+        return ordered;
+    }
+
+    private computeCenterOfMass(zones: { x: number; y: number; w: number; h: number }[]): { x: number; y: number } {
+        let totalMass = 0;
+        let weightedX = 0;
+        let weightedY = 0;
+        for (const zone of zones) {
+            const mass = zone.w * zone.h;
+            totalMass += mass;
+            weightedX += (zone.x + zone.w / 2) * mass;
+            weightedY += (zone.y + zone.h / 2) * mass;
+        }
+        if (totalMass === 0) {
+            return { x: 0, y: 0 };
+        }
+        return {
             x: weightedX / totalMass,
             y: weightedY / totalMass,
         };

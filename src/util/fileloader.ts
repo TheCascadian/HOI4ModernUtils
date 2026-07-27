@@ -340,8 +340,31 @@ const replacePathsCache = new PromiseCache({
     life: 60 * 1000,
 });
 
+const modPathCache = new PromiseCache<vscode.Uri | undefined>({
+    factory: async (modFileUri: string) => {
+        const modFile = vscode.Uri.parse(modFileUri);
+        const content = (await readFile(modFile)).toString();
+        const node = parseHoi4File(content, localize('infile', 'In file {0}:\n', modFileUri));
+        const parsed = convertNodeToJson<ModFile>(node, modFileSchema);
+
+        if (parsed.path) {
+            const modDirPath = parsed.path.replace(/[\\/]+$/, '');
+            if (path.isAbsolute(modDirPath)) {
+                return vscode.Uri.file(modDirPath);
+            }
+            return vscode.Uri.joinPath(vscode.Uri.file(path.dirname(modFile.fsPath)), modDirPath);
+        }
+
+        return vscode.Uri.file(path.dirname(modFile.fsPath));
+    },
+    expireWhenChange: key => getLastModifiedAsync(vscode.Uri.parse(key)),
+    life: 60 * 1000,
+});
+
 interface ModFile {
     replace_path: string[];
+    path?: string;
+    archive?: string;
 }
 
 const modFileSchema: SchemaDef<ModFile> = {
@@ -349,7 +372,58 @@ const modFileSchema: SchemaDef<ModFile> = {
         _innerType: "string",
         _type: "array",
     },
+    path: {
+        _type: "string",
+    },
+    archive: {
+        _type: "string",
+    },
 };
+
+/**
+ * Resolve the selected .mod descriptor file URI.
+ */
+export async function getSelectedModFileUri(): Promise<vscode.Uri | undefined> {
+    const conf = getConfiguration();
+    let modFile = fileOrUriStringToUri(conf.modFile);
+
+    if (conf.modFile === "") {
+        if (vscode.workspace.workspaceFolders) {
+            for (const workspaceFolder of vscode.workspace.workspaceFolders) {
+                const workspaceFolderPath = workspaceFolder.uri;
+                const mods = await workspaceModFilesCache.get(workspaceFolderPath.toString());
+                if (mods.length > 0) {
+                    modFile = mods[0];
+                    break;
+                }
+            }
+        }
+    }
+
+    if (modFile && await isFile(modFile)) {
+        return modFile;
+    }
+
+    return undefined;
+}
+
+/**
+ * Read the `path` attribute from the selected .mod descriptor file to determine
+ * the mod folder where game files (maps, BMPs, CSVs) should be written.
+ * Returns undefined if no mod is selected or the path attribute is absent.
+ */
+export async function getModPathFromDescriptor(): Promise<vscode.Uri | undefined> {
+    const modFile = await getSelectedModFileUri();
+    if (!modFile) {
+        return undefined;
+    }
+
+    try {
+        return await modPathCache.get(modFile.toString());
+    } catch {
+        return undefined;
+    }
+}
 
 async function getReplacePaths(): Promise<string[] | undefined> {
     const conf = getConfiguration();

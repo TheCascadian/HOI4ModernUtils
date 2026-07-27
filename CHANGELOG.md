@@ -1,6 +1,6 @@
 # Change Log
 
-All notable changes to the "hoi4modutilities" extension will be documented in this file.
+All notable changes to the "hoi4modernutils" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
@@ -139,7 +139,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 * Preview new supply system based on railway.
-* New setting `hoi4ModUtilities.enableSupplyArea` to switch to old version development.
+* New setting `hoi4modernutils.enableSupplyArea` to switch to old version development.
 
 ## [0.4.8] - 2021/10/15
 
@@ -328,7 +328,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ### Added
 * Reads `replace_path` of `.mod` file.
-  * New setting `hoi4ModUtilities.modFile` to set working mod definition.
+  * New setting `hoi4modernutils.modFile` to set working mod definition.
   * Read `replace_path` from working mod when loading files.
   * Show and change selected mod file from status bar.
 * Focus tree preview

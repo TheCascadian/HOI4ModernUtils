@@ -214,7 +214,7 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage;
+export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage | PersistProvincesMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
@@ -282,6 +282,128 @@ export interface PersistStatesMessage {
     command: 'persiststates';
     states: PersistedState[];
     deletedFiles?: string[];
+}
+
+export interface PersistedStrategicRegion {
+    id: number;
+    name: string;
+    provinces: number[];
+    navalTerrain: string | null;
+    file: string;
+    tokenStart?: number;
+    tokenEnd?: number;
+}
+
+export interface PersistStrategicRegionsMessage {
+    command: 'persiststrategicregions';
+    strategicRegions: PersistedStrategicRegion[];
+    deletedFiles?: string[];
+}
+
+export interface PersistedProvince {
+    id: number;
+    color: number;
+    type: string;
+    coastal: boolean;
+    terrain: string;
+    continent: number;
+}
+
+export interface PersistProvincesMessage {
+    command: 'persistprovinces';
+    provinces: PersistedProvince[];
+    deletedFiles?: string[];
+}
+
+/**
+ * Sent from webview to extension to atomically persist the provinces.bmp
+ * and definition.csv after a paintbrush edit.
+ */
+export interface PersistProvinceBmpMessage {
+    command: 'persistprovincebmp';
+    /** Painted pixels as an array of [x, y, newColor] triplets */
+    paintedPixels: number[][];
+    width: number;
+    height: number;
+    /** Province definitions to update in definition.csv */
+    provinces: PersistedProvince[];
+    /** Snapshot of previous province definitions for undo */
+    previousProvinces?: PersistedProvince[];
+    /** The province ID being painted from (source) */
+    targetProvinceId: number;
+}
+
+/**
+ * Request the current province BMP data from the extension.
+ */
+export interface RequestProvinceBmpMessage {
+    command: 'requestprovincebmp';
+}
+
+/**
+ * Province BMP pixel data sent from extension to webview.
+ */
+export interface ProvinceBmpDataMessage {
+    command: 'provincebmpdata';
+    colorByPosition: number[];
+    width: number;
+    height: number;
+}
+
+/**
+ * Undo a province BMP edit.
+ */
+export interface UndoProvinceBmpMessage {
+    command: 'undoprovincebmp';
+}
+
+/**
+ * Redo a province BMP edit.
+ */
+export interface RedoProvinceBmpMessage {
+    command: 'redoprovincebmp';
+}
+
+/**
+ * Notification from extension that province BMP was updated (triggers reload).
+ */
+export interface ProvinceBmpUpdatedMessage {
+    command: 'provincebmpupdated';
+    data: string; // JSON: { canUndo: boolean; canRedo: boolean; forceReload?: boolean }
+}
+
+/**
+ * Configuration for the paintbrush undo system.
+ */
+export interface PaintbrushConfig {
+    /** Maximum number of undo steps (default 5) */
+    maxUndoSteps: number;
+}
+
+/**
+ * A provisional province edit that has not yet been committed.
+ * Painting accumulates pixels into a draft; only Apply writes the
+ * draft back into the live map and triggers persistence.
+ */
+export interface ProvinceDraft {
+    /** ID of the province selected when paintbrush was entered (0 = none). */
+    sourceProvinceId: number;
+    /** The colour being painted with. */
+    color: number;
+    /** Set of painted pixel coordinates encoded as "x,y" strings. */
+    pixels: Map<string, number>;
+    /** Land/sea type inherited from source province (or 'land' by default). */
+    type: string;
+    /** Terrain inherited from source province. */
+    terrain: string;
+    /** Whether the source province is coastal. */
+    coastal: boolean;
+    /** Continent ID inherited from source province. */
+    continent: number;
+    /** True when the draft passes all validation checks. */
+    valid: boolean;
+    /** Human-readable validation messages. */
+    errors: string[];
 }
 
 export type ProgressReporter = (progress: string) => Promise<void>;

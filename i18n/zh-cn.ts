@@ -174,6 +174,7 @@ const table: Partial<typeof __table> = {
     "worldmap.topbar.display.mousehighlight": "指针高亮",
     "worldmap.topbar.display.river": "显示河流",
     "worldmap.topbar.display.supply": "显示补给",
+    "worldmap.topbar.display.stateboundary": "显示州边界",
     "worldmap.topbar.display.tooltip": "显示信息",
     "worldmap.topbar.open.title": "在工作区内打开",
     "worldmap.topbar.refresh.title": "刷新",

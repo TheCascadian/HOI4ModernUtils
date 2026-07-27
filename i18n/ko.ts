@@ -160,6 +160,7 @@ const table: Partial<typeof __table> = {
     "worldmap.topbar.display.mousehighlight": "마우스 강조",
     "worldmap.topbar.display.river": "하천 표시",
     "worldmap.topbar.display.supply": "보급 표시",
+    "worldmap.topbar.display.stateboundary": "스테이트 경계선 표시",
     "worldmap.topbar.display.tooltip": "툴팁 표시",
     "worldmap.topbar.open.title": "워크스페이스에서 열기",
     "worldmap.topbar.refresh.title": "새로고침",

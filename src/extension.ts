@@ -16,7 +16,7 @@ import { registerSharedFocusIndex } from "./util/sharedFocusIndex";
 
 export function activate(context: vscode.ExtensionContext) {
     let locale = (context as any).extension?.packageJSON.locale;
-    if (locale === "%hoi4modutilities.locale%") {
+    if (locale === "%hoi4modernutils.locale%") {
         locale = 'en';
     }
 
@@ -43,9 +43,14 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(registerLocalisationIndex());
 
     if (process.env.NODE_ENV !== 'production') {
-        vscode.commands.registerCommand('hoi4modutilities.test', () => {
-            const debugModule = require('./util/debug.shouldignore');
-            debugModule.testCommand();
+        vscode.commands.registerCommand('hoi4modernutils.test', () => {
+            try {
+                // @ts-ignore - dev-only debug module
+                const debugModule = __non_webpack_require__('./util/debug.shouldignore');
+                debugModule.testCommand();
+            } catch {
+                // Debug module not available
+            }
         });
 
         setVscodeContext(ContextName.Hoi4MUInDev, true);

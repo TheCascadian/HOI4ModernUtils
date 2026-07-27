@@ -1,11 +1,11 @@
 // This file contains constants that may be used in package.json
 
-export const ConfigurationKey = 'hoi4ModUtilities';
+export const ConfigurationKey = 'hoi4ModernUtils';
 export const Hoi4FsSchema = 'hoi4installpath';
 
 export namespace ViewType {
-    export const DDS = 'hoi4modutilities.dds';
-    export const TGA = 'hoi4modutilities.tga';
+    export const DDS = 'hoi4modernutils.dds';
+    export const TGA = 'hoi4modernutils.tga';
 }
 
 export namespace ContextName {
@@ -17,14 +17,14 @@ export namespace ContextName {
 }
 
 export namespace Commands {
-    export const Preview = 'hoi4modutilities.preview';
-    export const PreviewWorld = 'hoi4modutilities.previewworld';
-    export const ScanReferences = 'hoi4modutilities.scanreferences';
-    export const SelectModFile = 'hoi4modutilities.selectmodfile';
-    export const SelectHoiFolder = 'hoi4modutilities.selecthoifolder';
+    export const Preview = 'hoi4modernutils.preview';
+    export const PreviewWorld = 'hoi4modernutils.previewworld';
+    export const ScanReferences = 'hoi4modernutils.scanreferences';
+    export const SelectModFile = 'hoi4modernutils.selectmodfile';
+    export const SelectHoiFolder = 'hoi4modernutils.selecthoifolder';
 }
 
 export namespace WebviewType {
-    export const Preview = 'hoi4ftpreview';
-    export const PreviewWorldMap = 'hoi4worldmappreview';
+    export const Preview = 'hoi4modernutils.ftpreview';
+    export const PreviewWorldMap = 'hoi4modernutils.worldmappreview';
 }

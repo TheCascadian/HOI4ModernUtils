@@ -1,12 +1,14 @@
 declare module 'vscode' {
     namespace workspace {
-        export function getConfiguration(section: 'hoi4ModUtilities'): WorkspaceConfiguration & {
+        export function getConfiguration(section: 'hoi4ModernUtils'): WorkspaceConfiguration & {
             readonly installPath: string;
             readonly loadDlcContents: boolean;
             readonly modFile: string;
             readonly featureFlags: string[];
             readonly enableSupplyArea: boolean;
             readonly previewLocalisation: 'Brazilian Portuguese' | 'English' | 'French' | 'German' | 'Japanese' | 'Polish' | 'Russian' | 'Simplified Chinese' | 'Spanish';
+            readonly stateBoundaryColor: string;
+            readonly stateBoundaryWidth: number;
         };
     }
 }
