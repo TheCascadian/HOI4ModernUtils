@@ -1,4 +1,7 @@
 # HOI4 Modern Utils
+![Version](https://img.shields.io/github/tag/TheCascadian/HOI4ModernUtils)
+![Downloads](https://img.shields.io/github/downloads/TheCascadian/HOI4ModernUtils/total)
+![Views](https://komarev.com/ghpvc/?username=TheCascadian&repo=HOI4ModernUtils&label=Views)
 
 This extension add tools for Heart of Iron IV modding. Some of the tools may work on other Paradox games.
 
@@ -12,7 +15,8 @@ This extension add tools for Heart of Iron IV modding. Some of the tools may wor
 * Ctrl + Z — Undo (map-edit undo first: create/assign; if none, selection undo)
 * Ctrl + Y — Redo (map-edit redo first; if none, selection redo)
 * Enter (in search box) — Run search for entered province/state id
-* Double-click (canvas) — Open hovered region file (state/strategic region/supply area)
+* Double-click (Province view) — Drop/remove a victory point on the hovered province (value=1 placeholder, with localisation key)
+* Double-click (State/Strategic Region/Supply Area views) — Open hovered region file
 
 ## Install Without Marketplace
 

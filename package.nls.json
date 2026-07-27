@@ -31,5 +31,19 @@
     "hoi4modernutils.stateBoundaryColor.title": "State Boundary Color",
     "hoi4modernutils.stateBoundaryColor.desc": "CSS color for state boundary lines in province view (e.g. 'rgba(0,0,0,0.4)', '#FF0000').",
     "hoi4modernutils.stateBoundaryWidth.title": "State Boundary Width",
-    "hoi4modernutils.stateBoundaryWidth.desc": "Line width multiplier for state boundary lines in province view (default: 1.5)."
+    "hoi4modernutils.stateBoundaryWidth.desc": "Line width multiplier for state boundary lines in province view (default: 1.5).",
+    "hoi4modernutils.worldMapSelectionUndoKeybind.title": "World Map Selection Undo Keybind",
+    "hoi4modernutils.worldMapSelectionUndoKeybind.desc": "Keybind used in world map preview for selection-only undo. Examples: T, Ctrl+Z, Alt+U.",
+    "hoi4modernutils.worldMapSelectionRedoKeybind.title": "World Map Selection Redo Keybind",
+    "hoi4modernutils.worldMapSelectionRedoKeybind.desc": "Keybind used in world map preview for selection-only redo. Examples: R, Ctrl+Y, Alt+I.",
+    "hoi4modernutils.worldMapMapUndoKeybind.title": "World Map Edit Undo Keybind",
+    "hoi4modernutils.worldMapMapUndoKeybind.desc": "Keybind used in world map preview for map edit undo fallback. Example: Ctrl+Z.",
+    "hoi4modernutils.worldMapMapRedoKeybind.title": "World Map Edit Redo Keybind",
+    "hoi4modernutils.worldMapMapRedoKeybind.desc": "Keybind used in world map preview for map edit redo fallback. Example: Ctrl+Y.",
+    "hoi4modernutils.worldMapCreateStateKeybind.title": "World Map Create State Keybind",
+    "hoi4modernutils.worldMapCreateStateKeybind.desc": "Keybind used in world map preview to create state from selected provinces. Example: Ctrl+Shift+N.",
+    "hoi4modernutils.worldMapAssignSelectionKeybind.title": "World Map Assign Selection Keybind",
+    "hoi4modernutils.worldMapAssignSelectionKeybind.desc": "Keybind used in world map preview to assign selected provinces to the selected state. Example: Ctrl+Enter.",
+    "hoi4modernutils.worldMapAssignSelectionToStrategicRegionKeybind.title": "World Map Assign To Strategic Region Keybind",
+    "hoi4modernutils.worldMapAssignSelectionToStrategicRegionKeybind.desc": "Keybind used in world map preview to assign selected states to the selected strategic region. Example: Ctrl+Shift+G."
 }

@@ -23,6 +23,101 @@ interface MapEditAction {
     after: StateSnapshot[] | StrategicRegionSnapshot[] | ProvinceSnapshot[];
 }
 
+interface ShortcutSpec {
+    key: string;
+    ctrl: boolean;
+    shift: boolean;
+    alt: boolean;
+    label: string;
+}
+
+interface WorldMapKeybindSpec {
+    selectionUndo: ShortcutSpec;
+    selectionRedo: ShortcutSpec;
+    mapUndo: ShortcutSpec;
+    mapRedo: ShortcutSpec;
+    createStateFromSelection: ShortcutSpec;
+    assignSelectionToState: ShortcutSpec;
+    assignSelectionToStrategicRegion: ShortcutSpec;
+}
+
+const defaultKeybindLabels = {
+    selectionUndo: 'T',
+    selectionRedo: 'R',
+    mapUndo: 'Ctrl+Z',
+    mapRedo: 'Ctrl+Y',
+    createStateFromSelection: 'Ctrl+Shift+N',
+    assignSelectionToState: 'Ctrl+Enter',
+    assignSelectionToStrategicRegion: 'Ctrl+Shift+G',
+} as const;
+
+function parseShortcutOrDefault(value: string | undefined, fallback: string): ShortcutSpec {
+    const parsed = parseShortcut(value);
+    if (parsed) {
+        return parsed;
+    }
+
+    const fallbackParsed = parseShortcut(fallback);
+    if (fallbackParsed) {
+        return fallbackParsed;
+    }
+
+    return { key: 'unidentified', ctrl: false, shift: false, alt: false, label: fallback };
+}
+
+function parseShortcut(value: string | undefined): ShortcutSpec | undefined {
+    if (!value) {
+        return undefined;
+    }
+
+    const parts = value.split('+').map(x => x.trim()).filter(x => x.length > 0);
+    if (parts.length === 0) {
+        return undefined;
+    }
+
+    let ctrl = false;
+    let shift = false;
+    let alt = false;
+    let key: string | undefined;
+
+    for (const part of parts) {
+        const lower = part.toLowerCase();
+        if (lower === 'ctrl' || lower === 'control') {
+            ctrl = true;
+            continue;
+        }
+        if (lower === 'shift') {
+            shift = true;
+            continue;
+        }
+        if (lower === 'alt' || lower === 'option') {
+            alt = true;
+            continue;
+        }
+
+        key = lower === 'return' ? 'enter' : lower;
+    }
+
+    if (!key) {
+        return undefined;
+    }
+
+    return { key, ctrl, shift, alt, label: value };
+}
+
+function getWorldMapKeybinds(): WorldMapKeybindSpec {
+    const source = ((window as any)['__worldMapKeybinds'] ?? {}) as Partial<Record<keyof WorldMapKeybindSpec, string>>;
+    return {
+        selectionUndo: parseShortcutOrDefault(source.selectionUndo, defaultKeybindLabels.selectionUndo),
+        selectionRedo: parseShortcutOrDefault(source.selectionRedo, defaultKeybindLabels.selectionRedo),
+        mapUndo: parseShortcutOrDefault(source.mapUndo, defaultKeybindLabels.mapUndo),
+        mapRedo: parseShortcutOrDefault(source.mapRedo, defaultKeybindLabels.mapRedo),
+        createStateFromSelection: parseShortcutOrDefault(source.createStateFromSelection, defaultKeybindLabels.createStateFromSelection),
+        assignSelectionToState: parseShortcutOrDefault(source.assignSelectionToState, defaultKeybindLabels.assignSelectionToState),
+        assignSelectionToStrategicRegion: parseShortcutOrDefault(source.assignSelectionToStrategicRegion, defaultKeybindLabels.assignSelectionToStrategicRegion),
+    };
+}
+
 export class TopBar extends Subscriber {
     public viewMode$: BehaviorSubject<ViewMode>;
     public colorSet$: BehaviorSubject<ColorSet>;
@@ -30,6 +125,7 @@ export class TopBar extends Subscriber {
     // Backward-compat alias for older callers/tools expecting a single selected province stream
     public selectedProvinceId$: BehaviorSubject<number | undefined>;
     public selectedProvinceIds$: BehaviorSubject<Set<number>>;
+    public selectedStateIds$: BehaviorSubject<Set<number>>;
     public hoverStateId$: BehaviorSubject<number | undefined>;
     public selectedStateId$: BehaviorSubject<number | undefined>;
     public hoverStrategicRegionId$: BehaviorSubject<number | undefined>;
@@ -77,10 +173,17 @@ export class TopBar extends Subscriber {
 
     private searchBox: HTMLInputElement;
     private dragProcessedProvinceIds: Set<number>;
+    private dragProcessedStateIds: Set<number>;
     private selectionUndoStack: Set<number>[];
     private selectionRedoStack: Set<number>[];
+    private selectionUndoStackStates: Set<number>[];
+    private selectionRedoStackStates: Set<number>[];
     private mapUndoStack: MapEditAction[];
     private mapRedoStack: MapEditAction[];
+
+    private actionStatus: HTMLDivElement;
+    private actionStatusTimer: ReturnType<typeof setTimeout> | undefined;
+    private keybinds: WorldMapKeybindSpec;
 
     private eventToMapPosition(
         canvas: HTMLCanvasElement,
@@ -146,6 +249,7 @@ export class TopBar extends Subscriber {
         this.hoverProvinceId$ = new BehaviorSubject<number | undefined>(undefined);
         this.selectedProvinceIds$ = new BehaviorSubject<Set<number>>(new Set<number>(state.selectedProvinceIds ?? []));
         this.selectedProvinceId$ = new BehaviorSubject<number | undefined>(state.selectedProvinceId ?? state.selectedProvinceIds?.[0] ?? undefined);
+        this.selectedStateIds$ = new BehaviorSubject<Set<number>>(new Set<number>(state.selectedStateIds ?? []));
         this.hoverStateId$ = new BehaviorSubject<number | undefined>(undefined);
         this.selectedStateId$ = new BehaviorSubject<number | undefined>(state.selectedStateId ?? undefined);
         this.hoverStrategicRegionId$ = new BehaviorSubject<number | undefined>(undefined);
@@ -163,11 +267,15 @@ export class TopBar extends Subscriber {
         this.paintbrushCanUndo$ = new BehaviorSubject<boolean>(false);
         this.paintbrushCanRedo$ = new BehaviorSubject<boolean>(false);
         this.dragProcessedProvinceIds = new Set<number>();
+        this.dragProcessedStateIds = new Set<number>();
         this.selectionUndoStack = [];
         this.selectionRedoStack = [];
+        this.selectionUndoStackStates = [];
+        this.selectionRedoStackStates = [];
         this.mapUndoStack = [];
         this.mapRedoStack = [];
         this.selectedConditions$ = new BehaviorSubject<ConditionItem[]>((state.selectedConditions ?? []).map(stringValueToConditionItem));
+        this.keybinds = getWorldMapKeybinds();
 
         this.addSubscription(this.conditions.selectedValues$.subscribe(selection => {
             this.selectedConditions$.next(selection.map(stringValueToConditionItem));
@@ -260,7 +368,12 @@ export class TopBar extends Subscriber {
             }
         }));
 
+        this.addSubscription(this.selectedStateIds$.subscribe(set => {
+            this.selectedStateId$.next(set.values().next().value);
+        }));
+
         this.searchBox = document.getElementById("searchbox") as HTMLInputElement;
+        this.actionStatus = document.getElementById('action-status') as HTMLDivElement;
 
         this.loadControls();
         this.registerEventListeners(canvas);
@@ -438,6 +551,8 @@ export class TopBar extends Subscriber {
     private loadStateEditButtons() {
         const createStateButton = document.getElementById('create-state-from-selection') as HTMLButtonElement;
         const assignSelectionButton = document.getElementById('assign-selection-to-state') as HTMLButtonElement;
+        const assignStrategicButton = document.getElementById('assign-states-to-strategicregion') as HTMLButtonElement | null;
+        const createStrategicButton = document.getElementById('create-strategicregion-from-selection') as HTMLButtonElement | null;
 
         this.addSubscription(fromEvent<PointerEvent>(createStateButton, 'pointerdown').subscribe(e => {
             e.preventDefault();
@@ -451,9 +566,32 @@ export class TopBar extends Subscriber {
             this.assignSelectionToState();
         }));
 
-        this.addSubscription(combineLatest([this.selectedProvinceIds$, this.selectedStateId$]).subscribe(([selectedProvinceIds, selectedStateId]) => {
+        if (assignStrategicButton) {
+            this.addSubscription(fromEvent<PointerEvent>(assignStrategicButton, 'pointerdown').subscribe(e => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.assignStatesToStrategicRegion();
+            }));
+        }
+
+        if (createStrategicButton) {
+            this.addSubscription(fromEvent<PointerEvent>(createStrategicButton, 'pointerdown').subscribe(e => {
+                e.preventDefault();
+                e.stopPropagation();
+                this.createStrategicRegionFromSelection();
+            }));
+        }
+
+        this.addSubscription(combineLatest([this.selectedProvinceIds$, this.selectedStateIds$, this.selectedStateId$, this.selectedStrategicRegionId$]).subscribe(([selectedProvinceIds, selectedStateIds, selectedStateId, selectedStrategicRegionId]) => {
             createStateButton.disabled = selectedProvinceIds.size === 0;
             assignSelectionButton.disabled = selectedProvinceIds.size === 0 || selectedStateId === undefined;
+            if (assignStrategicButton) {
+                // Enabled when either provinces or states are selected, and a target strategic region is chosen
+                assignStrategicButton.disabled = (selectedProvinceIds.size === 0 && selectedStateIds.size === 0) || selectedStrategicRegionId === undefined;
+            }
+            if (createStrategicButton) {
+                createStrategicButton.disabled = (selectedProvinceIds.size === 0 && selectedStateIds.size === 0);
+            }
         }));
     }
 
@@ -778,6 +916,7 @@ export class TopBar extends Subscriber {
                 dragMoved = false;
                 dragStarted = false;
                 this.dragProcessedProvinceIds.clear();
+                this.dragProcessedStateIds.clear();
 
                 if (this.viewMode$.value === 'province') {
                     const prov = this.hoverProvinceId$.value;
@@ -799,6 +938,26 @@ export class TopBar extends Subscriber {
                     } else {
                         pressedLeft = e.shiftKey;
                     }
+                } else if (this.viewMode$.value === 'state') {
+                    const st = this.hoverStateId$.value;
+                    if (st !== undefined) {
+                        if (e.ctrlKey) {
+                            // Ctrl+mousedown: toggle this state immediately and track for drag
+                            this.toggleSelectedState(st);
+                        } else if (e.shiftKey) {
+                            // Shift+mousedown starts drag-selection and adds the hovered state.
+                            pressedLeft = true;
+                            dragStarted = true;
+                            const next = new Set(this.selectedStateIds$.value);
+                            next.add(st);
+                            this.setSelectedStateIds(next, true);
+                        } else {
+                            pressedLeft = false;
+                        }
+                        this.dragProcessedStateIds.add(st);
+                    } else {
+                        pressedLeft = e.shiftKey;
+                    }
                 } else {
                     pressedLeft = false;
                 }
@@ -806,16 +965,26 @@ export class TopBar extends Subscriber {
         }));
 
         this.addSubscription(fromEvent<MouseEvent>(document.body, 'mousemove').subscribe(() => {
-            if (!pressedLeft || this.viewMode$.value !== 'province') {
+            if (!pressedLeft) {
                 return;
             }
             dragMoved = true;
-            const prov = this.hoverProvinceId$.value;
-            if (prov !== undefined && !this.dragProcessedProvinceIds.has(prov)) {
-                const next = new Set(this.selectedProvinceIds$.value);
-                next.add(prov);
-                this.setSelectedProvinceIds(next, false);
-                this.dragProcessedProvinceIds.add(prov);
+            if (this.viewMode$.value === 'province') {
+                const prov = this.hoverProvinceId$.value;
+                if (prov !== undefined && !this.dragProcessedProvinceIds.has(prov)) {
+                    const next = new Set(this.selectedProvinceIds$.value);
+                    next.add(prov);
+                    this.setSelectedProvinceIds(next, false);
+                    this.dragProcessedProvinceIds.add(prov);
+                }
+            } else if (this.viewMode$.value === 'state') {
+                const st = this.hoverStateId$.value;
+                if (st !== undefined && !this.dragProcessedStateIds.has(st)) {
+                    const next = new Set(this.selectedStateIds$.value);
+                    next.add(st);
+                    this.setSelectedStateIds(next, false);
+                    this.dragProcessedStateIds.add(st);
+                }
             }
         }));
 
@@ -829,8 +998,10 @@ export class TopBar extends Subscriber {
 
             pressedLeft = false;
             this.dragProcessedProvinceIds.clear();
+            this.dragProcessedStateIds.clear();
             if (dragStarted) {
                 this.selectionRedoStack.length = 0;
+                this.selectionRedoStackStates.length = 0;
             }
             dragStarted = false;
         }));
@@ -862,7 +1033,23 @@ export class TopBar extends Subscriber {
                     }
                     break;
                 case 'state':
-                    this.selectedStateId$.next(this.selectedStateId$.value === this.hoverStateId$.value ? undefined : this.hoverStateId$.value);
+                    {
+                        const st = this.hoverStateId$.value;
+                        if (e.ctrlKey) {
+                            // Ctrl+click: toggle (already handled on mousedown)
+                        } else {
+                            if (st !== undefined) {
+                                const cur = this.selectedStateIds$.value;
+                                if (cur.size === 1 && cur.has(st)) {
+                                    this.setSelectedStateIds(new Set(), true);
+                                } else {
+                                    this.setSelectedStateIds(new Set([st]), true);
+                                }
+                            } else {
+                                this.setSelectedStateIds(new Set(), true);
+                            }
+                        }
+                    }
                     break;
                 case 'strategicregion':
                     this.selectedStrategicRegionId$.next(this.selectedStrategicRegionId$.value === this.hoverStrategicRegionId$.value ? undefined : this.hoverStrategicRegionId$.value);
@@ -875,7 +1062,14 @@ export class TopBar extends Subscriber {
 
         this.addSubscription(fromEvent(canvas, 'dblclick').subscribe(e => {
             e.stopPropagation();
-            this.openMapItem(true);
+            if (this.viewMode$.value === 'province') {
+                const prov = this.hoverProvinceId$.value;
+                if (prov !== undefined) {
+                    this.toggleVictoryPoint(prov);
+                }
+            } else {
+                this.openMapItem(true);
+            }
         }));
 
         this.addSubscription(this.viewMode$.subscribe(() => this.onViewModeChange()));
@@ -897,7 +1091,8 @@ export class TopBar extends Subscriber {
             }
 
             const key = e.key.toLowerCase();
-            if (e.ctrlKey && !e.shiftKey && key === 'z') {
+
+            if (this.matchesShortcut(e, this.keybinds.mapUndo)) {
                 e.preventDefault();
                 // Paintbrush undo takes priority
                 if (this.paintbrushCanUndo$.value) {
@@ -905,13 +1100,14 @@ export class TopBar extends Subscriber {
                     return;
                 }
                 if (this.undoMapEdit()) {
+                    this.showActionStatus(feLocalize('worldmap.action.mapundo', 'Undid last state transfer/create change.'));
                     return;
                 }
-                this.undoProvinceSelection();
+                this.showActionStatus(feLocalize('worldmap.action.nomapundo', 'No map-edit history to undo.'));
                 return;
             }
 
-            if (e.ctrlKey && !e.shiftKey && key === 'y') {
+            if (this.matchesShortcut(e, this.keybinds.mapRedo)) {
                 e.preventDefault();
                 // Paintbrush redo takes priority
                 if (this.paintbrushCanRedo$.value) {
@@ -919,9 +1115,30 @@ export class TopBar extends Subscriber {
                     return;
                 }
                 if (this.redoMapEdit()) {
+                    this.showActionStatus(feLocalize('worldmap.action.mapredo', 'Redid last state transfer/create change.'));
                     return;
                 }
-                this.redoProvinceSelection();
+                this.showActionStatus(feLocalize('worldmap.action.nomapredo', 'No map-edit history to redo.'));
+                return;
+            }
+
+            if (this.matchesShortcut(e, this.keybinds.selectionUndo)) {
+                e.preventDefault();
+                if (this.viewMode$.value === 'state') {
+                    this.undoStateSelection();
+                } else {
+                    this.undoProvinceSelection();
+                }
+                return;
+            }
+
+            if (this.matchesShortcut(e, this.keybinds.selectionRedo)) {
+                e.preventDefault();
+                if (this.viewMode$.value === 'state') {
+                    this.redoStateSelection();
+                } else {
+                    this.redoProvinceSelection();
+                }
                 return;
             }
 
@@ -939,16 +1156,22 @@ export class TopBar extends Subscriber {
                 return;
             }
 
-            // Rapid state creation: Ctrl+Shift+N (N = New state)
-            if (e.ctrlKey && e.shiftKey && key === 'n') {
+            if (this.matchesShortcut(e, this.keybinds.createStateFromSelection)) {
                 e.preventDefault();
                 this.createStateFromSelection();
+                return;
             }
 
-            // Strategic region assignment: Ctrl+Shift+R
-            if (e.ctrlKey && e.shiftKey && key === 'r') {
+            if (this.matchesShortcut(e, this.keybinds.assignSelectionToState)) {
+                e.preventDefault();
+                this.assignSelectionToState();
+                return;
+            }
+
+            if (this.matchesShortcut(e, this.keybinds.assignSelectionToStrategicRegion)) {
                 e.preventDefault();
                 this.assignSelectionToStrategicRegion();
+                return;
             }
 
             // New province creation: Ctrl+Alt+P (Paint)
@@ -957,6 +1180,13 @@ export class TopBar extends Subscriber {
                 this.createNewProvince();
             }
         }));
+    }
+
+    private matchesShortcut(e: KeyboardEvent, shortcut: ShortcutSpec): boolean {
+        return e.key.toLowerCase() === shortcut.key &&
+            e.ctrlKey === shortcut.ctrl &&
+            e.shiftKey === shortcut.shift &&
+            e.altKey === shortcut.alt;
     }
 
     private toggleSelectedProvince(provinceId: number) {
@@ -975,6 +1205,8 @@ export class TopBar extends Subscriber {
             return;
         }
 
+        const largeSelectionReplaced = recordHistory && current.size >= 8 && nextSelection.size <= 1;
+
         if (recordHistory) {
             this.selectionUndoStack.push(new Set(current));
             if (this.selectionUndoStack.length > 200) {
@@ -984,26 +1216,103 @@ export class TopBar extends Subscriber {
         }
 
         this.selectedProvinceIds$.next(new Set(nextSelection));
+
+        if (largeSelectionReplaced) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.selectionreplaced',
+                    'Selection changed from {0} provinces to {1}. Press {2} to restore your previous selection.',
+                    current.size,
+                    nextSelection.size,
+                    this.keybinds.selectionUndo.label),
+                'warn');
+        }
+    }
+
+    private toggleSelectedState(stateId: number) {
+        const next = new Set(this.selectedStateIds$.value);
+        if (next.has(stateId)) {
+            next.delete(stateId);
+        } else {
+            next.add(stateId);
+        }
+        this.setSelectedStateIds(next, true);
+    }
+
+    private setSelectedStateIds(nextSelection: Set<number>, recordHistory: boolean) {
+        const current = this.selectedStateIds$.value;
+        if (this.isSameSelection(current, nextSelection)) {
+            return;
+        }
+
+        const largeSelectionReplaced = recordHistory && current.size >= 8 && nextSelection.size <= 1;
+
+        if (recordHistory) {
+            this.selectionUndoStackStates.push(new Set(current));
+            if (this.selectionUndoStackStates.length > 200) {
+                this.selectionUndoStackStates.shift();
+            }
+            this.selectionRedoStackStates.length = 0;
+        }
+
+        this.selectedStateIds$.next(new Set(nextSelection));
+
+        if (largeSelectionReplaced) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.selectionreplaced',
+                    'Selection changed from {0} provinces to {1}. Press {2} to restore your previous selection.',
+                    current.size,
+                    nextSelection.size,
+                    this.keybinds.selectionUndo.label),
+                'warn');
+        }
     }
 
     private undoProvinceSelection() {
         const previous = this.selectionUndoStack.pop();
         if (!previous) {
+            this.showActionStatus(feLocalize('worldmap.action.noselectionundo', 'No selection history to undo.'));
             return;
         }
 
         this.selectionRedoStack.push(new Set(this.selectedProvinceIds$.value));
         this.selectedProvinceIds$.next(previous);
+        this.showActionStatus(feLocalize('worldmap.action.selectionundo', 'Restored selection: {0} provinces selected.', previous.size));
     }
 
     private redoProvinceSelection() {
         const next = this.selectionRedoStack.pop();
         if (!next) {
+            this.showActionStatus(feLocalize('worldmap.action.noselectionredo', 'No selection history to redo.'));
             return;
         }
 
         this.selectionUndoStack.push(new Set(this.selectedProvinceIds$.value));
         this.selectedProvinceIds$.next(next);
+        this.showActionStatus(feLocalize('worldmap.action.selectionredo', 'Reapplied selection: {0} provinces selected.', next.size));
+    }
+
+    private undoStateSelection() {
+        const previous = this.selectionUndoStackStates.pop();
+        if (!previous) {
+            this.showActionStatus(feLocalize('worldmap.action.noselectionundo', 'No selection history to undo.'));
+            return;
+        }
+
+        this.selectionRedoStackStates.push(new Set(this.selectedStateIds$.value));
+        this.selectedStateIds$.next(previous);
+        this.showActionStatus(feLocalize('worldmap.action.selectionundo', 'Restored selection: {0} provinces selected.', previous.size));
+    }
+
+    private redoStateSelection() {
+        const next = this.selectionRedoStackStates.pop();
+        if (!next) {
+            this.showActionStatus(feLocalize('worldmap.action.noselectionredo', 'No selection history to redo.'));
+            return;
+        }
+
+        this.selectionUndoStackStates.push(new Set(this.selectedStateIds$.value));
+        this.selectedStateIds$.next(next);
+        this.showActionStatus(feLocalize('worldmap.action.selectionredo', 'Reapplied selection: {0} provinces selected.', next.size));
     }
 
     private isSameSelection(a: Set<number>, b: Set<number>): boolean {
@@ -1032,11 +1341,13 @@ export class TopBar extends Subscriber {
     private assignSelectionToState() {
         const selectedStateId = this.selectedStateId$.value;
         if (selectedStateId === undefined) {
+            this.showActionStatus(feLocalize('worldmap.action.assign.missingstate', 'Select a target state first, then transfer provinces.'), 'warn');
             return;
         }
 
         const selectedProvinceIds = Array.from(this.selectedProvinceIds$.value.values());
         if (selectedProvinceIds.length === 0) {
+            this.showActionStatus(feLocalize('worldmap.action.assign.missingselection', 'No provinces selected to transfer.'), 'warn');
             return;
         }
 
@@ -1055,6 +1366,67 @@ export class TopBar extends Subscriber {
             this.recordMapEdit(before, after);
             this.persistStates(changedStateIds);
             this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize('worldmap.action.assign.done',
+                'Transferred {0} provinces to state {1}.',
+                selectedProvinceIds.length,
+                selectedStateId));
+        } else {
+            this.showActionStatus(feLocalize('worldmap.action.assign.nochange', 'No provinces were moved.'));
+        }
+    }
+
+    private showActionStatus(message: string, tone: 'info' | 'warn' = 'info') {
+        if (!this.actionStatus) {
+            return;
+        }
+
+        this.actionStatus.textContent = message;
+        this.actionStatus.classList.remove('warn', 'hidden');
+        if (tone === 'warn') {
+            this.actionStatus.classList.add('warn');
+        }
+
+        if (this.actionStatusTimer) {
+            clearTimeout(this.actionStatusTimer);
+        }
+
+        this.actionStatusTimer = setTimeout(() => {
+            this.actionStatus.classList.add('hidden');
+        }, 3200);
+    }
+
+    private toggleVictoryPoint(provinceId: number) {
+        const worldMap = this.loader.worldMap;
+        const state = worldMap.getStateByProvinceId(provinceId);
+        if (!state) {
+            this.showActionStatus(feLocalize('TODO', 'Province {0} is not part of any state.', provinceId), 'warn');
+            return;
+        }
+
+        const before = worldMap.snapshotStates([state.id]);
+        const currentVp = state.victoryPoints[provinceId];
+
+        if (currentVp !== undefined) {
+            delete state.victoryPoints[provinceId];
+            const after = worldMap.snapshotStates([state.id]);
+            this.recordMapEdit(before, after);
+            this.persistStates([state.id]);
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize('TODO', 'Removed victory point from province {0} in state {1}.', provinceId, state.id));
+        } else {
+            state.victoryPoints[provinceId] = 1;
+            const after = worldMap.snapshotStates([state.id]);
+            this.recordMapEdit(before, after);
+            this.persistStates([state.id]);
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            const localisationKey = `VICTORY_POINT_${state.id}`;
+            vscode.postMessage<WorldMapMessage>({
+                command: 'persistvictorypointlocalisation',
+                key: localisationKey,
+                value: `Victory Point ${state.id}`,
+                stateId: state.id,
+            } as WorldMapMessage);
+            this.showActionStatus(feLocalize('TODO', 'Added victory point (value=1) to province {0} in state {1}. Localisation key: {2}', provinceId, state.id, localisationKey));
         }
     }
 
@@ -1542,6 +1914,50 @@ export class TopBar extends Subscriber {
         }
     }
 
+    private createStrategicRegionFromSelection() {
+        const explicitStateSelection = Array.from(this.selectedStateIds$.value.values());
+        const selectedProvinceIds = Array.from(this.selectedProvinceIds$.value.values());
+
+        const selectedStateIds = new Set<number>(explicitStateSelection.length > 0 ? explicitStateSelection : []);
+        if (selectedStateIds.size === 0) {
+            for (const provinceId of selectedProvinceIds) {
+                const s = this.loader.worldMap.getStateByProvinceId(provinceId);
+                if (s) selectedStateIds.add(s.id);
+            }
+        }
+
+        if (selectedStateIds.size === 0) {
+            this.showActionStatus(feLocalize('worldmap.action.createstrategic.missingselection', 'No states selected to create strategic region from.'), 'warn');
+            return;
+        }
+
+        const nextId = this.loader.worldMap.getNextStrategicRegionId();
+        const beforeIds = new Set<number>([nextId]);
+        for (const stateId of selectedStateIds) {
+            const st = this.loader.worldMap.getStateById(stateId);
+            if (st) {
+                for (const pid of st.provinces) {
+                    const src = this.loader.worldMap.getStrategicRegionByProvinceId(pid);
+                    if (src) beforeIds.add(src.id);
+                }
+            }
+        }
+
+        const before = this.loader.worldMap.snapshotStrategicRegions(Array.from(beforeIds.values()));
+
+        const created = this.loader.worldMap.createStrategicRegionFromStates(Array.from(selectedStateIds.values()));
+        if (created !== undefined) {
+            const after = this.loader.worldMap.snapshotStrategicRegions(created.changedRegionIds);
+            this.recordMapEdit(before, after, 'strategicregion');
+            this.persistStrategicRegions(created.changedRegionIds);
+            this.selectedStrategicRegionId$.next(created.newStrategicRegionId);
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize('worldmap.action.createstrategic.done', 'Created strategic region {0} from selection.', created.newStrategicRegionId));
+        } else {
+            this.showActionStatus(feLocalize('worldmap.action.createstrategic.nochange', 'No strategic region was created.'), 'warn');
+        }
+    }
+
     private persistStates(stateIds: number[], deletedFiles: string[] = []) {
         const payload: PersistedState[] = Array.from(new Set(stateIds))
             .map(id => this.loader.worldMap.getStateById(id))
@@ -1564,6 +1980,53 @@ export class TopBar extends Subscriber {
 
         if (payload.length > 0 || deletedFiles.length > 0) {
             vscode.postMessage<WorldMapMessage>({ command: 'persiststates', states: payload, deletedFiles: Array.from(new Set(deletedFiles)) });
+        }
+    }
+
+    private assignStatesToStrategicRegion() {
+        const selectedStrategicRegionId = this.selectedStrategicRegionId$.value;
+        if (selectedStrategicRegionId === undefined) {
+            this.showActionStatus(feLocalize('worldmap.action.assignstrategic.missingregion', 'Select a target strategic region first, then add states.'), 'warn');
+            return;
+        }
+
+        const selectedProvinceIds = Array.from(this.selectedProvinceIds$.value.values());
+        const explicitStateSelection = Array.from(this.selectedStateIds$.value.values());
+        if (selectedProvinceIds.length === 0 && explicitStateSelection.length === 0) {
+            this.showActionStatus(feLocalize('worldmap.action.assignstrategic.missingselection', 'No states selected to add.'), 'warn');
+            return;
+        }
+
+        const selectedStateIds = new Set<number>(explicitStateSelection.length > 0 ? explicitStateSelection : []);
+        if (selectedStateIds.size === 0) {
+            for (const provinceId of selectedProvinceIds) {
+                const s = this.loader.worldMap.getStateByProvinceId(provinceId);
+                if (s) selectedStateIds.add(s.id);
+            }
+        }
+
+        if (selectedStateIds.size === 0) {
+            this.showActionStatus(feLocalize('worldmap.action.assignstrategic.missingselection', 'No states selected to add.'), 'warn');
+            return;
+        }
+
+        const affectedRegionIds = new Set<number>([selectedStrategicRegionId]);
+        for (const provinceId of selectedProvinceIds) {
+            const src = this.loader.worldMap.getStrategicRegionByProvinceId(provinceId);
+            if (src) affectedRegionIds.add(src.id);
+        }
+
+        const before = this.loader.worldMap.snapshotStrategicRegions(Array.from(affectedRegionIds.values()));
+
+        const changed = this.loader.worldMap.assignStatesToStrategicRegion(Array.from(selectedStateIds.values()), selectedStrategicRegionId);
+        if (changed && changed.length > 0) {
+            const after = this.loader.worldMap.snapshotStrategicRegions(changed);
+            this.recordMapEdit(before, after, 'strategicregion');
+            this.persistStrategicRegions(changed);
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize('worldmap.action.assignstrategic.done', 'Added {0} states to strategic region {1}.', selectedStateIds.size, selectedStrategicRegionId));
+        } else {
+            this.showActionStatus(feLocalize('worldmap.action.assignstrategic.nochange', 'No states were moved.'));
         }
     }
 

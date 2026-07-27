@@ -50,6 +50,7 @@ interface FEWorldMapClassExtra {
 
     assignProvincesToStrategicRegion(provinceIds: number[], targetSRId: number): number[] | undefined;
     assignStatesToStrategicRegion(stateIds: number[], targetSRId: number): number[] | undefined;
+    createStrategicRegionFromStates(stateIds: number[]): { newStrategicRegionId: number; changedRegionIds: number[] } | undefined;
     getNextStrategicRegionId(): number;
     snapshotStrategicRegions(srIds: number[]): StrategicRegionSnapshot[];
     restoreStrategicRegions(snapshots: StrategicRegionSnapshot[]): void;
@@ -633,6 +634,10 @@ class FEWorldMapClass implements FEWorldMap {
         return this.findNextStateId();
     }
 
+    public getNextStrategicRegionId(): number {
+        return this.findNextStrategicRegionId();
+    }
+
     public snapshotStates(stateIds: number[]): StateSnapshot[] {
         const uniqueStateIds = Array.from(new Set(stateIds));
         return uniqueStateIds.map(id => ({
@@ -676,6 +681,16 @@ class FEWorldMapClass implements FEWorldMap {
         }
 
         return Math.max(1, this.states.length);
+    }
+
+    private findNextStrategicRegionId(): number {
+        for (let id = 1; id < this.strategicRegions.length; id++) {
+            if (!this.strategicRegions[id]) {
+                return id;
+            }
+        }
+
+        return Math.max(1, this.strategicRegions.length);
     }
 
     private recomputeStateGeometry(state: State): void {
@@ -770,15 +785,6 @@ class FEWorldMapClass implements FEWorldMap {
             }
         }
         return this.assignProvincesToStrategicRegion(allProvinceIds, targetSRId);
-    }
-
-    public getNextStrategicRegionId(): number {
-        for (let id = 1; id < this.strategicRegions.length; id++) {
-            if (!this.strategicRegions[id]) {
-                return id;
-            }
-        }
-        return Math.max(1, this.strategicRegions.length);
     }
 
     public snapshotStrategicRegions(srIds: number[]): StrategicRegionSnapshot[] {
@@ -1550,6 +1556,49 @@ class FEWorldMapClass implements FEWorldMap {
             centerOfMass: { ...state.centerOfMass },
             token: state.token ? { ...state.token } : null,
         };
+    }
+
+    public createStrategicRegionFromStates(stateIds: number[]): { newStrategicRegionId: number; changedRegionIds: number[] } | undefined {
+        const uniqueStateIds = Array.from(new Set(stateIds)).filter(id => !!this.getStateById(id));
+        if (uniqueStateIds.length === 0) {
+            return undefined;
+        }
+
+        const newId = this.findNextStrategicRegionId();
+        const newRegion = {
+            id: newId,
+            name: `STRATEGIC_REGION_${newId}`,
+            provinces: [] as number[],
+            navalTerrain: null,
+            file: `map/strategicregions/${newId}-strategicregion.txt`,
+            token: null,
+            boundingBox: { x: 0, y: 0, w: 0, h: 0 },
+            centerOfMass: { x: 0, y: 0 },
+            mass: 0,
+        } as StrategicRegion;
+
+        this.strategicRegions[newId] = newRegion;
+        if (newId >= this.strategicRegionsCount) {
+            this.strategicRegionsCount = newId + 1;
+        }
+
+        const changed = this.assignStatesToStrategicRegion(uniqueStateIds, newId);
+        if (!changed || changed.length === 0) {
+            // Revert creation
+            this.strategicRegions[newId] = undefined as any;
+            let lastId = this.badStrategicRegionsCount - 1;
+            for (let i = this.strategicRegions.length - 1; i >= this.badStrategicRegionsCount; i--) {
+                if (this.strategicRegions[i]) {
+                    lastId = i;
+                    break;
+                }
+            }
+
+            this.strategicRegionsCount = Math.max(this.badStrategicRegionsCount, lastId + 1);
+            return undefined;
+        }
+
+        return { newStrategicRegionId: newId, changedRegionIds: changed };
     }
 
     private computeBoundingBox(boxes: Zone[]): Zone {

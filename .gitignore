@@ -11,3 +11,7 @@ out/
 /.vscode-test
 Plan.md
 .vscode-test-web
+.github
+.github/*
+!.github/workflows
+!.github/*.yml

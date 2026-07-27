@@ -239,7 +239,7 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage | PersistProvincesMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage;
+export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage | PersistProvincesMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | PersistVictoryPointLocalisationMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
@@ -429,6 +429,13 @@ export interface ProvinceDraft {
     valid: boolean;
     /** Human-readable validation messages. */
     errors: string[];
+}
+
+export interface PersistVictoryPointLocalisationMessage {
+    command: 'persistvictorypointlocalisation';
+    key: string;
+    value: string;
+    stateId: number;
 }
 
 export type ProgressReporter = (progress: string) => Promise<void>;

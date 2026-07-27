@@ -84,6 +84,43 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Loose parser syntax check to allow missing `}` or redundant `}` at the end of a file (#107).
 * Support new focus icon format and `alternate_icon` (#106).
 
+## [0.12.6] - 2026/06/01
+
+### Added
+* Double-click a province in Province view mode to drop (or remove) a victory point. Adds a placeholder VP value of 1 to the state file and generates a localisation key in `localisation/victory_points_l_english.yml` for quick human editing.
+
+## [0.12.5] - 2026/05/30
+
+### Added
+* Add ability to add selected states to strategic regions from world map preview (multi-state selection support, undo/redo, and persistence plumbing).
+* Add ability to create brand-new strategic regions from current selection (states or provinces) and persist them as new strategic region files.
+
+## [0.12.4] - 2026/05/29
+
+### Added
+* Add configurable world map keybind settings via VS Code `settings.json` for selection undo/redo, map undo/redo, create-state, and assign-selection actions.
+
+### Changed
+* Update world map shortcut handling to use runtime-configured keybinds instead of hardcoded key combinations.
+* Separate map-edit undo/redo history from selection undo/redo history so each command only affects its own context.
+* Improve world map action feedback presentation to a subtler inline status message and show dynamic key names in selection-restore hints.
+
+### Fixed
+* Fix missing dev-only module import by adding `debug.shouldignore` shim used by the development test command.
+* Fix cache interval timer typing/cleanup compatibility for mixed Node/web TypeScript targets.
+* Prevent webview content overflow: topbar/toolbar and inline action messages now wrap or truncate appropriately, and the world map webview CSS was tightened to avoid text extending past the window frame (prevents unexpected scrollbars and layout breakage).
+
+## [0.12.3] - 2026/05/29
+
+### Added
+* Add fork-specific README content, including VSIX installation instructions and rapid state-creation usage notes.
+* Add repomix configuration and generated output files.
+
+### Changed
+* Update npm dependencies and regenerate lockfile entries.
+* Update icon assets.
+* Apply related updates across preview, webview, test-ui, and TypeScript configuration files to align with documentation and configuration changes.
+
 ## [0.12.2] - 2024/12/07
 
 ### Fixed

@@ -152,6 +152,48 @@
 							]
 						},
 						"description": "%hoi4modernutils.featureFlags.desc%"
+					},
+					"hoi4ModernUtils.worldMapSelectionUndoKeybind": {
+						"title": "%hoi4modernutils.worldMapSelectionUndoKeybind.title%",
+						"type": "string",
+						"default": "T",
+						"description": "%hoi4modernutils.worldMapSelectionUndoKeybind.desc%"
+					},
+					"hoi4ModernUtils.worldMapSelectionRedoKeybind": {
+						"title": "%hoi4modernutils.worldMapSelectionRedoKeybind.title%",
+						"type": "string",
+						"default": "R",
+						"description": "%hoi4modernutils.worldMapSelectionRedoKeybind.desc%"
+					},
+					"hoi4ModernUtils.worldMapMapUndoKeybind": {
+						"title": "%hoi4modernutils.worldMapMapUndoKeybind.title%",
+						"type": "string",
+						"default": "Ctrl+Z",
+						"description": "%hoi4modernutils.worldMapMapUndoKeybind.desc%"
+					},
+					"hoi4ModernUtils.worldMapMapRedoKeybind": {
+						"title": "%hoi4modernutils.worldMapMapRedoKeybind.title%",
+						"type": "string",
+						"default": "Ctrl+Y",
+						"description": "%hoi4modernutils.worldMapMapRedoKeybind.desc%"
+					},
+					"hoi4ModernUtils.worldMapCreateStateKeybind": {
+						"title": "%hoi4modernutils.worldMapCreateStateKeybind.title%",
+						"type": "string",
+						"default": "Ctrl+Shift+N",
+						"description": "%hoi4modernutils.worldMapCreateStateKeybind.desc%"
+					},
+					"hoi4ModernUtils.worldMapAssignSelectionKeybind": {
+						"title": "%hoi4modernutils.worldMapAssignSelectionKeybind.title%",
+						"type": "string",
+						"default": "Ctrl+Enter",
+						"description": "%hoi4modernutils.worldMapAssignSelectionKeybind.desc%"
+					},
+					"hoi4ModernUtils.worldMapAssignSelectionToStrategicRegionKeybind": {
+						"title": "%hoi4modernutils.worldMapAssignSelectionToStrategicRegionKeybind.title%",
+						"type": "string",
+						"default": "Ctrl+Shift+G",
+						"description": "%hoi4modernutils.worldMapAssignSelectionToStrategicRegionKeybind.desc%"
 					}
 				}
 			}

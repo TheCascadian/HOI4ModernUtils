@@ -76,6 +76,7 @@ export class Renderer extends Subscriber {
                 topBar.colorSet$,
                 topBar.hoverProvinceId$,
                 topBar.selectedProvinceIds$,
+                topBar.selectedStateIds$,
                 topBar.hoverStateId$,
                 topBar.selectedStateId$,
                 topBar.hoverStrategicRegionId$,
@@ -929,7 +930,25 @@ ${worldMap.getProvinceWarnings(province, stateObject, strategicRegion, supplyAre
 
     private renderStateHoverSelection(worldMap: FEWorldMap) {
         const hover = worldMap.getStateById(this.topBar.hoverStateId$.value);
-        this.renderHoverSelection(worldMap, hover, worldMap.getStateById(this.topBar.selectedStateId$.value));
+
+        // Build the selected provinces set for multi-state selection support.
+        const selectedStateIds = this.topBar.selectedStateIds$?.value ?? new Set<number>();
+        let selected: { provinces: number[] } | undefined = undefined;
+        if (selectedStateIds.size > 0) {
+            const provincesSet = new Set<number>();
+            for (const sid of selectedStateIds) {
+                const s = worldMap.getStateById(sid);
+                if (s) {
+                    for (const p of s.provinces) provincesSet.add(p);
+                }
+            }
+            selected = { provinces: Array.from(provincesSet) };
+        } else {
+            const sel = worldMap.getStateById(this.topBar.selectedStateId$.value);
+            if (sel) selected = { provinces: sel.provinces };
+        }
+
+        this.renderHoverSelection(worldMap, hover, selected);
         hover && this.isTooltipVisible() && this.renderStateTooltip(hover, worldMap, this.topBar.selectedConditions$.value);
     }
 

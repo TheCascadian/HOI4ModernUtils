@@ -4,7 +4,7 @@ import worldmapviewstyles from './worldmapview.css';
 import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistVictoryPointLocalisationMessage } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
@@ -68,6 +68,17 @@ export class WorldMap {
     }
 
     private renderWorldMap(webview: vscode.Webview): string {
+        const conf = getConfiguration();
+        const worldMapKeybinds = {
+            selectionUndo: conf.get<string>('worldMapSelectionUndoKeybind', 'T'),
+            selectionRedo: conf.get<string>('worldMapSelectionRedoKeybind', 'R'),
+            mapUndo: conf.get<string>('worldMapMapUndoKeybind', 'Ctrl+Z'),
+            mapRedo: conf.get<string>('worldMapMapRedoKeybind', 'Ctrl+Y'),
+            createStateFromSelection: conf.get<string>('worldMapCreateStateKeybind', 'Ctrl+Shift+N'),
+            assignSelectionToState: conf.get<string>('worldMapAssignSelectionKeybind', 'Ctrl+Enter'),
+            assignSelectionToStrategicRegion: conf.get<string>('worldMapAssignSelectionToStrategicRegionKeybind', 'Ctrl+Shift+G'),
+        };
+
         return html(
             webview,
             localizeText(worldmapview),
@@ -76,6 +87,7 @@ export class WorldMap {
                 { content: 'window.__enableSupplyArea = ' + getConfiguration().enableSupplyArea + ';' },
                 { content: 'window.__stateBoundaryColor = ' + JSON.stringify(getConfiguration().stateBoundaryColor) + ';' },
                 { content: 'window.__stateBoundaryWidth = ' + getConfiguration().stateBoundaryWidth + ';' },
+                { content: 'window.__worldMapKeybinds = ' + JSON.stringify(worldMapKeybinds) + ';' },
                 'common.js',
                 'worldmap.js'
             ],
@@ -128,6 +140,9 @@ export class WorldMap {
                     break;
                 case 'persiststrategicregions':
                     await this.persistStrategicRegions((msg as any).strategicRegions, (msg as any).deletedFiles ?? []);
+                    break;
+                case 'persistvictorypointlocalisation':
+                    await this.persistVictoryPointLocalisation(msg as PersistVictoryPointLocalisationMessage);
                     break;
                 case 'persistprovinces':
                     await this.persistProvinces((msg as any).provinces, (msg as any).deletedFiles ?? []);
@@ -496,6 +511,45 @@ export class WorldMap {
             await mkdirs(dirUri(targetFile));
             await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
         }
+    }
+
+    private async persistVictoryPointLocalisation(msg: PersistVictoryPointLocalisationMessage) {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+            debug('No workspace folder open; skipping victory point localisation write.');
+            return;
+        }
+
+        const localisationDir = vscode.Uri.joinPath(workspaceFolder.uri, 'localisation');
+        const targetFile = vscode.Uri.joinPath(localisationDir, 'victory_points_l_english.yml');
+        const entryText = ` ${msg.key}:0 "${msg.value}"`;
+
+        let existingContent = '';
+        try {
+            const sourceBytes = await vscode.workspace.fs.readFile(targetFile);
+            existingContent = Buffer.from(sourceBytes).toString('utf-8').replace(/^\uFEFF/, '');
+        } catch {
+            // File does not exist yet; create it.
+        }
+
+        const eol = existingContent.includes('\r\n') ? '\r\n' : '\n';
+
+        if (existingContent.includes(`${msg.key}:`)) {
+            debug(`Localisation key ${msg.key} already exists; skipping.`);
+            return;
+        }
+
+        let newContent: string;
+        if (existingContent.length === 0) {
+            newContent = `l_english:${eol}${entryText}${eol}`;
+        } else {
+            const trimmed = existingContent.replace(/\s+$/, '');
+            newContent = `${trimmed}${eol}${entryText}${eol}`;
+        }
+
+        await mkdirs(localisationDir);
+        await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
+        debug(`Wrote victory point localisation entry ${msg.key} to ${targetFile.fsPath}`);
     }
 
     private async resolveTargetFile(relativePath: string): Promise<vscode.Uri> {
