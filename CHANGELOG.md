@@ -6,6 +6,23 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 **Versioning note:** This fork ([TheCascadian/HOI4ModernUtils](https://github.com/TheCascadian/HOI4ModernUtils)) keeps its own `0.x` version line, independent of the upstream project it was forked from. Entries at `[0.4.0]` and above are this fork's own releases. Entries from `[0.15.1]` down to `[0.13.0]` are inherited from upstream (`herbix/hoi4modutilities`) and were merged into this fork's history alongside its own work; older upstream entries have been compressed out of this file -  see the [upstream changelog](https://github.com/herbix/hoi4modutilities/blob/master/CHANGELOG.md) for full history. Because the two projects numbered releases independently, some version numbers (e.g. `0.12.x`, `0.3.2`) appear twice in git history for unrelated changes at different dates; this file only lists one entry per number going forward.
 
+## [0.4.2] - 2026-07-27
+
+### Added
+* Experimental Performance menu in the world-map toolbar. It provides opt-in rendering controls with an enabled-count badge, keyboard and click-away dismissal, and a confirmation dialog before an option that can change visual fidelity is enabled.
+* Five experimental render options: warning indexing, edge decimation, river pixel collapse, label-grid deduplication, and coarse province rendering. The fidelity-preserving warning index is separated from the visually lossy options, which remain disabled by default.
+* World-map runtime render test support, including repeatable viewport cases, render duration samples, optional heap and pixel-hash capture, river diagnostics, and runtime-error reporting.
+* World-map profiling scripts for renderer and webview measurements, including an aggressive opt-in profile preset.
+
+### Changed
+* Improved world-map rendering efficiency by indexing rendered provinces for edge fallback lookups and skipping river pixels outside the viewport.
+* Render optimizations are saved with the map view state and are reapplied when the view is restored.
+* UI test preparation now compiles the webview bundle before running, so release checks exercise the current world-map code.
+
+### Fixed
+* Low-zoom river rendering can collapse duplicate samples onto a single device pixel when that experimental option is enabled, reducing redundant drawing.
+* Low-zoom label deduplication can prevent nearby labels from being drawn on top of each other when that experimental option is enabled.
+
 ## [0.4.0] - 2026-07-26
 
 ### Added
