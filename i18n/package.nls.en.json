@@ -3,7 +3,7 @@
     "hoi4modernutils.category": "HOI4 Mod Utilities",
     "hoi4modernutils.dds.editorName": "Preview DDS",
     "hoi4modernutils.tga.editorName": "Preview TGA",
-    "hoi4modernutils.displayName": "HOI4 Mod Utilities",
+    "hoi4modernutils.displayName": "HOI4 Modern Utils",
     "hoi4modernutils.featureFlags.title": "Feature Flags",
     "hoi4modernutils.featureFlags.desc": "Feature flags are used to disable or enable features. Reloading is required after changing this. Please refer to Wiki on Github for details.",
     "hoi4modernutils.installPath.title": "Install Path",

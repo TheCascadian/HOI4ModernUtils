@@ -1,4 +1,4 @@
-# HOI4 Mod Utilities
+# HOI4 Modern Utils
 
 This extension add tools for Heart of Iron IV modding. Some of the tools may work on other Paradox games.
 
