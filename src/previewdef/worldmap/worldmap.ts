@@ -1168,7 +1168,9 @@ export class WorldMap {
         }
 
         for (const [x, y, newColor] of paintedPixels) {
-            if (x < 0 || x >= width || y < 0 || y >= height) continue;
+            if (x < 0 || x >= width || y < 0 || y >= height) {
+                continue;
+            }
 
             // BMP is bottom-up: row (height - 1 - y)
             const row = height - 1 - y;

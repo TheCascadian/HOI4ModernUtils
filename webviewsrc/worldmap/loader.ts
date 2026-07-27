@@ -597,9 +597,12 @@ class FEWorldMapClass implements FEWorldMap {
         const newState: State = {
             id: newStateId,
             name: `STATE_${newStateId}`,
+            localisedName: undefined,
             manpower: 0,
             category: template?.category ?? 'rural',
-            owner: template?.owner,
+            categoryColor: template?.categoryColor ?? 0,
+            owner: template?.owner ?? [],
+            controller: template?.controller ?? [],
             provinces: [],
             cores: [...(template?.cores ?? [])],
             impassable: template?.impassable ?? false,

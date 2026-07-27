@@ -1173,11 +1173,11 @@ ${worldMap.getSupplyAreaWarnings(supplyArea).map(v => '|r|' + v).join('\n')}`);
     }
 }
 
-function solveWithCondition<T>(value: WithCondition<T>[] | undefined, selectedConditions: ConditionItem[]): T | undefined {
+export function solveWithCondition<T>(value: WithCondition<T>[] | undefined, selectedConditions: ConditionItem[]): T | undefined {
     return value?.find(o => applyCondition(o.condition, selectedConditions))?.value;
 }
 
-function solveWithConditionAsSet<T>(value: WithCondition<T>[] | undefined, selectedConditions: ConditionItem[]): T[] {
+export function solveWithConditionAsSet<T>(value: WithCondition<T>[] | undefined, selectedConditions: ConditionItem[]): T[] {
     return value?.filter(o => applyCondition(o.condition, selectedConditions)).map(o => o.value) ?? [];
 }
 

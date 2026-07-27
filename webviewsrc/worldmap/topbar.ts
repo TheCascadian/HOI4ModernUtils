@@ -6,7 +6,7 @@ import { PersistedState, WorldMapMessage, WorldMapWarning, ProvinceDraft } from 
 import { feLocalize } from "../util/i18n";
 import { DivDropdown } from "../util/dropdown";
 import { BehaviorSubject, combineLatest, fromEvent } from 'rxjs';
-import { Renderer } from './renderer';
+import { Renderer, solveWithCondition, solveWithConditionAsSet } from './renderer';
 import { sendEvent } from '../util/telemetry';
 import { getState } from "../util/common";
 import { ConditionItem, conditionItemToStringValue, conditionToString, stringValueToConditionItem } from "../../src/hoiformat/condition";
@@ -1551,9 +1551,9 @@ export class TopBar extends Subscriber {
                 name: state.name,
                 manpower: state.manpower,
                 category: state.category,
-                owner: state.owner,
+                owner: solveWithCondition(state.owner, this.selectedConditions$.value),
                 provinces: [...state.provinces],
-                cores: [...state.cores],
+                cores: solveWithConditionAsSet(state.cores, this.selectedConditions$.value),
                 impassable: state.impassable,
                 victoryPoints: { ...state.victoryPoints },
                 resources: { ...state.resources },
