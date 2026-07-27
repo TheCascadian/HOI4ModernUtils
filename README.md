@@ -8,15 +8,15 @@ This extension add tools for Heart of Iron IV modding. Some of the tools may wor
 > This fork is specifically made for the purpose of allowing rapid and repetitive state creation with minimal effort, all neatly presented through the Preview World Map feature.
 > I may or may not update this over time with additional things, but please do not spam me with requests for this or that update. I have many projects in the works. Thank you for your understanding.
 
-* Shift + Left-drag — select provinces by dragging (Province view)
-* Ctrl + Left-click — toggle a province in the multi-selection (Province view)
-* Left-click — single-select / deselect province (Province view)
-* Ctrl + Shift + N — Create new state from current selection (rapid state creation)
-* Ctrl + Z — Undo (map-edit undo first: create/assign; if none, selection undo)
-* Ctrl + Y — Redo (map-edit redo first; if none, selection redo)
-* Enter (in search box) — Run search for entered province/state id
-* Double-click (Province view) — Drop/remove a victory point on the hovered province (value=1 placeholder, with localisation key)
-* Double-click (State/Strategic Region/Supply Area views) — Open hovered region file
+* Shift + Left-drag -  select provinces by dragging (Province view)
+* Ctrl + Left-click -  toggle a province in the multi-selection (Province view)
+* Left-click -  single-select / deselect province (Province view)
+* Ctrl + Shift + N -  Create new state from current selection (rapid state creation)
+* Ctrl + Z -  Undo (map-edit undo first: create/assign; if none, selection undo)
+* Ctrl + Y -  Redo (map-edit redo first; if none, selection redo)
+* Enter (in search box) -  Run search for entered province/state id
+* Double-click (Province view) -  Drop/remove a victory point on the hovered province (value=1 placeholder, with localisation key)
+* Double-click (State/Strategic Region/Supply Area views) -  Open hovered region file
 
 ## Install Without Marketplace
 
@@ -31,13 +31,13 @@ vsce package
 * The current package generated for this repository is:
 
 ```text
-hoi4modernutils-0.3.2.vsix
+hoi4modernutils-0.4.0.vsix
 ```
 
 * Users can install that package from a terminal:
 
 ```powershell
-code --install-extension hoi4modernutils-0.3.2.vsix
+code --install-extension hoi4modernutils-0.4.0.vsix
 ```
 
 * Or from inside VS Code:
@@ -119,15 +119,18 @@ If you installed the extension from a `.vsix` file instead of the Marketplace, t
 * GUI of focus tree and MIO can't be configured like technology tree.
 * Edge lines on world map not always fit edge of colors.
 
-## Release Notes - [0.3.2]
+## Release Notes - [0.4.0]
 
 ### Added
-* Add search box in event tree preview.
-* Add localised labels on world map preview.
-* Add state category color set in world map preview.
+* Province paintbrush editing, with undo/redo.
+* State/Strategic Region transfer tools: assign states to a strategic region, or create a new one from the current selection.
+* Double-click a province to toggle a placeholder victory point.
+* Configurable world map keybinds.
 
-### Update
-* Refine localisation file preprocessing to accept more files.
+### Changed
+* Renamed to "HOI4 Modern Utils".
+
+See [CHANGELOG.md](CHANGELOG.md) for full details and prior releases.
 
 ## Contribute
 * If you have any suggestion, feel free to create an issue on this [Github repo](https://github.com/TheCascadian/HOI4ModernUtils/issues).

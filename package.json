@@ -2,7 +2,7 @@
 	"name": "hoi4modernutils",
 	"displayName": "%hoi4modernutils.displayName%",
 	"description": "Utilities for Heart of Iron IV mods developers",
-	"version": "0.3.2",
+	"version": "0.4.0",
 	"author": "TheCascadian",
 	"publisher": "thecascadian",
 	"icon": "icon.png",

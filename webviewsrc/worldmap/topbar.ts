@@ -1513,10 +1513,10 @@ export class TopBar extends Subscriber {
         let nextColor: number | undefined;
 
         if (targetProvince && useExistingColor) {
-            // Edit boundaries of an existing province — reuse its colour.
+            // Edit boundaries of an existing province -  reuse its colour.
             nextColor = targetProvince.color;
         } else {
-            // Create a new province — generate a fresh, unused colour.
+            // Create a new province -  generate a fresh, unused colour.
             nextColor = this.loader.worldMap.findNextProvinceColor?.() ?? this.findNextAvailableColor();
         }
 
@@ -1692,7 +1692,7 @@ export class TopBar extends Subscriber {
 
     /**
      * Cancel paintbrush mode.  Discards the draft without touching the
-     * live map — no reload is necessary.
+     * live map -  no reload is necessary.
      */
     private cancelPaintbrushMode() {
         if (!this.paintbrushActive$.value) {
@@ -1716,14 +1716,14 @@ export class TopBar extends Subscriber {
             panel.style.display = 'none';
         }
 
-        // No reload needed — the live map was never mutated.
+        // No reload needed -  the live map was never mutated.
         this.mapMutation$.next(this.mapMutation$.value + 1);
         sendEvent('worldmap.paintbrush.cancel');
     }
 
     /**
      * Paint a pixel at the given map coordinates.
-     * Writes to the ProvinceDraft's pixel mask ONLY — the live
+     * Writes to the ProvinceDraft's pixel mask ONLY -  the live
      * worldMap.colorByPosition is NOT mutated until Apply.
      * Painting is clamped to the set of provinces that were selected
      * when paintbrush mode was entered.

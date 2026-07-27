@@ -558,7 +558,7 @@ export class WorldMap {
             return getHoiOpenedFileOriginalUri(modFile);
         }
 
-        // File doesn't exist in the mod yet — write into the mod folder determined
+        // File doesn't exist in the mod yet -  write into the mod folder determined
         // by the selected .mod descriptor's `path` attribute.
         const modPath = await getModPathFromDescriptor();
         if (modPath) {

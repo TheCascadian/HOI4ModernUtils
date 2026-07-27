@@ -1,10 +1,28 @@
 # Change Log
 
-All notable changes to the "hoi4modernutils" extension will be documented in this file.
+All notable changes to the "HOI4 Modern Utils" extension will be documented in this file.
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
-## [0.15.1] - 2026/07/26 - Latest
+**Versioning note:** This fork ([TheCascadian/HOI4ModernUtils](https://github.com/TheCascadian/HOI4ModernUtils)) keeps its own `0.x` version line, independent of the upstream project it was forked from. Entries at `[0.4.0]` and above are this fork's own releases. Entries from `[0.15.1]` down to `[0.13.0]` are inherited from upstream (`herbix/hoi4modutilities`) and were merged into this fork's history alongside its own work; older upstream entries have been compressed out of this file -  see the [upstream changelog](https://github.com/herbix/hoi4modutilities/blob/master/CHANGELOG.md) for full history. Because the two projects numbered releases independently, some version numbers (e.g. `0.12.x`, `0.3.2`) appear twice in git history for unrelated changes at different dates; this file only lists one entry per number going forward.
+
+## [0.4.0] - 2026-07-26
+
+### Added
+* Province paintbrush editing: paint/redraw province boundaries directly on the world map, create new provinces from a selection, and undo/redo province BMP + `definition.csv` edits.
+* State/Strategic Region transfer tools: assign selected states to an existing strategic region, or create a brand-new strategic region from the current state/province selection, with dedicated undo/redo and file persistence.
+* Double-click a province in Province view to toggle a placeholder victory point (writes `value=1` to the state file and a starter localisation key in `localisation/victory_points_l_english.yml`).
+* Configurable world map keybinds (selection undo/redo, map undo/redo, create-state, assign-selection, assign-to-strategic-region) via `hoi4ModernUtils.worldMap*Keybind` settings.
+
+### Changed
+* Renamed the extension's displayed name and settings namespace to "HOI4 Modern Utils" / `hoi4ModernUtils.*`.
+* Reconciled two independently-developed lines of this fork's history (local paintbrush/transfer-tool work, and separately-pushed multi-state-selection/keybind/victory-point work) into a single coherent codebase. The map-edit undo/redo system is now generic across state, strategic region, and province edits instead of having two parallel implementations.
+* Recovered and reintegrated 42 upstream commits (through upstream `v0.15.1`, see below) alongside this fork's own changes.
+
+### Fixed
+* Excluded dev-only assets from the packaged `.vsix`.
+
+## [0.15.1] - 2026/07/26 (upstream)
 
 ### Added
 * Add search box in event tree preview.
@@ -14,7 +32,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Update
 * Refine localisation file preprocessing to accept more files.
 
-## [0.15.0] - 2026/07/23
+## [0.15.0] - 2026/07/23 (upstream)
 
 ### Updated
 * Indexing settings is moved from feature flags to dedicated settings.
@@ -26,9 +44,9 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Indexing for event files.
 
 ### Fixed
-* Performance issue when opening preview windows (especially noticeable in map preview) (#130) (#130) (since v0.12.4).
+* Performance issue when opening preview windows (especially noticeable in map preview) (#130) (since v0.12.4).
 
-## [0.14.2] - 2026/07/18
+## [0.14.2] - 2026/07/18 (upstream)
 
 ### Updated
 * Large focus icons now won't be clipped on overflow.
@@ -36,7 +54,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Fixed
 * GFX index incorrectly fill DLC content to workspace index.
 
-## [0.14.1] - 2026/07/14
+## [0.14.1] - 2026/07/14 (upstream)
 
 ### Fixed
 * Numbers starts with `.` or `+` can't be parsed.
@@ -44,7 +62,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Updated
 * Hide condition selection in world map preview if there is no condition to select.
 
-## [0.14.0] - 2026/07/13
+## [0.14.0] - 2026/07/13 (upstream)
 
 ### Added
 * Add condition selection in world map preview. (#121)
@@ -55,7 +73,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ### Updated
 * Feature flag setting UI. Now you don't need to edit raw json.
 
-## [0.13.0] - 2026/07/10
+## [0.13.0] - 2026/07/10 (upstream)
 
 ### Added
 * Support `force_use_small_tech_layout` in technology tree preview.
@@ -65,441 +83,9 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Focus position editing by dragging in focus tree preview (#124) (Contributor: [1985312383(柯慕灵)](https://github.com/1985312383)).
 
 ### Updated
-* Scrolling in preview window is now by dragging right mouse button. 
+* Scrolling in preview window is now by dragging right mouse button.
   * You can switch to left mouse button dragging by disabling feature flag `rightButtonDrag`.
 
-## [0.12.4] - 2026/07/08
+---
 
-### Fixed
-* Reorder file loading logic to "workspace > dlc > base game".
-
-### Added
-* Support `overlay` in focus tree preview (#123) (Contributor: [1985312383(柯慕灵)](https://github.com/1985312383)).
-* Enabled GFX index by default.
-
-## [0.12.3] - 2026/07/05
-
-### Fixed
-* Show `joint_focus` in focus tree preview like `shared_focus` (#116).
-* Loose parser syntax check to allow missing `}` or redundant `}` at the end of a file (#107).
-* Support new focus icon format and `alternate_icon` (#106).
-
-## [0.12.6] - 2026/06/01
-
-### Added
-* Double-click a province in Province view mode to drop (or remove) a victory point. Adds a placeholder VP value of 1 to the state file and generates a localisation key in `localisation/victory_points_l_english.yml` for quick human editing.
-
-## [0.12.5] - 2026/05/30
-
-### Added
-* Add ability to add selected states to strategic regions from world map preview (multi-state selection support, undo/redo, and persistence plumbing).
-* Add ability to create brand-new strategic regions from current selection (states or provinces) and persist them as new strategic region files.
-
-## [0.12.4] - 2026/05/29
-
-### Added
-* Add configurable world map keybind settings via VS Code `settings.json` for selection undo/redo, map undo/redo, create-state, and assign-selection actions.
-
-### Changed
-* Update world map shortcut handling to use runtime-configured keybinds instead of hardcoded key combinations.
-* Separate map-edit undo/redo history from selection undo/redo history so each command only affects its own context.
-* Improve world map action feedback presentation to a subtler inline status message and show dynamic key names in selection-restore hints.
-
-### Fixed
-* Fix missing dev-only module import by adding `debug.shouldignore` shim used by the development test command.
-* Fix cache interval timer typing/cleanup compatibility for mixed Node/web TypeScript targets.
-* Prevent webview content overflow: topbar/toolbar and inline action messages now wrap or truncate appropriately, and the world map webview CSS was tightened to avoid text extending past the window frame (prevents unexpected scrollbars and layout breakage).
-
-## [0.12.3] - 2026/05/29
-
-### Added
-* Add fork-specific README content, including VSIX installation instructions and rapid state-creation usage notes.
-* Add repomix configuration and generated output files.
-
-### Changed
-* Update npm dependencies and regenerate lockfile entries.
-* Update icon assets.
-* Apply related updates across preview, webview, test-ui, and TypeScript configuration files to align with documentation and configuration changes.
-
-## [0.12.2] - 2024/12/07
-
-### Fixed
-* Allow `|` in symbol type (to support the case `localization_key = building_state_modifier|dam`) (#105) (Contributor: [IShiraiKurokoI(Shirai_Kuroko)](https://github.com/IShiraiKurokoI)).
-
-## [0.12.1] - 2024/09/11
-
-### Added
-* Add shared focus dependency parsing for focus preview (#97) (Contributor: [IShiraiKurokoI(Shirai_Kuroko)](https://github.com/IShiraiKurokoI)).
-* Add support for `remove_trait` in MIO preview (#96).
-
-## [0.12.0] - 2024/09/03
-
-### Added
-* Reading text from localisation files and show them in previews (Contributor: [IShiraiKurokoI(Shirai_Kuroko)](https://github.com/IShiraiKurokoI)).
-
-## [0.11.2] - 2023/12/06
-
-### Added
-* Updated Korean translation (Contributor: [gyhs(NIKA)](https://github.com/gyhs)).
-
-### Fixed
-* Fix a bug that some conditions are treated as scope.
-
-## [0.11.1] - 2023/11/17
-
-### Fixed
-* Preview world map will stuck if resource icons are not available.
-
-## [0.11.0] - 2023/11/17
-
-### Added
-* Preview map shows X and Z from HOI4 coordinate system.
-* Show resources of each state on previewed map.
-* Show river on previewed map.
-
-### Fixed
-* Remove supply value if supply area is not enabled.
-
-## [0.10.0] - 2023/11/07
-
-### Added
-* Military industrial organization preview.
-
-### Changed
-* GFX index now searches `.gfx` recursively in `interface` folder.
-* Icons and buttons in preview GUI uses the first frame if the frame specified is not found.
-
-## [0.9.1] - 2023/10/30
-
-### Fixed
-* Korean localization.
-
-## [0.9.0] - 2023/10/29
-
-### Added
-* GUI preview.
-* Language settings for event localization.
-
-### Fixed
-* Warning message of "Terrain "ocean" is not defined".
-* In some cases the tech tree item in preview may be missing.
-
-## [0.8.0] - 2023/10/25
-
-### Added
-* Support joint_focus.
-* Support focus icon with condition.
-
-### Changed
-* Move `has_completed_focus` condition from dropdown to left-top corner of focus icon.
-
-### Fixed
-* Cannot scroll dropdown via mouse wheel in preview UI.
-
-## [0.7.4] - 2023/09/20
-
-### Added
-* GFX index (under feature flag).
-* Updated Korean translation (Contributor: [gyhs(NIKA)](https://github.com/gyhs)).
-
-### Fixed
-* NSB tank tech tree (NSB_armor.txt) doesn't preview (#71).
-
-## [0.7.3] - 2023/07/04
-
-### Fixed
-* A bug that focus condition doesn't work correctly.
-
-## [0.7.1] - 2023/07/03
-
-### Fixed
-* Add more support to `.dds` format.
-* A bug that focus condition doesn't work correctly for those who have two optional prerequisites.
-
-## [0.7.0] - 2023/05/13
-
-### Added
-* Support web based vscode.
-  * Known issues:
-    * `.zip` based DLCs can't be loaded.
-    * HOI4 install path must be set every time you open it.
-* Add command "Select HOI4 Install Path" to set HOI4 install path
-
-### Fixed
-* Latin extension characters is not supported in HOI format symbols.
-* A potential issue that some images can't be load.
-
-## [0.6.2] - 2023/05/09
-
-### Fixed
-* Unable to load extension in older vscode versions.
-
-## [0.6.1] - 2023/05/07
-
-### Fixed
-* Update the way to read DLC content.
-* Fix doctrine tree preview.
-* Keep focus tree condition after focus file change.
-* Allow prefix spaces in railways.txt.
-
-## [0.5.2] - 2021/12/20
-
-### Added
-* Russian translation (Contributor: [Ivan-Corporation(Koma Human)](https://github.com/Ivan-Corporation)).
-
-## [0.5.1] - 2021/12/15
-
-### Fixed
-* Support negative value of country colour.
-
-## [0.5.0] - 2021/12/13
-
-### Added
-* Preview new supply system based on railway.
-* New setting `hoi4modernutils.enableSupplyArea` to switch to old version development.
-
-## [0.4.8] - 2021/10/15
-
-### Fixed
-* Remove context menu from preview panels.
-
-## [0.4.7] - 2021/10/09
-
-### Fixed
-* `meta_effect` can't be parsed.
-
-## [0.4.6] - 2021/05/22
-
-### Added
-* Support preview of `frameanimatedspritetype` and `textspritetype`.
-* Support trusted workspaces feature in VSCode.
-
-## [0.4.5] - 2020/12/08
-
-### Changed
-* Items in world map preview can be opened by double click instead of clicking button on toolbar.
-
-### Fixed
-* Show error message when size of map image is not multiply of 256.
-
-## [0.4.4] - 2020/11/11
-
-### Added
-* `Display` option in world map preview, which can show or hide map components.
-* `Export as image` button to export whole world map to an image.
-
-### Fixed
-* An issue that not all terrain definitions are read.
-* An issue that connection between provinces are not visible when one of the province is out of view.
-
-## [0.4.3] - 2020/10/07
-
-### Added
-* Show event picture in event tree.
-* Partially supported Korean translation (Contributor: [gyhs(NIKA)](https://github.com/gyhs)).
-
-### Fixed
-* An issue that preview window closes even when text editor exists.
-
-## [0.4.2] - 2020/08/23
-
-### Added
-* Focus tree preview supports multiple trees in one file now.
-
-### Changed
-* Changed preview `.tga` editor name.
-* This extension will automatically activate when there're previewable files in workspace.
-
-### Fixed
-* Improve performace of edge rendering in world map preview.
-
-## [0.4.1] - 2020/08/11
-
-### Added
-* Support `.tga` format image in all previews.
-
-### Changed
-* Event preview will show delay time of each event if not happen immediately.
-
-### Fixed
-* Preview doesn't properly update when document has circular dependencies.
-
-## [0.4.0] - 2020/07/29
-
-### Added
-* Event tree preview
-  * Show relationship of events.
-  * Easily navigate from preview to event definition.
-  * Resolve and show event target scope and other informations.
-  * Localization support.
-  * Zoom event tree using wheel.
-* Command
-  * `HOI4 Mod Utilities: Scan References` to automatically discover references of current script.
-
-## [0.3.7] - 2020/07/25
-
-### Fixed
-* Add check before all usage of fsPath to make sure error message popup.
-* An issue that D01 not treated as country scope.
-* An issue that `dynamic_tags` is treated as a country in country tags files.
-* An issue that world map still loading even preview page closed.
-
-## [0.3.6] - 2020/07/17
-
-### Changed
-* Add telemetry to record usage and exceptions to provide better experience. It can be disabled with VSCode telemetry settings.
-
-### Fixed
-* Localization now can fallback to lang code when country code not present. For example, `en-us` will fallback to `en`.
-
-## [0.3.5] - 2020/07/11
-
-### Changed
-* Update parser.
-  * Strings without quote will be treated as string now.
-  * Variables can be parsed now. The default value will be used.
-* Focus tree preview will show warnings for invalid code.
-
-### Fixed
-* An issue that preview button shows incorrect type of preview.
-* An issue that in some case focus tree preview shows nothing.
-
-## [0.3.4] - 2020/06/23
-
-### Added
-* Focus tree
-  * Focus can reference shared focuses now.
-
-### Changed
-* Focus tree
-  * Change allow branches to condition, offset will also be calculated. This can be disabled by specifying feature flag `!useConditionInFocus`.
-
-### Fixed
-* Position of continuous focuses.
-* Position of focus icons and titles in focus tree.
-* An issue that preview will refresh twice.
-
-## [0.3.3] - 2020/06/21
-
-### Added
-* Focus tree
-  * Zoom focus tree using wheel.
-  * Search item in focus tree by ID.
-
-### Changed
-* Change allow branches from checkboxes to multi-selection combobox.
-
-### Fixed
-* Update missing Chinese localization.
-
-## [0.3.2] - 2020/06/06
-
-### Added
-* View mode `warnings` in world map.
-* Warning filter in world map.
-
-### Changed
-* Align style of checkbox and combobox with VSCode.
-* Click item in GFX file preview will navigate to name of sprite instead of type.
-* Placeholder of search box in world map.
-
-### Fixed
-* Performance issue when opening world map preview.
-
-## [0.3.1] - 2020/05/28
-
-### Added
-* World map preview
-  * New view modes: strategic region and supply area.
-  * New color sets: supply value.
-
-### Changed
-* Refine map loading and auto reload.
-* Changed scale level to show edges and labels for different view modes.
-
-### Fixed
-* Fixed bug that can't copy file if parent folder not exist.
-* Fixed bug that sometimes world map not properly reloaded.
-
-## [0.3.0] - 2020/05/24
-
-### Added
-* Command
-  * `HOI4 Mod Utilities: Preview World Map` to open world map preview window.
-* World map preview
-  * Possible view modes: province and state.
-  * Copy (if not in mod) and open state file from world map.
-  * Show warnings and informations about provinces and states.
-  * Various of color sets.
-  * Search province or state by ID.
-  * Auto reload world map when related file updates.
-  * Force reload world map from tool bar.
-
-### Changed
-* Update UI in preview page to match VSCode style.
-
-### Fixed
-* Fixed parsing rules of HOI4 file parser.
-
-## [0.2.1] - 2020/05/02
-
-### Added
-* Reads `replace_path` of `.mod` file.
-  * New setting `hoi4modernutils.modFile` to set working mod definition.
-  * Read `replace_path` from working mod when loading files.
-  * Show and change selected mod file from status bar.
-* Focus tree preview
-  * Show continuous focuses zone in focus tree preview.
-* Add ability to reference more `.gfx` file in previewed file (focus tree, technology tree, gui, etc.).
-
-### Changed
-* Refine error message generated by HOI file parser.
-* Added "Loading..." text to focus tree preview.
-* Support more dds format so that they can be shown now.
-* Changed icon of preview window.
-
-### Fixed
-* Fixed bug that sometimes icon in technology view not shown.
-* Update strings in Chinese simplified localization.
-
-## [0.2.0] - 2020/04/25
-
-### Added
-* Technology tree preview
-  * Render technology tree as GUI defined in `interface\countrytechtreeview.gui` (icons, texts defined in this file will also be rendered).
-  * Navigate to related technology tag by clicking technology or subtechnology.
-  * Auto update preview when technology file changed.
-  * Switch technology folder if a technology tree contains technology from different folder.
-  * Can be dragged to scroll.
-* GFX file preview
-  * Support `corneredTileSpriteType` tags.
-
-### Changed
-* GFX file preview
-  * Show image size on tooltip.
-* Focus tree preview
-  * Can be dragged to scroll.
-
-### Fixed
-* Fix 1 pixel offset of read `.dds` file.
-
-## [0.1.1] - 2020/04/19
-
-### Fixed
-* Fix bug that the tokenizer will read `={` as one token.
-
-## [0.1.0] - 2020/04/18
-
-### Added
-* Focus tree preview
-  * Render focus tree as graph.
-  * Navigate to `focus` tag in document by clicking a focus in graph.
-  * Show/hide focus branches (available for focuses has `allow_branch` tag).
-  * Auto update preview when document updates.
-  * Preview focus tree file that contains `shared_focus` tree.
-* GFX file preview
-  * Preview all `spritetype` tags in `.gfx` files.
-  * Filter sprites by name.
-  * Navigate to `spritetype` tag in document by clicking a sprite in list.
-* DDS preview
-  * Supports RGB and RGBA format.
+Everything before upstream `v0.13.0` (releases `v0.1.0` through `v0.12.6`, spanning 2020–2024) has been compressed out of this file to keep it focused on this fork's recent and merged changes. That history is unchanged and still available in the [upstream changelog](https://github.com/herbix/hoi4modutilities/blob/master/CHANGELOG.md) and in this repository's git log.
