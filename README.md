@@ -27,13 +27,13 @@ vsce package
 * The current package generated for this repository is:
 
 ```text
-hoi4modernutils-0.15.1.vsix
+hoi4modernutils-0.3.2.vsix
 ```
 
 * Users can install that package from a terminal:
 
 ```powershell
-code --install-extension hoi4modernutils-0.15.1.vsix
+code --install-extension hoi4modernutils-0.3.2.vsix
 ```
 
 * Or from inside VS Code:
@@ -115,7 +115,7 @@ If you installed the extension from a `.vsix` file instead of the Marketplace, t
 * GUI of focus tree and MIO can't be configured like technology tree.
 * Edge lines on world map not always fit edge of colors.
 
-## Release Notes - [0.15.1]
+## Release Notes - [0.3.2]
 
 ### Added
 * Add search box in event tree preview.

@@ -39,7 +39,7 @@ if (-not (Test-Path $vsixPath)) {
 }
 
 Write-Host "=== Step 3: Install extension ===" -ForegroundColor Cyan
-code --install-extension $vsixPath
+code --install-extension $vsixPath --force
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Extension install failed." -ForegroundColor Red
     exit $LASTEXITCODE
