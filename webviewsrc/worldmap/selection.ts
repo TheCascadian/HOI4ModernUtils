@@ -7,6 +7,55 @@ export interface SelectableWorldMap {
     getProvinceByPosition(x: number, y: number): Province | undefined;
 }
 
+export interface ProvinceSelectionSnapshot {
+    provinceIds: Set<number>;
+    riverIds: Set<number>;
+}
+
+export class ProvinceSelectionHistory {
+    private readonly undoStack: ProvinceSelectionSnapshot[] = [];
+    private readonly redoStack: ProvinceSelectionSnapshot[] = [];
+
+    constructor(private readonly limit = 200) {}
+
+    public record(current: ProvinceSelectionSnapshot): void {
+        this.undoStack.push(this.clone(current));
+        while (this.undoStack.length > this.limit) {
+            this.undoStack.shift();
+        }
+        this.redoStack.length = 0;
+    }
+
+    public undo(current: ProvinceSelectionSnapshot): ProvinceSelectionSnapshot | undefined {
+        const previous = this.undoStack.pop();
+        if (!previous) {
+            return undefined;
+        }
+        this.redoStack.push(this.clone(current));
+        return this.clone(previous);
+    }
+
+    public redo(current: ProvinceSelectionSnapshot): ProvinceSelectionSnapshot | undefined {
+        const next = this.redoStack.pop();
+        if (!next) {
+            return undefined;
+        }
+        this.undoStack.push(this.clone(current));
+        return this.clone(next);
+    }
+
+    public clearRedo(): void {
+        this.redoStack.length = 0;
+    }
+
+    private clone(snapshot: ProvinceSelectionSnapshot): ProvinceSelectionSnapshot {
+        return {
+            provinceIds: new Set(snapshot.provinceIds),
+            riverIds: new Set(snapshot.riverIds),
+        };
+    }
+}
+
 export function selectProvinceIds(
     worldMap: SelectableWorldMap,
     predicate: (province: Province) => boolean

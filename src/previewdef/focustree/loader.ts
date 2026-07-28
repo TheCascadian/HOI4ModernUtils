@@ -5,6 +5,7 @@ import { localize } from "../../util/i18n";
 import { uniq, flatten, chain } from "lodash";
 import { gfxIndex } from "../../indexing/gfxindex";
 import { sharedFocusIndex } from "../../indexing/sharedfocusindex";
+import { getLazyAssetService } from "../../fileSystem/lazyassetservice";
 
 export interface FocusTreeLoaderResult {
     focusTrees: FocusTree[];
@@ -19,9 +20,18 @@ export class FocusTreeLoader extends ContentLoader<FocusTreeLoaderResult> {
             throw error;
         }
 
-        const constants = {};
-
-        const file = convertFocusFileNodeToJson(parseHoi4File(content, localize('infile', 'In file {0}:\n', this.file)), constants);
+        const parseFocusNodes = async () => {
+            const constants = {};
+            const file = convertFocusFileNodeToJson(
+                parseHoi4File(content, localize('infile', 'In file {0}:\n', this.file)),
+                constants,
+            );
+            return { file, constants };
+        };
+        const parsed = this.sourceUri
+            ? await getLazyAssetService()?.getCachedJson('focus-tree-nodes', this.sourceUri, parseFocusNodes) ?? await parseFocusNodes()
+            : await parseFocusNodes();
+        const { file, constants } = parsed;
         const focusTreeDependencies = dependencies.filter(d => d.type === 'focus').map(d => d.path);
 
         const sharedFocusFilesFromIndex = chain(file.focus_tree)

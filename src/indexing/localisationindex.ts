@@ -2,14 +2,14 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { chain } from 'lodash';
 import { getLanguageIdInYml } from '../util/vsccommon';
-import { IndexBase } from './indexbase';
+import { forEachConcurrent, IndexBase } from './indexbase';
 import { indexManager, IndexType } from './indexmanager';
 import { listFilesFromModOrHOI4, readFileFromModOrHOI4 } from '../util/fileloader';
 import { localize } from '../util/i18n';
 import { ConfigurationKey } from '../constants';
-import { parseLocalisationYaml } from '../util/yaml';
 import { Logger } from '../util/logger';
 import { error } from '../util/debug';
+import { indexingWorker } from './indexingworker';
 
 interface LocalisationEntry {
     file: string;
@@ -60,7 +60,9 @@ class LocalisationIndex extends IndexBase<LocalisationEntry> {
 
     public async buildIndex(index: Map<string, LocalisationEntry>, estimatedSize: [number], options: { mod?: boolean; hoi4?: boolean; dlc?: boolean }): Promise<void> {
         const localisationFiles = (await listFilesFromModOrHOI4('localisation', { ...options, recursively: true })).filter(f => f.toLocaleLowerCase().endsWith('.yml'));
-        await Promise.all(localisationFiles.map(f => this.fillLocalisationItems('localisation/' + f, index, options, estimatedSize)));
+        await forEachConcurrent(localisationFiles, 4, f =>
+            this.fillLocalisationItems('localisation/' + f, index, options, estimatedSize)
+        );
         this.resolveReplacements(index);
     }
 
@@ -110,23 +112,14 @@ class LocalisationIndex extends IndexBase<LocalisationEntry> {
                 estimatedSize[0] += content.length;
             }
             const languageId = getLanguageIdInYml();
-            const yamlObj = parseLocalisationYaml(content, localisationFile);
-            if (yamlObj && typeof yamlObj === 'object') {
-                const dict = yamlObj[languageId];
-                if (dict && typeof dict === 'object' && !Array.isArray(dict)) {
-                    const keys = Object.keys(dict);
-                    for (const k of keys) {
-                        const v = dict[k];
-                        if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
-                            localisationIndex.set(k, { file: localisationFile, value: v.toString() });
-                        } else {
-                            localisationIndex.set(k, { file: localisationFile, value: '' });
-                        }
-                    }
-                    if (options.resolveReplacements) {
-                        this.resolveReplacements(localisationIndex, keys);
-                    }
-                }
+            const entries = await indexingWorker.parse('localisation', localisationFile, content, languageId);
+            const keys: string[] = [];
+            for (const [key, value] of entries) {
+                keys.push(key);
+                localisationIndex.set(key, { file: localisationFile, value });
+            }
+            if (options.resolveReplacements) {
+                this.resolveReplacements(localisationIndex, keys);
             }
         } catch(e) {
             const baseMessage = options.hoi4

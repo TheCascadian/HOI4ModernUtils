@@ -6,6 +6,8 @@
 
 HOI4 Modern Utils is a Visual Studio Code extension for Hearts of Iron IV mod development. It provides file previews, a data-aware world-map editor, validation tools, and safe persistence workflows for common map edits.
 
+**Measured performance value:** the opt-in WebGL2 base-map renderer reduced median render time by **82.6%** compared with the original Canvas2D renderer, from 42.5 ms to 7.4 ms, or about **5.7x faster**, across 312 authentic-map webview cases at 0.25x zoom. WebGL2 is not pixel-identical to Canvas2D, has a first-frame geometry cost, and remains disabled by default.
+
 ## Install without the Marketplace
 
 Download a `.vsix` from the project's GitHub Releases, or build one from this repository:
@@ -40,6 +42,7 @@ The Preview HOI4 file toolbar button is available for supported HOI4 text files,
 - National focus tree, event tree, technology tree, military industrial organization, GUI, `.gfx`, `.dds`, and `.tga` previews.
 - Localisation-aware preview text and configurable localisation language.
 - Map display options for boundaries, labels, warnings, and color sets, including owner/controller and state-category data where available.
+- Large DDS and TGA files open through a cached low-memory preview first, with an explicit full-resolution decode action.
 
 ### World map selection, navigation, and inspection
 
@@ -50,15 +53,17 @@ The Preview HOI4 file toolbar button is available for supported HOI4 text files,
 - Double-click a province to add or remove a placeholder victory point. Double-click a state, strategic region, or supply area to open its source file.
 - Use `Shift`+right-click for the contextual map menu, including export, warnings, map actions, and country tools.
 - Country mode includes country borders, selection, and owned/controlled/core summaries. Compact Large Tooltips can reduce oversized map tooltips.
+- The **Select All** menu provides separate province, land, ocean, river, lake, coastal, other-type, and terrain selections. River selection retains exact `rivers.bmp` components for clipped river-to-ocean conversion.
 
 ### Province editing and repair
 
-- Paint province pixels directly on the map with exact square brush sizes and continuous strokes.
+- Paint province pixels directly on the map with exact square brush sizes, continuous gap-free strokes, a staged-pixel eraser, and draft undo/redo before saving.
 - Create provinces from a selected area, or transfer pixels into an existing province with the Brush, Fill Bucket, or Transfer Wand.
 - The Fill Bucket transfers one connected region and prevents invalid land, lake, and sea/ocean type transfers. Existing-province pixel transfers do not create province IDs.
 - Merge provinces and repair affected state victory points, strategic-region membership, `adjacencies.csv`, `railways.txt`, and `supply_nodes.txt`.
 - Use the standalone province-reference resolver to remove or repair invalid supported-map references.
 - Province bitmap and `definition.csv` changes are saved together. Map editing has its own undo/redo history.
+- Paintbrush strokes are processed as one update per sampled pointer event and reuse a cached staged overlay. A deterministic 20,000-pixel, 256-dab synthetic workload measured 99.75% less stroke-processing time than the previous per-dab implementation; this is an algorithm microbenchmark, not a live UI frame-time claim.
 
 ### State, strategic-region, and country tools
 
@@ -68,15 +73,18 @@ The Preview HOI4 file toolbar button is available for supported HOI4 text files,
 - Select multiple countries for bulk annexation, create puppet relationships, release puppets, transfer states, and optionally auto-core transferred states.
 - Merge selected states with an explicit surviving state. The merge combines provinces, manpower, resources, cores, and victory points.
 - Consolidate a loaded continent or run the sequential all-continent workflow. These guarded operations merge provinces, states, and strategic regions, clear scoped infrastructure where required, repair references, and assign the result to the chosen country.
-- Guarded batch actions can remove water crossings, clear state resources, remove all cores without changing owner/controller values, and reindex loaded province and state IDs while repairing dependent references.
+- Selected Area Tools can clear railways, buildings, supply hubs, water crossings, and resources; set population to one; lower development; or convert eligible selections to ocean. Actions are gated to the relevant Province, State, or Supply Area view and can optionally run per continent.
+- Guarded global actions can remove all water crossings, clear all state resources, remove all cores without changing owner/controller values, and reindex loaded province and state IDs while repairing dependent references.
 
 Destructive operations show confirmation UI. Review the affected selection and save or commit your mod before running them.
 
 ### Rendering and diagnostics
 
-- The world-map Performance menu contains experimental render controls. Warning indexing is fidelity-preserving; edge decimation, river pixel collapse, label-grid deduplication, and coarse province rendering can change visual detail and remain off by default.
+- The world-map Performance menu contains an opt-in WebGL2 base-map renderer and experimental Canvas2D controls. Warning indexing is fidelity-preserving; WebGL2, edge decimation, river pixel collapse, label-grid deduplication, and coarse province rendering can change pixel output or visual detail and remain off by default.
 - Experimental selections are saved with the map view. Options that may change fidelity require confirmation before they are enabled.
 - The renderer clips off-viewport river work and uses indexed edge-neighbor lookups for responsive map navigation.
+- A movable Performance overlay reports live FPS, frame and base-map timing, redraw state, viewport position, zoom, canvas size, and active renderer.
+- Preview registration, initial indexing, and large-image decoding are deferred or moved off the extension activation path to keep startup responsive.
 - The extension reports map validation warnings for loaded data, including province, state, strategic-region, supply-area, railway, river, terrain, and reference problems.
 
 ## World map shortcuts
@@ -85,8 +93,8 @@ The following defaults can be changed through the corresponding `hoi4ModernUtils
 
 | Default | Action | Setting |
 | --- | --- | --- |
-| `T` | Undo the last selection change | `worldMapSelectionUndoKeybind` |
-| `R` | Redo the last selection change | `worldMapSelectionRedoKeybind` |
+| `T` | Undo the last selection change, or the current staged paint draft while painting | `worldMapSelectionUndoKeybind` |
+| `R` | Redo the last selection change, or the current staged paint draft while painting | `worldMapSelectionRedoKeybind` |
 | `Ctrl+Z` | Undo the last map edit | `worldMapMapUndoKeybind` |
 | `Ctrl+Y` | Redo the last map edit | `worldMapMapRedoKeybind` |
 | `Ctrl+Shift+N` | Create a state from the current selection | `worldMapCreateStateKeybind` |
@@ -94,6 +102,8 @@ The following defaults can be changed through the corresponding `hoi4ModernUtils
 | `Ctrl+Shift+G` | Assign selected states to a strategic region | `worldMapAssignSelectionToStrategicRegionKeybind` |
 
 When both an edit undo/redo and a selection undo/redo are relevant, use the dedicated configured shortcut for the type of change you want to reverse.
+
+The World Map also has fixed editor shortcuts: `P` toggles Brush, `F` toggles Fill Bucket, `W` toggles Transfer Wand, `E` toggles the staged-pixel eraser while painting, `Ctrl+Alt+P` starts new-province painting, and `Esc` cancels the active paint draft.
 
 ## Extension settings
 
@@ -122,7 +132,8 @@ When both an edit undo/redo and a selection undo/redo are relevant, use the dedi
 
 - Focus-tree and MIO preview layout is not fully configurable like the technology-tree preview.
 - World-map edge lines can differ slightly from province-color edges in some cases.
-- Experimental Performance options intentionally trade visual fidelity for reduced drawing work. Leave them disabled when exact map appearance matters.
+- WebGL2 and the lossy experimental Performance options can change pixel output or visual detail. Leave them disabled when exact Canvas2D appearance matters.
+- Build and automated webview results do not prove that a generated mod launches cleanly in every HOI4 version or playset. Validate destructive edits in the target game configuration.
 
 ## Demos
 

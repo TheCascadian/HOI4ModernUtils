@@ -1,13 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { IndexBase } from './indexbase';
+import { forEachConcurrent, IndexBase } from './indexbase';
 import { IndexType } from './indexmanager';
 import { listFilesFromModOrHOI4, readFileFromModOrHOI4 } from '../util/fileloader';
-import { parseHoi4File } from '../hoiformat/hoiparser';
-import { getSpriteTypes } from '../hoiformat/spritetype';
 import { localize } from '../util/i18n';
 import { uniq } from 'lodash';
 import { Logger } from '../util/logger';
+import { indexingWorker } from './indexingworker';
 
 // sprite name -> gfx file path
 class GfxIndex extends IndexBase<string> {
@@ -43,7 +42,9 @@ class GfxIndex extends IndexBase<string> {
     
     public async buildIndex(index: Map<string, string>, estimatedSize: [number], options: { mod?: boolean; hoi4?: boolean; dlc?: boolean }): Promise<void> {
         const gfxFiles = (await listFilesFromModOrHOI4('interface', { ...options, recursively: true })).filter(f => f.toLocaleLowerCase().endsWith('.gfx'));
-        await Promise.all(gfxFiles.map(f => this.fillGfxItems('interface/' + f, index, options, estimatedSize)));
+        await forEachConcurrent(gfxFiles, 4, f =>
+            this.fillGfxItems('interface/' + f, index, options, estimatedSize)
+        );
     }
 
     public getGfxContainerFile(gfxName: string | undefined): string | undefined {
@@ -63,11 +64,11 @@ class GfxIndex extends IndexBase<string> {
                 estimatedSize[0] += gfxFile.length;
             }
             const [fileBuffer, uri] = await readFileFromModOrHOI4(gfxFile, options);
-            const spriteTypes = getSpriteTypes(parseHoi4File(fileBuffer.toString(), localize('infile', 'In file {0}:\n', uri.toString())));
-            for (const spriteType of spriteTypes) {
-                gfxIndex.set(spriteType.name, gfxFile);
+            const entries = await indexingWorker.parse('gfx', uri.toString(), fileBuffer.toString());
+            for (const [name] of entries) {
+                gfxIndex.set(name, gfxFile);
                 if (estimatedSize) {
-                    estimatedSize[0] += spriteType.name.length + 8;
+                    estimatedSize[0] += name.length + 8;
                 }
             }
         } catch(e) {

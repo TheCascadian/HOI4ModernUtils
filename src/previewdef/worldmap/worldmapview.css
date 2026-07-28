@@ -26,6 +26,8 @@ html, body {
 }
 
 .toolbar-outer {
+    container-name: worldmap-toolbar;
+    container-type: inline-size;
     z-index: 10;
     box-sizing: border-box;
     height: 68px;
@@ -41,6 +43,7 @@ html, body {
 }
 
 .toolbar {
+    display: flex;
     box-sizing: border-box;
     width: 100%;
     height: 55px;
@@ -73,7 +76,7 @@ span.divider {
     flex: 0 1 auto;
     align-items: center;
     gap: 5px;
-    margin-right: 8px;
+    margin-right: 0;
     min-width: 0;
     min-height: 34px;
     padding: 0;
@@ -83,6 +86,62 @@ span.divider {
 
 .toolbar > .group {
     flex-shrink: 1;
+}
+
+.toolbar > .primary-map-control {
+    flex: 1 1 180px;
+    max-width: 260px;
+}
+
+.toolbar > .primary-map-control .select-container,
+.toolbar > .primary-map-control select {
+    width: 100%;
+}
+
+.toolbar > .topbar-filter-control {
+    flex: 0 1 220px;
+    width: 220px;
+    min-width: 180px;
+    max-width: 220px;
+}
+
+.toolbar > .topbar-filter-control > label {
+    flex: 0 0 auto;
+}
+
+.toolbar > .topbar-filter-control > .select-container {
+    display: block;
+    flex: 1 1 auto;
+    width: 0;
+}
+
+.toolbar > .topbar-filter-control > .select-container > .select {
+    display: block;
+    width: 100%;
+    min-width: 0;
+}
+
+.toolbar > .topbar-search-control {
+    flex: 0 1 220px;
+    width: 220px;
+    min-width: 180px;
+    max-width: 220px;
+}
+
+.toolbar > .topbar-search-control > label {
+    flex: 0 0 auto;
+}
+
+.toolbar > .topbar-search-control > #searchbox {
+    flex: 1 1 auto;
+    width: 0;
+}
+
+.toolbar div.select > div.option {
+    position: absolute;
+    width: 0;
+    overflow: hidden;
+    pointer-events: none;
 }
 
 .toolbar .select-container,
@@ -127,14 +186,15 @@ span.divider {
 }
 
 .toolbar button:hover:not(:disabled) {
-    color: var(--vscode-focusBorder, var(--vscode-foreground));
+    color: var(--vscode-button-foreground, var(--vscode-foreground));
+    background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground, rgba(127, 127, 127, 0.18)));
     transform: none;
     box-shadow: none;
 }
 
 .toolbar button.active,
 .toolbar button[aria-pressed="true"] {
-    color: var(--vscode-focusBorder, var(--vscode-foreground));
+    color: var(--vscode-foreground);
     background: transparent;
     border-color: transparent;
     box-shadow: inset 0 -2px 0 var(--vscode-focusBorder, #007fd4);
@@ -164,6 +224,16 @@ span.divider {
     width: auto;
     min-width: max-content;
     padding-inline: 7px;
+    opacity: 1;
+    visibility: visible;
+}
+
+#render-optimizations-button:hover > *,
+#render-optimizations-button:focus-visible > *,
+#accessibility-options-button:hover > *,
+#accessibility-options-button:focus-visible > * {
+    opacity: 1;
+    visibility: visible;
 }
 
 #render-optimizations-button.active,
@@ -214,6 +284,165 @@ span.divider {
 
 .render-optimizations-menu[hidden] {
     display: none !important;
+}
+
+.topbar-overflow-menu {
+    position: fixed;
+    z-index: 10030;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 7px;
+    width: min(380px, calc(100vw - 16px));
+    overflow: auto;
+    padding: 10px;
+    border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, #555));
+    border-radius: var(--worldmap-corner);
+    background: var(--vscode-menu-background, var(--vscode-editorWidget-background, #252526));
+    color: var(--vscode-menu-foreground, var(--vscode-editorWidget-foreground, #ccc));
+    box-shadow: 0 8px 26px rgba(0, 0, 0, 0.55);
+}
+
+.topbar-overflow-menu[hidden] {
+    display: none !important;
+}
+
+body > ul.select-dropdown {
+    z-index: 10040;
+}
+
+.topbar-overflow-menu > .group {
+    display: flex;
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: var(--worldmap-control-height);
+    margin: 0;
+}
+
+.topbar-overflow-menu > .group > label {
+    flex: 0 0 92px;
+    margin: 0;
+}
+
+.topbar-overflow-menu > .group .select-container,
+.topbar-overflow-menu > .group select,
+.topbar-overflow-menu > .group input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.topbar-overflow-menu > .topbar-filter-control > .select-container > .select {
+    display: block;
+    width: 100%;
+    min-width: 0;
+}
+
+.performance-debug-overlay {
+    position: fixed;
+    z-index: 10012;
+    box-sizing: border-box;
+    width: min(292px, calc(100vw - 24px));
+    overflow: hidden;
+    border: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.2));
+    border-radius: var(--worldmap-corner);
+    background: color-mix(in srgb, var(--vscode-editorWidget-background, #1e1e1e) 94%, transparent);
+    color: var(--vscode-editorWidget-foreground, #ccc);
+    box-shadow: 0 7px 24px rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(10px);
+    font: 11px/1.35 var(--vscode-editor-font-family, Consolas, monospace);
+}
+
+.performance-debug-overlay[hidden] {
+    display: none !important;
+}
+
+.performance-debug-overlay[data-corner="top-left"] {
+    top: 80px;
+    left: 12px;
+}
+
+.performance-debug-overlay[data-corner="top-right"] {
+    top: 80px;
+    right: 12px;
+}
+
+.performance-debug-overlay[data-corner="bottom-left"] {
+    bottom: 12px;
+    left: 12px;
+}
+
+.performance-debug-overlay[data-corner="bottom-right"] {
+    right: 12px;
+    bottom: 12px;
+}
+
+.performance-debug-overlay[data-dragging="true"] {
+    user-select: none;
+    opacity: 0.92;
+}
+
+.performance-debug-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 30px;
+    padding: 3px 5px 3px 9px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.15));
+    background: var(--vscode-sideBarSectionHeader-background, rgba(255, 255, 255, 0.06));
+    cursor: grab;
+    font-family: var(--vscode-font-family, sans-serif);
+    font-weight: 600;
+}
+
+.performance-debug-header:active {
+    cursor: grabbing;
+}
+
+.performance-debug-header button,
+.performance-debug-corners button {
+    width: 24px;
+    min-width: 24px;
+    height: 24px;
+    min-height: 24px;
+    padding: 0;
+    border: 1px solid transparent;
+    background: transparent;
+    color: inherit;
+}
+
+.performance-debug-header button:hover,
+.performance-debug-corners button:hover,
+.performance-debug-corners button[aria-pressed="true"] {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    background: var(--vscode-toolbar-hoverBackground, rgba(127, 127, 127, 0.18));
+}
+
+.performance-debug-grid {
+    display: grid;
+    grid-template-columns: minmax(90px, auto) minmax(0, 1fr);
+    gap: 3px 10px;
+    margin: 0;
+    padding: 8px 10px;
+}
+
+.performance-debug-grid dt {
+    color: var(--vscode-descriptionForeground, #aaa);
+}
+
+.performance-debug-grid dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    text-align: right;
+}
+
+.performance-debug-corners {
+    display: flex;
+    justify-content: flex-end;
+    gap: 3px;
+    padding: 4px 6px 6px;
+    border-top: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.12));
 }
 
 .accessibility-options-menu {
@@ -383,6 +612,35 @@ span.divider {
     display: none !important;
 }
 
+.paintbrush-history-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0;
+}
+
+#paintbrush-panel button {
+    box-sizing: border-box;
+    width: auto;
+    min-width: 72px;
+    height: auto;
+    min-height: 28px;
+    padding: 4px 9px;
+    border: 1px solid var(--vscode-button-secondaryBackground, #3a3d41);
+    border-radius: 2px;
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #fff);
+}
+
+#paintbrush-panel button:hover:not(:disabled) {
+    background: var(--vscode-button-secondaryHoverBackground, #45494e);
+}
+
+#paintbrush-erase[aria-pressed="true"] {
+    border-color: var(--vscode-focusBorder, #007fd4);
+    box-shadow: inset 0 -2px 0 var(--vscode-focusBorder, #007fd4);
+}
+
 .gourp.hidden {
     display: none;
 }
@@ -505,6 +763,8 @@ body[data-high-contrast="true"] .toolbar-outer,
 body[data-high-contrast="true"] #action-status,
 body[data-high-contrast="true"] .render-optimizations-menu,
 body[data-high-contrast="true"] .accessibility-options-menu,
+body[data-high-contrast="true"] .topbar-overflow-menu,
+body[data-high-contrast="true"] .performance-debug-overlay,
 body[data-high-contrast="true"] .worldmap-modal-card {
     border-color: var(--vscode-contrastBorder, var(--vscode-focusBorder, #fff));
     box-shadow: 0 0 0 1px var(--vscode-contrastBorder, #fff), 0 8px 28px rgba(0, 0, 0, 0.72);
@@ -561,8 +821,63 @@ body[data-reduced-motion="true"] *::after {
     #action-status,
     .render-optimizations-menu,
     .accessibility-options-menu,
+    .topbar-overflow-menu,
+    .performance-debug-overlay,
     .worldmap-modal-card {
         border: 1px solid CanvasText;
+    }
+}
+
+@container worldmap-toolbar (max-width: 840px) {
+    .toolbar {
+        column-gap: 3px;
+    }
+
+    .toolbar > .group {
+        gap: 3px;
+    }
+
+    .toolbar > .group > label,
+    .toolbar .responsive-button-label,
+    #render-optimizations-button > .codicon-chevron-down,
+    #accessibility-options-button > .codicon-chevron-down {
+        display: none;
+    }
+
+    .toolbar > .primary-map-control {
+        flex-basis: 120px;
+        max-width: 180px;
+    }
+
+    .toolbar > .topbar-filter-control {
+        min-width: 120px;
+    }
+
+    .toolbar > .topbar-search-control {
+        min-width: 130px;
+    }
+
+    #render-optimizations-button,
+    #accessibility-options-button,
+    #topbar-overflow-button {
+        min-width: var(--worldmap-control-height);
+        padding-inline: 5px;
+    }
+}
+
+@container worldmap-toolbar (max-width: 520px) {
+    .toolbar-outer {
+        padding-inline: 6px;
+    }
+
+    .toolbar > .primary-map-control {
+        flex-basis: 88px;
+        min-width: 72px;
+    }
+
+    .toolbar select,
+    .toolbar .select {
+        text-overflow: ellipsis;
     }
 }
 

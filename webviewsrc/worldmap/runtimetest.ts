@@ -13,6 +13,7 @@ import { Renderer } from './renderer';
 import { ColorSet, TopBar, ViewMode } from './topbar';
 import { ViewPoint } from './viewpoint';
 import { vscode } from '../util/vscode';
+import { WebGL2Renderer } from './webgl2renderer';
 
 type RendererRuntimeTestInternals = {
     isRiverVisible(topBar: TopBar, viewPoint: ViewPoint): boolean;
@@ -89,6 +90,7 @@ async function runRuntimeTest(
     const samples = validateRunCount(request.samples ?? 1, 'samples', 10);
     const warmups = validateRunCount(request.warmups ?? 0, 'warmups', 10);
     const optimizations = validateOptimizations(request.optimizations ?? []);
+    const rendererMode = request.renderer ?? 'webgl2';
     if (request.cases.length === 0) {
         throw new Error('World-map runtime test requires at least one case.');
     }
@@ -104,6 +106,18 @@ async function runRuntimeTest(
     const testCanvas = document.createElement('canvas');
     testCanvas.width = canvasWidth;
     testCanvas.height = canvasHeight;
+    const gpuCanvas = document.createElement('canvas');
+    gpuCanvas.width = canvasWidth;
+    gpuCanvas.height = canvasHeight;
+    const overlayCanvas = document.createElement('canvas');
+    overlayCanvas.width = canvasWidth;
+    overlayCanvas.height = canvasHeight;
+    const webgl2Renderer = rendererMode === 'webgl2'
+        ? WebGL2Renderer.create(gpuCanvas, loader.worldMap.width, loader.worldMap.height)
+        : undefined;
+    if (rendererMode === 'webgl2' && !webgl2Renderer) {
+        throw new Error('WebGL2 is unavailable in the world-map runtime test webview.');
+    }
     const runtimeErrors = [...capturedRuntimeErrors];
     const originalConsoleError = console.error;
     console.error = (...values: unknown[]) => {
@@ -124,6 +138,10 @@ async function runRuntimeTest(
                 warmups,
                 request.capturePixelHash ?? false,
                 optimizations,
+                gpuCanvas,
+                overlayCanvas,
+                webgl2Renderer,
+                rendererMode,
             ));
             await yieldToEventLoop();
         }
@@ -139,6 +157,7 @@ async function runRuntimeTest(
                 provinces: loader.worldMap.provincesCount,
                 rivers: loader.worldMap.rivers.length,
                 optimizations,
+                renderer: rendererMode,
             },
             results,
             runtimeErrors,
@@ -151,6 +170,10 @@ async function runRuntimeTest(
         viewPoint.x = original.x;
         viewPoint.y = original.y;
         viewPoint.scale = original.scale;
+        webgl2Renderer?.dispose();
+        testCanvas.width = testCanvas.height = 0;
+        gpuCanvas.width = gpuCanvas.height = 0;
+        overlayCanvas.width = overlayCanvas.height = 0;
     }
 }
 
@@ -164,6 +187,10 @@ function runCase(
     warmups: number,
     capturePixelHash: boolean,
     optimizations: WorldMapRuntimeTestOptimization[],
+    gpuCanvas: HTMLCanvasElement,
+    overlayCanvas: HTMLCanvasElement,
+    webgl2Renderer: WebGL2Renderer | undefined,
+    rendererMode: 'canvas2d' | 'webgl2',
 ): WorldMapRuntimeTestCaseResult {
     const viewport = resolveViewport(testCase, loader.worldMap.width, loader.worldMap.height);
     const baseResult = {
@@ -189,13 +216,27 @@ function runCase(
         for (let run = 0; run < warmups + samples; run++) {
             const heapBefore = getHeapSize();
             const start = performance.now();
-            Renderer.renderMapImpl(
-                canvas,
-                topBar,
-                viewPoint,
-                loader.worldMap,
-                createRenderOptions(testCase.display, optimizations),
-            );
+            if (rendererMode === 'webgl2' && webgl2Renderer) {
+                Renderer.renderMapWebGL2Impl(
+                    canvas,
+                    gpuCanvas,
+                    overlayCanvas,
+                    webgl2Renderer,
+                    topBar,
+                    viewPoint,
+                    loader.worldMap,
+                    topBar.mapMutation$.value,
+                    createRenderOptions(testCase.display, optimizations),
+                );
+            } else {
+                Renderer.renderMapImpl(
+                    canvas,
+                    topBar,
+                    viewPoint,
+                    loader.worldMap,
+                    createRenderOptions(testCase.display, optimizations),
+                );
+            }
             const duration = performance.now() - start;
             if (run >= warmups) {
                 durations.push(duration);
@@ -389,6 +430,7 @@ function validateRunCount(value: number, name: string, maximum: number): number 
 
 function validateOptimizations(values: WorldMapRuntimeTestOptimization[]): WorldMapRuntimeTestOptimization[] {
     const valid = new Set<WorldMapRuntimeTestOptimization>([
+        'webgl2-base',
         'warning-index',
         'edge-decimation',
         'river-device-pixel-collapse',

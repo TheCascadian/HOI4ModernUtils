@@ -1,5 +1,5 @@
 import { UserError } from '../util/common';
-import { Logger } from '../util/logger';
+import { logParserWarning } from '../util/parserlog';
 
 export type NodeValue = string | Node[] | SymbolNode | null;
 
@@ -125,7 +125,7 @@ export function parseHoi4File(input: string, errorMessagePrefix: string = ''): N
     }
 
     if (tokens.peek().type !== 'eof') {
-        Logger.warn(errorMessagePrefix + "File content can't be completely parsed");
+        logParserWarning(errorMessagePrefix + "File content can't be completely parsed");
     }
 
     return {

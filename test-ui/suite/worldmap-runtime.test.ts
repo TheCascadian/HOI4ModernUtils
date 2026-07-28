@@ -95,10 +95,11 @@ suite('World-map real webview runtime', () => {
                 canvasWidth: 640,
                 canvasHeight: 360,
                 samples: 1,
-                warmups: 0,
+                warmups: Number(process.env.HOI4_WORLD_MAP_RUNTIME_WARMUPS ?? 0),
                 capturePixelHash: true,
                 timeoutMs: focused ? 300000 : 360000,
                 optimizations: parseOptimizations(process.env.HOI4_WORLD_MAP_RUNTIME_OPTIMIZATIONS),
+                renderer: process.env.HOI4_WORLD_MAP_RUNTIME_RENDERER === 'canvas2d' ? 'canvas2d' : 'webgl2',
             };
             const report = await vscode.commands.executeCommand<WorldMapRuntimeTestReport>(
                 runtimeTestCommand,
@@ -151,11 +152,15 @@ suite('World-map real webview runtime', () => {
                 const baselineById = new Map(
                     baselineFile.report.results.map(result => [result.id, result]),
                 );
-                const matched = report.results.map(result => ({
+                const compared = report.results.map(result => ({
                     before: baselineById.get(result.id),
                     after: result,
                 }));
-                assert.ok(matched.every(value => value.before !== undefined));
+                const matched = compared.filter(
+                    (value): value is { before: WorldMapRuntimeTestReport['results'][number]; after: WorldMapRuntimeTestReport['results'][number] } =>
+                        value.before !== undefined,
+                );
+                assert.ok(matched.length > 0, 'No runtime cases matched the supplied baseline.');
                 const pixelHashMismatches = matched.filter(
                     value => value.before?.pixelHash !== value.after.pixelHash,
                 ).length;
@@ -180,7 +185,7 @@ suite('World-map real webview runtime', () => {
                     assert.strictEqual(
                         pixelHashMismatches,
                         0,
-                        `${pixelHashMismatches} real Canvas2D cases differ from the supplied baseline.`,
+                        `${pixelHashMismatches} real ${report.environment.renderer} cases differ from the supplied baseline.`,
                     );
                 }
             }

@@ -7,12 +7,14 @@ import { Subscriber } from "../util/event";
 import { arrayToMap } from "../util/common";
 import { feLocalize } from "../util/i18n";
 import { chain, max, padStart } from "lodash";
-import { combineLatest, fromEvent } from 'rxjs';
-import { distinctUntilChanged } from 'rxjs/operators';
+import { animationFrameScheduler, BehaviorSubject, combineLatest, fromEvent } from 'rxjs';
+import { auditTime, distinctUntilChanged } from 'rxjs/operators';
 import { applyCondition, ConditionItem } from "../../src/hoiformat/condition";
 import { getBrushBounds } from "./brush";
 import { formatTooltipWarnings, placeTooltip } from "./tooltip";
 import { forEachRiverPixel } from "./selection";
+import { WebGL2FrameResult, WebGL2Renderer } from "./webgl2renderer";
+import { sendEvent } from "../util/telemetry";
 
 const landWarning = 0xE02020;
 const landNoWarning = 0x7FFF7F;
@@ -27,6 +29,15 @@ const renderScaleByViewMode: Record<ViewMode, { edge: number, labels: number }> 
     country: { edge: 0.25, labels: 0.25 },
     warnings: { edge: 2, labels: 3 },
 };
+
+export interface WorldMapRenderStats {
+    totalMs: number;
+    mapMs: number;
+    mapRedrawn: boolean;
+    timestamp: number;
+    canvasWidth: number;
+    canvasHeight: number;
+}
 
 interface RenderContext {
     topBar: TopBar;
@@ -58,13 +69,30 @@ interface WarningIndex {
 }
 
 export class Renderer extends Subscriber {
+    public readonly renderStats$ = new BehaviorSubject<WorldMapRenderStats | undefined>(undefined);
     private canvasWidth: number = 0;
     private canvasHeight: number = 0;
     
     private backCanvas: HTMLCanvasElement;
     private mapCanvas: HTMLCanvasElement;
+    private mapOverlayCanvas: HTMLCanvasElement;
+    private paintOverlayCanvas: HTMLCanvasElement;
     private mainCanvasContext: CanvasRenderingContext2D;
     private backCanvasContext: CanvasRenderingContext2D;
+    private mapOverlayCanvasContext: CanvasRenderingContext2D;
+    private paintOverlayCanvasContext: CanvasRenderingContext2D;
+    private paintOverlayState: {
+        pixels: ReadonlyMap<string, number>;
+        color: number;
+        x: number;
+        y: number;
+        scale: number;
+        width: number;
+        height: number;
+    } | undefined;
+    private webgl2Renderer: WebGL2Renderer | undefined;
+    private webgl2Requested = false;
+    private renderedFrameCount = 0;
     
     private cursorX = 0;
     private cursorY = 0;
@@ -82,6 +110,11 @@ export class Renderer extends Subscriber {
         this.backCanvas = document.createElement('canvas');
         this.backCanvasContext = this.backCanvas.getContext('2d')!;
         this.mapCanvas = document.createElement('canvas');
+        this.mapOverlayCanvas = document.createElement('canvas');
+        this.mapOverlayCanvasContext = this.mapOverlayCanvas.getContext('2d')!;
+        this.paintOverlayCanvas = document.createElement('canvas');
+        this.paintOverlayCanvasContext = this.paintOverlayCanvas.getContext('2d')!;
+        this.setWebGL2Enabled(this.topBar.renderOptimizations$.value.has('webgl2-base'));
 
         this.registerCanvasEventHandlers();
         this.resizeCanvas();
@@ -117,7 +150,8 @@ export class Renderer extends Subscriber {
                 topBar.selectedConditions$,
                 topBar.renderOptimizations$,
             ]).pipe(
-                distinctUntilChanged((x, y) => x.every((v, i) => v === y[i]))
+                distinctUntilChanged((x, y) => x.every((v, i) => v === y[i])),
+                auditTime(0, animationFrameScheduler)
             ).subscribe(this.renderCanvas)
         );
     }
@@ -137,6 +171,7 @@ export class Renderer extends Subscriber {
             return;
         }
 
+        const renderStarted = performance.now();
         const backCanvasContext = this.backCanvasContext;
         this.tooltipRendered = false;
     
@@ -145,8 +180,11 @@ export class Renderer extends Subscriber {
         backCanvasContext.fillStyle = 'white';
         backCanvasContext.font = '12px sans-serif';
 
-        this.renderMap();
+        const mapResult = this.renderMap();
         backCanvasContext.drawImage(this.mapCanvas, 0, 0);
+        if (this.webgl2Renderer) {
+            backCanvasContext.drawImage(this.mapOverlayCanvas, 0, 0);
+        }
 
         const viewMode = this.topBar.viewMode$.value;
         switch (viewMode) {
@@ -184,18 +222,31 @@ export class Renderer extends Subscriber {
         }
     
         this.mainCanvasContext.drawImage(this.backCanvas, 0, 0);
+        this.renderStats$.next({
+            totalMs: performance.now() - renderStarted,
+            mapMs: mapResult.durationMs,
+            mapRedrawn: mapResult.redrawn,
+            timestamp: performance.now(),
+            canvasWidth: this.canvasWidth,
+            canvasHeight: this.canvasHeight,
+        });
+        this.reportRenderPerformance(mapResult.durationMs, performance.now() - renderStarted);
     };
     
     private resizeCanvas = () => {
-        this.canvasWidth = this.mainCanvas.width = this.mapCanvas.width = this.backCanvas.width = window.innerWidth;
-        this.canvasHeight = this.mainCanvas.height = this.mapCanvas.height = this.backCanvas.height = window.innerHeight;
+        this.canvasWidth = this.mainCanvas.width = this.mapCanvas.width = this.mapOverlayCanvas.width =
+            this.paintOverlayCanvas.width = this.backCanvas.width = window.innerWidth;
+        this.canvasHeight = this.mainCanvas.height = this.mapCanvas.height = this.mapOverlayCanvas.height =
+            this.paintOverlayCanvas.height = this.backCanvas.height = window.innerHeight;
+        this.paintOverlayState = undefined;
         this.renderCanvas();
     };
 
     private oldMapState: any = undefined;
-    private renderMap() {
+    private renderMap(): { redrawn: boolean; durationMs: number } {
         const worldMap = this.loader.worldMap;
         const displayOptions = this.topBar.display.selectedValues$.value;
+        this.setWebGL2Enabled(this.topBar.renderOptimizations$.value.has('webgl2-base'));
         const newMapState = {
             worldMap,
             canvasWidth: this.canvasWidth,
@@ -211,19 +262,196 @@ export class Renderer extends Subscriber {
             supplyVisible: displayOptions.includes('supply'),
             riverVisible: displayOptions.includes('river'),
             renderOptimizations: Array.from(this.topBar.renderOptimizations$.value).sort().join(','),
+            mapMutation: this.topBar.mapMutation$.value,
             ...this.viewPoint.toJson(),
         };
 
         // State not changed
         if (this.oldMapState !== undefined && Object.keys(newMapState).every(k => this.oldMapState[k] === (newMapState as any)[k])) {
-            return;
+            return { redrawn: false, durationMs: 0 };
         }
         this.oldMapState = newMapState;
-        Renderer.renderMapImpl(this.mapCanvas, this.topBar, this.viewPoint, worldMap,
-            Renderer.resolveRenderOptions(
-                newMapState.fastRendering,
-                this.topBar.renderOptimizations$.value
-            ));
+        const started = performance.now();
+        performance.mark('hoi4mu.worldmap.render.start');
+        if (this.webgl2Renderer) {
+            const renderContext = Renderer.createRenderContext(
+                this.mapOverlayCanvasContext,
+                this.topBar,
+                this.viewPoint,
+                worldMap,
+                Renderer.resolveRenderOptions(
+                    newMapState.fastRendering,
+                    this.topBar.renderOptimizations$.value
+                ),
+            );
+            const gpuResult = this.webgl2Renderer.render(
+                worldMap,
+                this.viewPoint,
+                newMapState.mapMutation,
+                province => getColorByColorSet(this.topBar.colorSet$.value, province, worldMap, renderContext),
+                Renderer.resolveGpuLodPrecision(renderContext, this.viewPoint.scale),
+                [
+                    newMapState.colorSet,
+                    newMapState.warningFilter,
+                    newMapState.selectedConditions,
+                    newMapState.mapMutation,
+                ].join('|'),
+            );
+            this.renderGpuForeground(worldMap, gpuResult, renderContext);
+        } else {
+            Renderer.renderMapImpl(this.mapCanvas, this.topBar, this.viewPoint, worldMap,
+                Renderer.resolveRenderOptions(
+                    newMapState.fastRendering,
+                    this.topBar.renderOptimizations$.value
+                ));
+        }
+        performance.mark('hoi4mu.worldmap.render.end');
+        performance.measure('hoi4mu.worldmap.render', 'hoi4mu.worldmap.render.start', 'hoi4mu.worldmap.render.end');
+        performance.clearMarks('hoi4mu.worldmap.render.start');
+        performance.clearMarks('hoi4mu.worldmap.render.end');
+        performance.clearMeasures('hoi4mu.worldmap.render');
+        return { redrawn: true, durationMs: performance.now() - started };
+    }
+
+    public override dispose(): void {
+        super.dispose();
+        this.webgl2Renderer?.dispose();
+        this.webgl2Renderer = undefined;
+        this.mapCanvas.width = this.mapCanvas.height = 0;
+        this.mapOverlayCanvas.width = this.mapOverlayCanvas.height = 0;
+        this.paintOverlayCanvas.width = this.paintOverlayCanvas.height = 0;
+        this.backCanvas.width = this.backCanvas.height = 0;
+        for (const image of Object.values(Renderer.resourceImages)) {
+            if (image) {
+                image.src = '';
+            }
+        }
+        Renderer.resourceImages = {};
+        this.renderStats$.complete();
+    }
+
+    private renderGpuForeground(
+        worldMap: FEWorldMap,
+        gpuResult: WebGL2FrameResult,
+        renderContext: RenderContext,
+    ): void {
+        Renderer.renderGpuForegroundImpl(worldMap, gpuResult, renderContext, this.viewPoint, this.mapOverlayCanvasContext);
+    }
+
+    public static renderMapWebGL2Impl(
+        outputCanvas: HTMLCanvasElement,
+        gpuCanvas: HTMLCanvasElement,
+        overlayCanvas: HTMLCanvasElement,
+        webgl2Renderer: WebGL2Renderer,
+        topBar: TopBar,
+        viewPoint: ViewPoint,
+        worldMap: FEWorldMap,
+        mutationToken: unknown,
+        otherRenderContext?: Partial<RenderContext>,
+    ): WebGL2FrameResult {
+        const overlayContext = overlayCanvas.getContext('2d')!;
+        const renderContext = Renderer.createRenderContext(
+            overlayContext,
+            topBar,
+            viewPoint,
+            worldMap,
+            otherRenderContext,
+        );
+        const result = webgl2Renderer.render(
+            worldMap,
+            viewPoint,
+            mutationToken,
+            province => getColorByColorSet(topBar.colorSet$.value, province, worldMap, renderContext),
+            Renderer.resolveGpuLodPrecision(renderContext, viewPoint.scale),
+            `${topBar.colorSet$.value}|${topBar.warningFilter.selectedValues$.value.join(',')}|${mutationToken}`,
+        );
+        Renderer.renderGpuForegroundImpl(worldMap, result, renderContext, viewPoint, overlayContext);
+        const output = outputCanvas.getContext('2d')!;
+        output.fillStyle = 'black';
+        output.fillRect(0, 0, outputCanvas.width, outputCanvas.height);
+        output.drawImage(gpuCanvas, 0, 0);
+        output.drawImage(overlayCanvas, 0, 0);
+        return result;
+    }
+
+    private static resolveGpuLodPrecision(renderContext: Partial<RenderContext>, scale: number): number {
+        const overwrite = renderContext.overwriteRenderPrecision;
+        const base = renderContext.renderPrecisionBase ?? 2;
+        if (scale < 1) {
+            return Math.pow(2, Math.floor(Math.log2(1 / scale)) + (overwrite !== undefined ? 0 : base));
+        }
+        return overwrite ?? (scale <= base ? Math.pow(2, base + 1 - Math.round(scale)) : 1);
+    }
+
+    private static renderGpuForegroundImpl(
+        worldMap: FEWorldMap,
+        gpuResult: WebGL2FrameResult,
+        renderContext: RenderContext,
+        viewPoint: ViewPoint,
+        context: CanvasRenderingContext2D,
+    ): void {
+        context.clearRect(0, 0, context.canvas.width, context.canvas.height);
+        const mapZone: Zone = { x: 0, y: 0, w: worldMap.width, h: worldMap.height };
+        const requiresProvinceLists =
+            Renderer.isEdgeVisible(renderContext.topBar, viewPoint) ||
+            Renderer.isStateBoundaryVisible(renderContext.topBar) ||
+            Renderer.isSupplyVisible(renderContext.topBar) ||
+            Renderer.isLabelVisible(renderContext.topBar, viewPoint);
+        const hasForeground = requiresProvinceLists || Renderer.isRiverVisible(renderContext.topBar, viewPoint);
+        if (!hasForeground) {
+            return;
+        }
+        if (requiresProvinceLists) {
+            Renderer.renderAllOffsets(viewPoint, mapZone, worldMap.width, xOffset => {
+                const renderedProvinces: Province[] = [];
+                renderContext.renderedProvincesByOffset[xOffset] = renderedProvinces;
+                for (const provinceId of gpuResult.visibleProvinceIds) {
+                    const province = worldMap.getProvinceById(provinceId);
+                    if (province && viewPoint.bboxInView(province.boundingBox, xOffset)) {
+                        renderedProvinces.push(province);
+                        renderContext.renderedProvincesById[province.id] = province;
+                    }
+                }
+                Renderer.addVisibleSyntheticEdges(worldMap, xOffset, renderContext, renderedProvinces);
+            });
+            renderContext.renderedProvinces = Object.values(renderContext.renderedProvincesById);
+        }
+        Renderer.renderAllOffsets(viewPoint, mapZone, worldMap.width, xOffset =>
+            Renderer.renderMapForeground(worldMap, xOffset, renderContext)
+        );
+    }
+
+    private reportRenderPerformance(mapMs: number, totalMs: number): void {
+        this.renderedFrameCount++;
+        if (this.renderedFrameCount % 300 !== 0 && totalMs < 50) {
+            return;
+        }
+        sendEvent('worldmap.render.performance', {
+            renderer: this.webgl2Renderer ? 'webgl2' : 'canvas2d',
+        }, {
+            mapMs,
+            totalMs,
+            scale: this.viewPoint.scale,
+            width: this.canvasWidth,
+            height: this.canvasHeight,
+        });
+    }
+
+    private setWebGL2Enabled(enabled: boolean): void {
+        if (enabled === this.webgl2Requested) {
+            return;
+        }
+        this.webgl2Requested = enabled;
+        this.webgl2Renderer?.dispose();
+        this.webgl2Renderer = undefined;
+        this.mapCanvas.width = this.mapCanvas.height = 0;
+        this.mapCanvas = document.createElement('canvas');
+        this.mapCanvas.width = this.canvasWidth;
+        this.mapCanvas.height = this.canvasHeight;
+        if (enabled) {
+            this.webgl2Renderer = WebGL2Renderer.create(this.mapCanvas);
+        }
+        this.oldMapState = undefined;
     }
 
     public static resolveRenderOptions(
@@ -248,18 +476,7 @@ export class Renderer extends Subscriber {
         mapCanvasContext.fillStyle = 'black';
         mapCanvasContext.fillRect(0, 0, canvas.width, canvas.height);
 
-        const renderContext: RenderContext = {
-            topBar,
-            viewPoint,
-            mapCanvasContext,
-            provinceToState: worldMap.getProvinceToStateMap(),
-            provinceToStrategicRegion: worldMap.getProvinceToStrategicRegionMap(),
-            stateToSupplyArea: worldMap.getStateToSupplyAreaMap(),
-            renderedProvincesByOffset: {},
-            renderedProvincesById: {},
-            extraState: undefined,
-            ...otherRenderContext,
-        };
+        const renderContext = Renderer.createRenderContext(mapCanvasContext, topBar, viewPoint, worldMap, otherRenderContext);
 
         const mapZone: Zone = { x: 0, y: 0, w: worldMap.width, h: worldMap.height };
         if (renderContext.optimizations?.has('warning-index') && topBar.colorSet$.value === 'warnings') {
@@ -276,6 +493,61 @@ export class Renderer extends Subscriber {
 
         renderContext.renderedProvinces = Object.values(renderContext.renderedProvincesById);
         Renderer.renderAllOffsets(viewPoint, mapZone, worldMap.width, xOffset => Renderer.renderMapForeground(worldMap, xOffset, renderContext));
+    }
+
+    private static createRenderContext(
+        mapCanvasContext: CanvasRenderingContext2D,
+        topBar: TopBar,
+        viewPoint: ViewPoint,
+        worldMap: FEWorldMap,
+        otherRenderContext?: Partial<RenderContext>,
+    ): RenderContext {
+        return {
+            topBar,
+            viewPoint,
+            mapCanvasContext,
+            provinceToState: worldMap.getProvinceToStateMap(),
+            provinceToStrategicRegion: worldMap.getProvinceToStrategicRegionMap(),
+            stateToSupplyArea: worldMap.getStateToSupplyAreaMap(),
+            renderedProvincesByOffset: {},
+            renderedProvincesById: {},
+            extraState: undefined,
+            ...otherRenderContext,
+        };
+    }
+
+    private static addVisibleSyntheticEdges(
+        worldMap: FEWorldMap,
+        xOffset: number,
+        renderContext: RenderContext,
+        renderedProvinces: Province[],
+    ): void {
+        if (!Renderer.isEdgeVisible(renderContext.topBar, renderContext.viewPoint)) {
+            return;
+        }
+        worldMap.forEachProvince(province => {
+            for (const edge of province.edges) {
+                if (edge.path.length > 0) {
+                    continue;
+                }
+                const toProvince = worldMap.getProvinceById(edge.to);
+                if (!toProvince) {
+                    continue;
+                }
+                const [startPoint, endPoint] = findNearestPoints(edge.start, edge.stop, province, toProvince);
+                if (!renderContext.viewPoint.lineInView(startPoint, endPoint, xOffset)) {
+                    continue;
+                }
+                if (!(province.id in renderContext.renderedProvincesById)) {
+                    renderedProvinces.push(province);
+                    renderContext.renderedProvincesById[province.id] = province;
+                }
+                if (!(edge.to in renderContext.renderedProvincesById)) {
+                    renderedProvinces.push(toProvince);
+                    renderContext.renderedProvincesById[edge.to] = toProvince;
+                }
+            }
+        });
     }
 
     private static renderMapBackground(worldMap: FEWorldMap, xOffset: number, renderContext: RenderContext) {
@@ -399,17 +671,34 @@ export class Renderer extends Subscriber {
         const context = this.backCanvasContext;
         const paintedPixels = this.topBar.paintedPixels$.value;
         const brushColor = this.topBar.paintbrushColor$.value;
+        const paintOverlayState = {
+            pixels: paintedPixels,
+            color: brushColor,
+            x: this.viewPoint.x,
+            y: this.viewPoint.y,
+            scale: this.viewPoint.scale,
+            width: this.canvasWidth,
+            height: this.canvasHeight,
+        };
 
         context.save();
         context.imageSmoothingEnabled = false;
 
-        // Render committed-but-unsaved painted pixels.
-        context.fillStyle = toColorWithAlpha(brushColor, 0.5);
-
-        for (const key of paintedPixels.keys()) {
-            const [mapX, mapY] = key.split(',').map(Number);
-            this.fillMapPixel(context, mapX, mapY);
+        if (!this.paintOverlayState ||
+            Object.keys(paintOverlayState).some(key =>
+                (this.paintOverlayState as any)[key] !== (paintOverlayState as any)[key])) {
+            const overlayContext = this.paintOverlayCanvasContext;
+            overlayContext.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+            overlayContext.fillStyle = toColorWithAlpha(brushColor, 0.5);
+            for (const key of paintedPixels.keys()) {
+                const separator = key.indexOf(',');
+                const mapX = Number(key.substring(0, separator));
+                const mapY = Number(key.substring(separator + 1));
+                this.fillMapPixel(overlayContext, mapX, mapY);
+            }
+            this.paintOverlayState = paintOverlayState;
         }
+        context.drawImage(this.paintOverlayCanvas, 0, 0);
 
         // Render the brush cursor from the exact same map-pixel bounds.
         if (this.topBar.paintbrushActive$.value) {

@@ -48,23 +48,27 @@ class PreviewManager implements vscode.WebviewPanelSerializer {
 
     private _updateSubscriptions: Map<string[], PreviewBase[]> = new Map();
 
-    public register(): vscode.Disposable {
+    public register(options: { command?: boolean; serializer?: boolean } = {}): vscode.Disposable {
         const disposables: vscode.Disposable[] = [];
-        try {
-            disposables.push(vscode.commands.registerCommand(Commands.Preview, this.showPreview, this));
-        } catch (e) {
-            const msg = (e && (e as Error).message) ? (e as Error).message : '';
-            if (msg.includes('already exists')) {
-                // Command already registered by another activation; skip registering to avoid activation failure.
-                console.warn(`Command ${Commands.Preview} already exists; skipping registration.`);
-            } else {
-                throw e;
+        if (options.command !== false) {
+            try {
+                disposables.push(vscode.commands.registerCommand(Commands.Preview, this.showPreview, this));
+            } catch (e) {
+                const msg = (e && (e as Error).message) ? (e as Error).message : '';
+                if (msg.includes('already exists')) {
+                    // Command already registered by another activation; skip registering to avoid activation failure.
+                    console.warn(`Command ${Commands.Preview} already exists; skipping registration.`);
+                } else {
+                    throw e;
+                }
             }
         }
         disposables.push(vscode.workspace.onDidCloseTextDocument(this.onCloseTextDocument, this));
         disposables.push(vscode.workspace.onDidChangeTextDocument(this.onChangeTextDocument, this));
         disposables.push(vscode.window.onDidChangeActiveTextEditor(this.updateHoi4PreviewContextValue, this));
-        disposables.push(vscode.window.registerWebviewPanelSerializer(WebviewType.Preview, this));
+        if (options.serializer !== false) {
+            disposables.push(vscode.window.registerWebviewPanelSerializer(WebviewType.Preview, this));
+        }
         disposables.push(indexManager.onUpdated(this.onGfxIndexInitialized, this));
 
         // Trigger context value setting
@@ -92,7 +96,7 @@ class PreviewManager implements vscode.WebviewPanelSerializer {
         }
     }
 
-    private showPreview(uri?: vscode.Uri): Promise<void> {
+    public showPreview(uri?: vscode.Uri): Promise<void> {
         return this.showPreviewImpl(uri);
     }
 

@@ -7,7 +7,7 @@ Before any map edit, especially merge, consolidation, batch cleanup, or reindexi
 1. Commit the mod or make a complete copy outside the active workspace.
 2. Confirm the selected `.mod` descriptor and its `replace_path` behavior.
 3. Check that the intended map files are loaded from the intended base game and mod layers.
-4. Keep experimental renderer controls off if you need pixel-identical screenshots.
+4. Keep WebGL2 and fidelity-affecting experimental renderer controls off if you need Canvas2D-identical screenshots.
 
 ## Confirmation and scope
 
@@ -30,4 +30,4 @@ Inspect written map files and extension warnings, then validate with the same HO
 3. Restore the last known-good mod copy or Git commit.
 4. Reproduce on a minimal copy and collect the first relevant extension warning or HOI4 log message.
 
-**[PLACEHOLDER: Add project-specific backup locations, supported recovery scripts, and maintainer escalation contacts.]**
+For project issues, include a minimal sanitized fixture when possible and report it at <https://github.com/TheCascadian/HOI4ModernUtils/issues>.

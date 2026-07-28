@@ -4,8 +4,8 @@
 
 | Default | Action | Setting |
 | --- | --- | --- |
-| `T` | Undo selection | `hoi4ModernUtils.worldMapSelectionUndoKeybind` |
-| `R` | Redo selection | `hoi4ModernUtils.worldMapSelectionRedoKeybind` |
+| `T` | Undo selection, or undo the current staged paint draft while painting | `hoi4ModernUtils.worldMapSelectionUndoKeybind` |
+| `R` | Redo selection, or redo the current staged paint draft while painting | `hoi4ModernUtils.worldMapSelectionRedoKeybind` |
 | `Ctrl+Z` | Undo map edit | `hoi4ModernUtils.worldMapMapUndoKeybind` |
 | `Ctrl+Y` | Redo map edit | `hoi4ModernUtils.worldMapMapRedoKeybind` |
 | `Ctrl+Shift+N` | Create state from current selection | `hoi4ModernUtils.worldMapCreateStateKeybind` |
@@ -13,6 +13,17 @@
 | `Ctrl+Shift+G` | Assign selected states to a strategic region | `hoi4ModernUtils.worldMapAssignSelectionToStrategicRegionKeybind` |
 
 Shortcut strings accept combinations such as `Ctrl+Shift+N` or `Alt+Enter`. Use the dedicated setting when map-edit history and selection history are both relevant.
+
+Fixed World Map editor shortcuts:
+
+| Shortcut | Action |
+| --- | --- |
+| `P` | Toggle Brush |
+| `F` | Toggle Fill Bucket |
+| `W` | Toggle Transfer Wand |
+| `E` | Toggle staged-pixel eraser while painting |
+| `Ctrl+Alt+P` | Start new-province painting |
+| `Esc` | Cancel the active paint draft |
 
 ## Extension settings
 
@@ -30,4 +41,13 @@ Shortcut strings accept combinations such as `Ctrl+Shift+N` or `Alt+Enter`. Use 
 | `hoi4ModernUtils.worldMapConfirmNewProvinceCreation` | `true` | Require confirmation before creating a province. |
 | `hoi4ModernUtils.worldMapAutoCoreTransfers` | `false` | Automatically add cores during supported transfers, annexation, and country creation. |
 
-**[PLACEHOLDER: Add a complete current feature-flag reference, including stability status and expected reload behavior.]**
+## Feature flags
+
+The `hoi4ModernUtils.featureFlags` array accepts:
+
+- `useConditionInFocus`: enable conditional behavior in focus previews.
+- `eventTreePreview`: enable event-tree preview behavior.
+- `rightButtonDrag`: enable right-button map dragging.
+- Prefix any listed value with `!` to explicitly disable it.
+
+Reload VS Code after changing feature flags.

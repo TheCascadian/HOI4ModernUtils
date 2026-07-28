@@ -8,6 +8,8 @@ import { getConfiguration } from '../util/vsccommon';
 import { sharedFocusIndex } from './sharedfocusindex';
 import { localisationIndex } from './localisationindex';
 import { eventIndex } from './eventindex';
+import { indexingWorker } from './indexingworker';
+import { sendEvent } from '../util/telemetry';
 
 export type IndexType = 'gfx' | 'sharedfocus' | 'localisation' | 'event';
 
@@ -30,14 +32,30 @@ class IndexManager {
             disposables.push(index.register(this._indexUpdatedEventEmitter));
         }
 
-        if (this._enabledIndexTypes.length !== 0) {
-            const task = this.buildAllIndex();
+        const initialBuildTimer = setTimeout(() => {
+            if (this._enabledIndexTypes.length === 0) {
+                return;
+            }
+            const started = performance.now();
+            performance.mark('hoi4mu.index.initial.start');
+            const task = indexingWorker.boot()
+                .then(() => this.buildAllIndex())
+                .finally(() => {
+                    performance.mark('hoi4mu.index.initial.end');
+                    performance.measure('hoi4mu.index.initial', 'hoi4mu.index.initial.start', 'hoi4mu.index.initial.end');
+                    sendEvent('index.initial.performance', undefined, {
+                        durationMs: performance.now() - started,
+                    });
+                    performance.clearMarks('hoi4mu.index.initial.start');
+                    performance.clearMarks('hoi4mu.index.initial.end');
+                    performance.clearMeasures('hoi4mu.index.initial');
+                });
             vscode.window.setStatusBarMessage('$(loading~spin) ' + localize('index.building', 'Building index...'), task);
             task.then(() => {
                 vscode.window.showInformationMessage(localize('index.builddone', 'Building index done.'));
                 this._indexUpdatedEventEmitter.fire();
             });
-        }
+        }, 0);
 
         disposables.push(vscode.workspace.onDidChangeWorkspaceFolders(this.onChangeWorkspaceFolders, this));
         disposables.push(vscode.workspace.onDidChangeTextDocument(this.onChangeTextDocument, this));
@@ -47,6 +65,8 @@ class IndexManager {
         disposables.push(vscode.workspace.onDidRenameFiles(this.onRenameFiles, this));
         disposables.push(vscode.workspace.onDidChangeConfiguration(this.onChangeConfiguration, this));
         disposables.push(this._indexUpdatedEventEmitter);
+        disposables.push(indexingWorker);
+        disposables.push({ dispose: () => clearTimeout(initialBuildTimer) });
         
         return vscode.Disposable.from(...disposables);
     }

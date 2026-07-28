@@ -8,26 +8,42 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## Unreleased
 
+## [0.4.4] - 2026-07-28
+
+### Added
 * Added a confirmation workflow to create a new three-character country TAG from selected states, including country definition, history, and English localisation files.
 * Added an Auto-Core All Transferred States option shared by state transfers, country creation, and country annexation.
 * Added multi-country selection for bulk annexation.
 * Added selected-state merging with an explicit surviving-state choice and combined provinces, manpower, resources, cores, and victory points.
-* Province merging now repairs deleted province references in state victory points, strategic regions, `adjacencies.csv`, `railways.txt`, and `supply_nodes.txt`.
-* Added a standalone safe province-warning resolver for invalid adjacency, railway, and supply-node province references.
 * Added a Transfer Wand for rapidly moving land, lake, and ocean provinces between states or copying both state owner and controller assignments.
 * Added pixel transfer between existing provinces, including a connected-region Fill Bucket that does not create new province IDs.
-* Added a built-in North America consolidation pipeline that merges continental provinces, touched states and strategic regions, clears scoped buildings and supply infrastructure, repairs references, and assigns the result to a chosen country.
-* Increased close editing zoom from 16x to 64x and kept wheel zoom centered on the pointer.
+* Added a standalone safe province-warning resolver for invalid adjacency, railway, and supply-node province references.
+* Added staged-paint erasing plus draft undo/redo. The configured selection-history keys, `T` and `R` by default, operate on the draft while paintbrush mode is active.
+* Added distinct Select All actions for provinces, land, oceans, rivers, lakes, coasts, other province types, and terrain. River selection retains exact `rivers.bmp` components for clipped river-to-ocean conversion.
+* Added a built-in continental consolidation workflow that merges provinces, affected states and strategic regions, clears scoped infrastructure, repairs supported references, and assigns the result to a chosen country. A sequential run-all mode uses each continent's dominant current owner.
+* Added Selected Area Tools for clearing railways, buildings, supply hubs, water crossings, and resources; setting state population to one; lowering development; and converting eligible selections to ocean.
+* Added guarded global actions for removing all water crossings, clearing all state resources, removing all cores without changing owner/controller values, and sequentially reindexing loaded province and state IDs.
+* Added an opt-in WebGL2 base-map renderer with quadtree viewport culling, level-of-detail geometry, batched province fills, and Canvas2D foreground overlays.
+* Added a movable Performance overlay with live FPS, total and base-map timing, redraw status, viewport, zoom, canvas size, and renderer diagnostics.
+* Added lazy, cached low-memory DDS and TGA thumbnails with an explicit full-resolution decode action.
+* Added lazy preview registration, deferred initial indexing, background worker parsing for GFX and localisation indexes, and activation/index timing instrumentation.
+
+### Changed
+* Increased close editing zoom from 16x to 64x, made wheel zoom continuous, and kept zoom centered on the pointer.
+* Province merging now repairs deleted province references in state victory points, strategic regions, `adjacencies.csv`, `railways.txt`, and `supply_nodes.txt`.
 * State transfer and annex tools now persist both owner and controller.
-* Fixed the North America consolidation command silently stopping in VS Code webviews by replacing browser prompts with an in-webview preflight and execution dialog.
-* Generalized consolidation into a nested workflow for every loaded continent and added an automatic sequential run-all flow that selects each continent's dominant current owner.
-* Added a guarded `REMOVE ALL CORES` destructive action that removes core history records without changing state owners or controllers.
-* Added hover descriptions to every map action and a toggleable Compact Large Tooltips display option.
-* Fixed edge-decimation and coarse-province Performance switches so they now change the live renderer sampling context, matching the runtime profiler.
-* Added selected-area and global batch actions for removing water crossings and clearing state resources.
-* Continental destructive merging now preserves separate land and water province survivors and separate Land/Water strategic regions.
-* Major destructive actions now sequentially reindex loaded province and state IDs and repair map, state, strategic-region, supply-area, country-capital, adjacency, railway, supply-node, and building references.
-* Added a guarded standalone `REINDEX ALL PROVINCES AND STATES` action.
+* Continental destructive merging preserves separate land, lake, and sea province survivors and separate land/water strategic regions.
+* Major destructive actions sequentially reindex loaded province and state IDs and repair map, state, strategic-region, supply-area, country-capital, adjacency, railway, supply-node, and building references.
+* State-file updates preserve unrelated blocks and unknown effects while replacing supported map-owned fields.
+* Context menus, confirmation dialogs, large tooltips, and dropdown placement were made responsive and keyboard accessible.
+* Opt-in WebGL2 measured **82.6% lower median render time than the original Canvas2D renderer**, from 42.5 ms to 7.4 ms, or about 5.7x faster, over 312 authentic-map webview cases at 0.25x zoom. It is not pixel-identical and remains disabled by default.
+
+### Fixed
+* Fixed the paintbrush becoming unusably slow on long or heavily staged strokes. Interpolated dabs now share one draft clone and one published update per sampled pointer event; the staged overlay is cached; redundant overlap updates are skipped; and draft-only changes no longer invalidate the base map.
+* A deterministic 20,000-staged-pixel, 256-dab synthetic workload measured 99.75% lower stroke-processing time than the prior per-dab implementation, from 662.4 ms to 1.65 ms. This is an algorithm microbenchmark, not a live UI frame-time result.
+* Fixed the continental consolidation command silently stopping in VS Code webviews by replacing browser prompts with an in-webview preflight and execution dialog.
+* Fixed edge-decimation and coarse-province Performance switches so they change the live renderer sampling context, matching the runtime profiler.
+* Normalized one-pixel brush bounds to positive zero so exact comparisons and serialized diagnostics stay stable.
 
 ## [0.4.2] - 2026-07-27
 

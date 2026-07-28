@@ -47,3 +47,21 @@ export abstract class IndexBase<T> {
         return this._workspaceIndex.get(key) ?? this._globalIndex.get(key);
     }
 }
+
+export async function forEachConcurrent<T>(
+    values: readonly T[],
+    concurrency: number,
+    action: (value: T) => Promise<void>,
+): Promise<void> {
+    let nextIndex = 0;
+    const workers = Array.from(
+        { length: Math.min(Math.max(1, concurrency), values.length) },
+        async () => {
+            while (nextIndex < values.length) {
+                const index = nextIndex++;
+                await action(values[index]);
+            }
+        },
+    );
+    await Promise.all(workers);
+}

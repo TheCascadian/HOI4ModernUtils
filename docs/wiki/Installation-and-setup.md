@@ -11,7 +11,7 @@ code.cmd --install-extension .\hoi4modernutils-<version>.vsix --force
 
 You can also use **Extensions: Install from VSIX...** in Visual Studio Code.
 
-**[PLACEHOLDER: Add the official release asset link and supported VS Code version range.]**
+Release packages are published on the [GitHub Releases page](https://github.com/TheCascadian/HOI4ModernUtils/releases). The extension manifest currently declares VS Code `^1.52.0` or newer.
 
 ## First-time configuration
 
@@ -27,7 +27,7 @@ If the workspace contains exactly one suitable `.mod` descriptor, it can be sele
 
 World-map features depend on a readable HOI4 installation and an open mod workspace. Map-editing workflows expect the normal map files, such as `provinces.bmp`, `definition.csv`, state files, strategic regions, and related map data, to be available through the base game and active mod resolution.
 
-**[PLACEHOLDER: Document the exact HOI4 versions and DLC combinations verified for the current release.]**
+The project does not declare one universal HOI4 game-version guarantee. Validate the extension with the exact HOI4 version, DLC set, mod descriptor, and playset you intend to release against. Supply-area preview support is primarily for HOI4 1.10 and earlier and must be enabled with `hoi4ModernUtils.enableSupplyArea`.
 
 ## Useful commands
 
@@ -43,4 +43,4 @@ World-map features depend on a readable HOI4 installation and an open mod worksp
 
 Install a newer VSIX with the same command and reload VS Code when prompted. Confirm the installed version in the Extensions view before trusting new map-editing behavior.
 
-**[PLACEHOLDER: Add upgrade notes if settings or map file formats change between releases.]**
+Version 0.4.4 does not introduce a new project file format. Saved world-map Performance selections remain per-webview state; WebGL2 and fidelity-affecting controls remain opt-in.

@@ -1,15 +1,21 @@
 import * as vscode from 'vscode';
-import { ddsToPng, tgaToPng } from './util/image/converter';
-import { PNG } from 'pngjs';
 import { localize } from './util/i18n';
-import { DDS } from './util/image/dds';
 import { html, htmlEscape } from './util/html';
 import { StyleTable } from './util/styletable';
 import { sendEvent } from './util/telemetry';
 import { forceError } from './util/common';
-import { readFile } from './util/vsccommon';
+import { LazyAssetResult, LazyAssetService, registerLazyAssetService } from './fileSystem/lazyassetservice';
 
 abstract class CommonViewProvider implements vscode.CustomReadonlyEditorProvider {
+    private readonly assets: LazyAssetService;
+
+    constructor(
+        context: vscode.ExtensionContext,
+        private readonly type: 'dds' | 'tga',
+    ) {
+        this.assets = registerLazyAssetService(context);
+    }
+
     public async openCustomDocument(uri: vscode.Uri) {
         // Don't try opening it as text
         return { uri, dispose: () => { } };
@@ -19,53 +25,69 @@ abstract class CommonViewProvider implements vscode.CustomReadonlyEditorProvider
         try {
             this.onOpen();
 
-            const buffer = await Promise.race([
-                readFile(document.uri),
-                new Promise<null>(resolve => token.onCancellationRequested(_ => resolve(null))),
-            ]);
-
-            if (buffer === null) {
-                return;
-            }
-
-            const png = this.getPng(Buffer.from(buffer));
-            const pngBuffer = PNG.sync.write(png);
-            const styleTable = new StyleTable();
-
-            webviewPanel.webview.html = html(
-                webviewPanel.webview,
-                `<div class="${styleTable.oneTimeStyle('imagePreview', () => `width:${png.width}px;height:${png.height}px;`)}">
-                    <img src="data:image/png;base64,${pngBuffer.toString('base64')}"/>
-                </div>`,
-                [],
-                [styleTable]
-            );
+            webviewPanel.webview.options = { enableScripts: true };
+            const preview = await this.assets.getThumbnail(document.uri, this.type, token);
+            this.render(webviewPanel.webview, preview, true);
+            const subscription = webviewPanel.webview.onDidReceiveMessage(async message => {
+                if (message?.command !== 'decodeFull' || token.isCancellationRequested) {
+                    return;
+                }
+                try {
+                    const full = await this.assets.decodeFull(document.uri, this.type, token);
+                    this.render(webviewPanel.webview, full, false);
+                } catch (error) {
+                    webviewPanel.webview.html = `${localize('error', 'Error')}: <br/>  <pre>${htmlEscape(forceError(error).toString())}</pre>`;
+                }
+            });
+            webviewPanel.onDidDispose(() => subscription.dispose());
         } catch (e) {
             webviewPanel.webview.html = `${localize('error', 'Error')}: <br/>  <pre>${htmlEscape(forceError(e).toString())}</pre>`;
         }
     }
 
     protected abstract onOpen(): void;
-    protected abstract getPng(buffer: Buffer): PNG;
+
+    private render(webview: vscode.Webview, result: LazyAssetResult, thumbnail: boolean): void {
+        const styleTable = new StyleTable();
+        const notice = thumbnail
+            ? `<div>
+                <span>Low-memory ${result.width}×${result.height} preview${result.fromCache ? ' (cached)' : ''}.</span>
+                <button id="decode-full">Decode full resolution</button>
+            </div>`
+            : `<div>Full-resolution ${result.width}×${result.height} image.</div>`;
+        webview.html = html(
+            webview,
+            `${notice}
+            <div class="${styleTable.oneTimeStyle('imagePreview', () => `width:${result.width}px;height:${result.height}px;`)}">
+                <img src="data:image/png;base64,${result.png.toString('base64')}"/>
+            </div>`,
+            thumbnail ? [{
+                content: `const vscode = acquireVsCodeApi();
+                    document.getElementById('decode-full').addEventListener('click', () => {
+                        vscode.postMessage({ command: 'decodeFull' });
+                    });`,
+            }] : [],
+            [styleTable]
+        );
+    }
 }
 
 export class DDSViewProvider extends CommonViewProvider {
-    protected onOpen(): void {
-        sendEvent('preview.dds');
+    constructor(context: vscode.ExtensionContext) {
+        super(context, 'dds');
     }
 
-    protected getPng(buffer: Buffer): PNG {
-        const dds = DDS.parse(buffer.buffer, buffer.byteOffset);
-        return ddsToPng(dds);
+    protected onOpen(): void {
+        sendEvent('preview.dds');
     }
 }
 
 export class TGAViewProvider extends CommonViewProvider {
-    protected onOpen(): void {
-        sendEvent('preview.tga');
+    constructor(context: vscode.ExtensionContext) {
+        super(context, 'tga');
     }
 
-    protected getPng(buffer: Buffer): PNG {
-        return tgaToPng(buffer);
+    protected onOpen(): void {
+        sendEvent('preview.tga');
     }
 }

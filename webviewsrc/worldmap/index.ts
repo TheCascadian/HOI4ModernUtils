@@ -5,6 +5,7 @@ import { getState, setState } from '../util/common';
 import { Renderer } from './renderer';
 import { fromEvent } from 'rxjs';
 import { registerWorldMapRuntimeTest } from './runtimetest';
+import { PerformanceDebugOverlay } from './performanceoverlay';
 
 fromEvent(window, 'load').subscribe(function() {
     hideBySupplyAreaFlag((window as any)['__enableSupplyArea']);
@@ -15,7 +16,22 @@ fromEvent(window, 'load').subscribe(function() {
     const viewPoint = new ViewPoint(mainCanvas, loader, topBarHeight, state.viewPoint || { x: 0, y: -topBarHeight, scale: 1 });
     const topBar = new TopBar(mainCanvas, viewPoint, loader, state);
     const renderer = new Renderer(mainCanvas, viewPoint, loader, topBar);
+    new PerformanceDebugOverlay(renderer, topBar, viewPoint);
     registerWorldMapRuntimeTest(loader, topBar, viewPoint);
+
+    let disposed = false;
+    const disposeWorldMap = () => {
+        if (disposed) {
+            return;
+        }
+        disposed = true;
+        renderer.dispose();
+        topBar.dispose();
+        viewPoint.dispose();
+        loader.dispose();
+    };
+    window.addEventListener('pagehide', disposeWorldMap, { once: true });
+    window.addEventListener('beforeunload', disposeWorldMap, { once: true });
 
     fromEvent<MouseEvent>(mainCanvas, 'contextmenu').subscribe(event => {
         event.preventDefault();

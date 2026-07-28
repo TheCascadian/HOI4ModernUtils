@@ -270,6 +270,7 @@ export interface WorldMapRuntimeTestViewport {
 }
 
 export type WorldMapRuntimeTestOptimization =
+    | 'webgl2-base'
     | 'warning-index'
     | 'edge-decimation'
     | 'river-device-pixel-collapse'
@@ -293,6 +294,7 @@ export interface WorldMapRuntimeTestRequest {
     capturePixelHash?: boolean;
     timeoutMs?: number;
     optimizations?: WorldMapRuntimeTestOptimization[];
+    renderer?: 'canvas2d' | 'webgl2';
 }
 
 export interface WorldMapRuntimeTestCaseResult {
@@ -327,6 +329,7 @@ export interface WorldMapRuntimeTestReport {
         provinces: number;
         rivers: number;
         optimizations: WorldMapRuntimeTestOptimization[];
+        renderer: 'canvas2d' | 'webgl2';
     };
     results: WorldMapRuntimeTestCaseResult[];
     runtimeErrors: string[];
@@ -523,6 +526,8 @@ export interface PersistedState {
     file: string;
     tokenStart?: number;
     tokenEnd?: number;
+    /** Update known map fields without discarding unsupported state content. */
+    preserveUnknownContent?: boolean;
 }
 
 export interface PersistStatesMessage {

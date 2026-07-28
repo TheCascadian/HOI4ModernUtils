@@ -24,7 +24,11 @@ Do not repeat it blindly. Restore your backup, confirm the selected scope, and r
 
 ## Visual output changed after enabling Performance options
 
-Disable experimental fidelity-affecting settings. Edge decimation, river pixel collapse, label-grid deduplication, and coarse province rendering intentionally trade detail for less drawing work.
+Disable experimental fidelity-affecting settings. WebGL2 is not pixel-identical to Canvas2D, and edge decimation, river pixel collapse, label-grid deduplication, and coarse province rendering intentionally trade detail for less drawing work.
+
+## Paintbrush movement is slow
+
+Version 0.4.4 batches interpolated dabs, caches the staged-pixel overlay, and avoids base-map invalidation for draft-only changes. Confirm the installed EXTENSION is 0.4.4 or newer and reload the World Map. The Performance overlay can show whether base-map redraws are still occurring while painting. If the issue persists, report the painted-pixel count, brush size, zoom, active renderer, and total/base-map timing.
 
 ## What to include in a bug report
 
@@ -34,4 +38,4 @@ Disable experimental fidelity-affecting settings. Edge decimation, river pixel c
 - Exact action, affected map files, and first warning or error.
 - A minimal reproducing mod or sanitized fixture, if sharing is permitted.
 
-**[PLACEHOLDER: Add the issue template link and privacy guidance for logs/mod attachments.]**
+Open reports at <https://github.com/TheCascadian/HOI4ModernUtils/issues>. Remove personal paths, unpublished mod content, and unrelated log sections before attaching files.

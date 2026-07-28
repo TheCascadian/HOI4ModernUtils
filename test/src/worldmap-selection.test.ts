@@ -2,6 +2,7 @@ import * as assert from 'assert';
 import { Province, River } from '../../webviewsrc/worldmap/definitions';
 import {
     forEachRiverPixel,
+    ProvinceSelectionHistory,
     SelectableWorldMap,
     selectProvinceIds,
     selectRiverProvinceIds,
@@ -87,5 +88,27 @@ describe('world map bulk selections', () => {
             [12, 20, 3],
             [11, 21, 7],
         ]);
+    });
+
+    it('undoes and redoes exact river-component selections, not only touched provinces', () => {
+        const history = new ProvinceSelectionHistory();
+        const rivers = {
+            provinceIds: new Set([1, 2, 3]),
+            riverIds: new Set([4, 7]),
+        };
+        history.record(rivers);
+        const single = {
+            provinceIds: new Set([9]),
+            riverIds: new Set<number>(),
+        };
+        const restored = history.undo(single);
+        assert.deepStrictEqual(Array.from(restored?.provinceIds ?? []), [1, 2, 3]);
+        assert.deepStrictEqual(Array.from(restored?.riverIds ?? []), [4, 7]);
+
+        restored?.provinceIds.clear();
+        restored?.riverIds.clear();
+        const reapplied = history.redo(restored ?? single);
+        assert.deepStrictEqual(Array.from(reapplied?.provinceIds ?? []), [9]);
+        assert.deepStrictEqual(Array.from(reapplied?.riverIds ?? []), []);
     });
 });

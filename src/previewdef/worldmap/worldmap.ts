@@ -15,7 +15,7 @@ import { LoaderSession } from '../../util/loader/loader';
 import { TelemetryMessage, sendByMessage } from '../../util/telemetry';
 import { getConfiguration } from '../../util/vsccommon';
 import { repairAdjacencies, repairRailways, repairSupplyNodes, validateProvinceBmpEdit } from './provincefixes';
-import { clearMapBuildings, clearRailways, clearSupplyHubs, clearWaterCrossings, convertDefinitionsToOcean, partitionLandAndWaterProvinces, planProvinceMergesByType, removeAllCores, removeProvincesFromRegionBlocks, replaceStateIdsInSupplyAreas, transformSelectedStates } from './areaoperations';
+import { clearMapBuildings, clearRailways, clearSupplyHubs, clearWaterCrossings, convertDefinitionsToOcean, partitionLandAndWaterProvinces, patchStatePreservingUnknownContent, planProvinceMergesByType, removeAllCores, removeProvincesFromRegionBlocks, replaceStateIdsInSupplyAreas, transformSelectedStates } from './areaoperations';
 import { createSequentialIdMap, reindexCountryHistoryFile, reindexDefinitions, reindexMapBuildings, reindexStateFile, reindexStrategicRegionFile, reindexSupplyAreaFile } from './reindex';
 import { addReplacePathsToDescriptor } from '../../util/replacepath';
 import { buildClippedRiverOceanEdit } from './riverconversion';
@@ -1143,7 +1143,10 @@ export class WorldMap {
                 throw new Error(`Failed to locate existing state block by id ${state.id} in ${relativePath}`);
             }
 
-            const serialized = this.serializeState(state, eol);
+            const original = text.substring(range.start, range.end);
+            const serialized = state.preserveUnknownContent
+                ? patchStatePreservingUnknownContent(original, state, eol)
+                : this.serializeState(state, eol);
             text = text.substring(0, range.start) + serialized + text.substring(range.end);
         }
 
@@ -2401,6 +2404,7 @@ export class WorldMap {
                 file: targetState.file,
                 tokenStart: targetState.token?.start,
                 tokenEnd: targetState.token?.end,
+                preserveUnknownContent: true,
             };
             const deletedStateRecords = touchedStates
                 .filter(state => state.id !== targetState.id)

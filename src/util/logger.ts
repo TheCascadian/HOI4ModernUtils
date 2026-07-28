@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { setParserWarningSink } from './parserlog';
 
 enum LogLevel {
     DEBUG = 'DEBUG',
@@ -14,6 +15,7 @@ export class Logger {
     public static register(): vscode.Disposable {
         Logger.outputChannel = vscode.window.createOutputChannel('HOI4 Mod Utilities');
         Logger.outputChannel.show();
+        setParserWarningSink(message => Logger.warn(message));
         return Logger.outputChannel;
     }
 

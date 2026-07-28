@@ -7,6 +7,7 @@ import {
     convertDefinitionsToOcean,
     removeAllCores,
     partitionLandAndWaterProvinces,
+    patchStatePreservingUnknownContent,
     planProvinceMergesByType,
     replaceStateIdsInSupplyAreas,
     removeProvincesFromRegionBlocks,
@@ -151,5 +152,44 @@ describe('selected area operations', () => {
             'supply_area = { states = { 12 } }',
         ].join('\n'));
         assert.strictEqual(result.changed, 3);
+    });
+
+    it('preserves target buildings and dated effects while patching merged state fields', () => {
+        const source = [
+            'state = {',
+            '\tid = 4',
+            '\tname = "OLD"',
+            '\tmanpower = 10',
+            '\tstate_category = rural',
+            '\tprovinces = { 4 }',
+            '\tresources = { steel = 1 }',
+            '\thistory = {',
+            '\t\towner = OLD',
+            '\t\tadd_core_of = OLD',
+            '\t\tbuildings = { infrastructure = 3 arms_factory = 2 }',
+            '\t\t1939.1.1 = { add_core_of = LATER }',
+            '\t}',
+            '}',
+        ].join('\n');
+        const result = patchStatePreservingUnknownContent(source, {
+            name: 'MERGED',
+            manpower: 30,
+            category: 'city',
+            provinces: [4, 8],
+            impassable: false,
+            owner: 'NEW',
+            controller: 'NEW',
+            cores: ['NEW'],
+            victoryPoints: { 4: 5 },
+            resources: { steel: 3, oil: 2 },
+        }, '\n');
+        assert.ok(result.includes('name = "MERGED"'));
+        assert.ok(result.includes('manpower = 30'));
+        assert.ok(result.includes('provinces = { 4 8 }'));
+        assert.ok(result.includes('buildings = { infrastructure = 3 arms_factory = 2 }'));
+        assert.ok(result.includes('1939.1.1 = { add_core_of = LATER }'));
+        assert.ok(result.includes('owner = NEW'));
+        assert.ok(!result.includes('owner = OLD'));
+        assert.ok(result.includes('victory_points = { 4 5 }'));
     });
 });

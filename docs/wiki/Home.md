@@ -15,11 +15,11 @@ HOI4 Modern Utils is a Visual Studio Code extension for Hearts of Iron IV mod de
 
 | Area | What it does |
 | --- | --- |
-| File previews | Opens HOI4-focused previews for world maps, focus trees, event trees, technology trees, MIOs, GUIs, `.gfx`, `.dds`, and `.tga` files. |
+| File previews | Opens HOI4-focused previews for world maps, focus trees, event trees, technology trees, MIOs, GUIs, `.gfx`, `.dds`, and `.tga` files. Large DDS/TGA assets use cached low-memory thumbnails with optional full decoding. |
 | World Map | Displays provinces, states, strategic regions, supply areas, countries, and validation warnings. |
 | Map editing | Creates and transfers provinces, states, strategic regions, countries, and country ownership. |
 | Repair tools | Updates related references after supported province and state changes. |
-| Diagnostics | Shows map warnings and includes opt-in rendering performance controls. |
+| Diagnostics | Shows map warnings, a live performance overlay, and opt-in Canvas2D/WebGL2 rendering controls. |
 
 ## Use the right documentation page
 
@@ -31,16 +31,15 @@ HOI4 Modern Utils is a Visual Studio Code extension for Hearts of Iron IV mod de
 - [Safe editing and recovery](Safe-editing-and-recovery): backups, confirmations, undo/redo, and validation boundaries.
 - [Troubleshooting](Troubleshooting): common setup and map-loading problems.
 
-## Status markers used in this wiki
+## Status language used in this wiki
 
 - **Supported** means the behavior is implemented and covered by project tests or direct code paths.
 - **Experimental** means it is opt-in or can affect visual fidelity.
-- **[PLACEHOLDER]** means project-specific information is not yet supplied or verified. Replace it before publishing this wiki externally.
 
 ## Project links
 
 - Repository: <https://github.com/TheCascadian/HOI4ModernUtils>
+- Releases: <https://github.com/TheCascadian/HOI4ModernUtils/releases>
+- Issues: <https://github.com/TheCascadian/HOI4ModernUtils/issues>
 - License: MIT, see [LICENSE](../../LICENSE)
-- Current extension version: check `package.json` before publishing a release.
-
-**[PLACEHOLDER: Add the canonical issue tracker URL, discussion channel, and release-download URL.]**
+- Current extension version: `0.4.4`

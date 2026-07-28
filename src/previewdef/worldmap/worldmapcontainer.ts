@@ -9,10 +9,14 @@ import { WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest } from './definit
 export class WorldMapContainer implements vscode.WebviewPanelSerializer {
     private worldMap: WorldMap | undefined = undefined;
 
-    public register(): vscode.Disposable {
+    public register(options: { command?: boolean; serializer?: boolean } = {}): vscode.Disposable {
         const disposables: vscode.Disposable[] = [];
-        disposables.push(vscode.commands.registerCommand(Commands.PreviewWorld, this.openPreview, this));
-        disposables.push(vscode.window.registerWebviewPanelSerializer(WebviewType.PreviewWorldMap, this));
+        if (options.command !== false) {
+            disposables.push(vscode.commands.registerCommand(Commands.PreviewWorld, this.openPreview, this));
+        }
+        if (options.serializer !== false) {
+            disposables.push(vscode.window.registerWebviewPanelSerializer(WebviewType.PreviewWorldMap, this));
+        }
         disposables.push(vscode.workspace.onDidCloseTextDocument(this.onCloseTextDocument, this));
         disposables.push(vscode.workspace.onDidChangeTextDocument(this.onChangeTextDocument, this));
         if (isWorldMapRuntimeTestEnabled()) {

@@ -1,7 +1,7 @@
 <!--Inside <body>-->
     <div class="toolbar-outer">
         <div id="topbar" class="toolbar">
-            <div class="group">
+            <div class="group primary-map-control">
                 <label for="viewmode">%worldmap.topbar.viewmode|View mode: %</label>
                 <div class="select-container">
                     <select id="viewmode">
@@ -15,7 +15,7 @@
                 </div>
             </div>
 
-            <div class="group">
+            <div class="group primary-map-control">
                 <label for="colorset">%worldmap.topbar.colorset|Color set: %</label>
                 <div class="select-container">
                     <select id="colorset">
@@ -38,7 +38,7 @@
                 </div>
             </div>
 
-            <div class="group">
+            <div class="group topbar-filter-control" data-overflow-priority="4">
                 <label id="display-label" for="display">%worldmap.topbar.display|Display: %</label>
                 <div class="select-container">
                     <div id="display" class="select multiple-select" tabindex="0" role="combobox" aria-labelledby="display-label" aria-haspopup="listbox" title="%worldmap.topbar.display.tooltip|Choose visible map layers and tooltip detail.%">
@@ -58,7 +58,7 @@
                 </div>
             </div>
 
-            <div class="group">
+            <div class="group topbar-filter-control" data-overflow-priority="2">
                 <label id="conditions-label" for="conditions">%worldmap.topbar.conditions|Conditions: %</label>
                 <div class="select-container">
                     <div id="conditions" class="select multiple-select" tabindex="0" role="combobox" aria-labelledby="conditions-label" aria-haspopup="listbox" title="%worldmap.topbar.conditions.tooltip|Choose condition branches used to resolve ownership, control, and cores.%">
@@ -67,7 +67,7 @@
                 </div>
             </div>
 
-            <div class="group" viewmode="province state strategicregion supplyarea supply">
+            <div class="group topbar-search-control" viewmode="province state strategicregion supplyarea supply" data-overflow-priority="3">
                 <label for="searchbox">%worldmap.topbar.search|Search: %</label>
                 <input id="searchbox" type="text"/>
                 <button id="search" title="%worldmap.topbar.search.title|Search%">
@@ -75,7 +75,7 @@
                 </button>
             </div>
 
-            <div class="group" viewmode="warnings">
+            <div class="group topbar-filter-control" viewmode="warnings" data-overflow-priority="3">
                 <label id="warningfilter-label" for="warningfilter">%worldmap.topbar.warningfilter|Warning filter: %</label>
                 <div class="select-container">
                     <div id="warningfilter" class="select multiple-select" tabindex="0" role="combobox" aria-labelledby="warningfilter-label" aria-haspopup="listbox" title="%worldmap.topbar.warningfilter.tooltip|Choose which validation warning categories are visible.%">
@@ -98,19 +98,28 @@
             <div class="group render-optimizations">
                 <button id="render-optimizations-button" type="button" aria-haspopup="true" aria-controls="render-optimizations-menu" aria-expanded="false" title="%worldmap.topbar.optimizations.title|Experimental performance options%">
                     <i class="codicon codicon-dashboard"></i>
-                    <span>%worldmap.topbar.optimizations|Performance%</span>
+                    <span class="responsive-button-label">%worldmap.topbar.optimizations|Performance%</span>
                     <span id="render-optimizations-count" class="render-optimizations-count hidden"></span>
                     <i class="codicon codicon-chevron-down"></i>
                 </button>
                 <div id="render-optimizations-menu" class="render-optimizations-menu" role="group" aria-label="%worldmap.topbar.optimizations.heading|Experimental rendering%" hidden>
                     <div class="render-optimizations-heading">%worldmap.topbar.optimizations.heading|Experimental rendering%</div>
                     <div class="render-optimizations-note">%worldmap.topbar.optimizations.note|Off by default. Enable only after reviewing the visual impact.%</div>
+                    <div class="render-optimizations-section">%worldmap.performance.debug.section|Diagnostics%</div>
+                    <label class="render-optimization-option">
+                        <input id="performance-debug-toggle" type="checkbox"/>
+                        <span><strong>%worldmap.performance.debug.toggle|Performance overlay%</strong><small>%worldmap.performance.debug.toggle.detail|Show live render timing and viewport diagnostics.%</small></span>
+                    </label>
                     <div class="render-optimizations-section">%worldmap.topbar.optimizations.fidelity|Fidelity preserving%</div>
                     <label class="render-optimization-option">
                         <input type="checkbox" data-render-optimization="warning-index" data-optimization-name="Warning index" data-optimization-impact="Indexes warning lookups. Intended to preserve the rendered image exactly."/>
                         <span><strong>%worldmap.topbar.optimizations.warningindex|Warning index%</strong><small>%worldmap.topbar.optimizations.warningindex.detail|Faster warning color lookups; intended to preserve visuals.%</small></span>
                     </label>
                     <div class="render-optimizations-section warning">%worldmap.topbar.optimizations.lossy|Visually lossy%</div>
+                    <label class="render-optimization-option">
+                        <input type="checkbox" data-render-optimization="webgl2-base" data-optimization-name="WebGL2 base map" data-optimization-impact="Moves province fills to a batched GPU renderer. This is substantially faster, but pixel hashes differ from Canvas2D and the first frame builds GPU geometry."/>
+                        <span><strong>WebGL2 base map</strong><small>Batched GPU province rendering with quadtree culling and zoom LOD.</small></span>
+                    </label>
                     <label class="render-optimization-option">
                         <input type="checkbox" data-render-optimization="edge-decimation" data-optimization-name="Edge decimation" data-optimization-impact="Reduces boundary detail, especially at low zoom."/>
                         <span><strong>%worldmap.topbar.optimizations.edgedecimation|Edge decimation%</strong><small>%worldmap.topbar.optimizations.edgedecimation.detail|Draws fewer boundary samples at low zoom.%</small></span>
@@ -133,7 +142,7 @@
             <div class="group accessibility-options">
                 <button id="accessibility-options-button" type="button" aria-haspopup="true" aria-controls="accessibility-options-menu" aria-expanded="false" title="%worldmap.accessibility.title|Accessibility and interface preferences (Ctrl+Alt+A)%">
                     <i class="codicon codicon-accessibility"></i>
-                    <span>%worldmap.accessibility|Accessibility%</span>
+                    <span class="responsive-button-label">%worldmap.accessibility|Accessibility%</span>
                     <i class="codicon codicon-chevron-down"></i>
                 </button>
                 <div id="accessibility-options-menu" class="accessibility-options-menu" role="dialog" aria-label="%worldmap.accessibility.heading|Interface accessibility%" hidden>
@@ -159,7 +168,7 @@
                 </div>
             </div>
 
-            <div class="group" viewmode="state strategicregion supplyarea">
+            <div class="group" viewmode="state strategicregion supplyarea" data-overflow-priority="5">
                 <button id="open" title="%worldmap.topbar.open.title|Open in workspace (double-click)%">
                     <i class="codicon codicon-link-external"></i>
                 </button>
@@ -167,13 +176,13 @@
 
             <!-- Export as image, warnings toggle, province/state tools moved to the Shift+Right-click context menu (see topbar.ts loadToolsContextMenu). -->
 
-            <div class="group" viewmode="province strategicregion">
+            <div class="group" viewmode="province strategicregion" data-overflow-priority="5">
                 <button id="assign-to-strategicregion" type="button" title="%worldmap.topbar.assignstrategicregion.title|Assign selected provinces to selected strategic region (Ctrl+Shift+R)%">
                     <i class="codicon codicon-globe"></i>
                 </button>
             </div>
 
-            <div class="group" viewmode="province">
+            <div class="group" viewmode="province" data-overflow-priority="1">
                 <button id="new-province" type="button" title="%worldmap.topbar.newprovince.title|Create new province from selected (Ctrl+Alt+P)%">
                     <i class="codicon codicon-add"></i>
                 </button>
@@ -202,8 +211,41 @@
                 </div>
             </div>
 
+            <div class="group topbar-overflow" hidden>
+                <button id="topbar-overflow-button" type="button" aria-haspopup="true" aria-controls="topbar-overflow-menu" aria-expanded="false" title="%worldmap.topbar.more.title|More map controls%">
+                    <i class="codicon codicon-ellipsis"></i>
+                    <span class="responsive-button-label">%worldmap.topbar.more|More%</span>
+                </button>
+                <div id="topbar-overflow-menu" class="topbar-overflow-menu" role="group" aria-label="%worldmap.topbar.more|More map controls%" hidden></div>
+            </div>
+
         </div>
     </div>
+    <aside id="performance-debug-overlay" class="performance-debug-overlay" data-corner="bottom-right" aria-label="%worldmap.performance.debug.title|World map performance diagnostics%" hidden>
+        <div class="performance-debug-header">
+            <span><i class="codicon codicon-pulse"></i> %worldmap.performance.debug.title|Performance debug%</span>
+            <button id="performance-debug-close" type="button" title="%worldmap.performance.debug.close|Hide performance diagnostics%" aria-label="%worldmap.performance.debug.close|Hide performance diagnostics%">
+                <i class="codicon codicon-close"></i>
+            </button>
+        </div>
+        <dl class="performance-debug-grid">
+            <dt>%worldmap.performance.debug.rate|Render rate%</dt><dd data-performance-metric="render-rate">0/s</dd>
+            <dt>%worldmap.performance.debug.frame|Last render%</dt><dd data-performance-metric="frame-time">Waiting</dd>
+            <dt>%worldmap.performance.debug.average|Rolling average%</dt><dd data-performance-metric="average-time">0 ms</dd>
+            <dt>%worldmap.performance.debug.map|Map redraw%</dt><dd data-performance-metric="map-time">Waiting</dd>
+            <dt>%worldmap.performance.debug.viewport|Viewport%</dt><dd data-performance-metric="viewport">0 × 0</dd>
+            <dt>%worldmap.performance.debug.zoom|Zoom%</dt><dd data-performance-metric="zoom">1×</dd>
+            <dt>%worldmap.performance.debug.mode|Mode%</dt><dd data-performance-metric="mode">province</dd>
+            <dt>%worldmap.performance.debug.selection|Selected provinces%</dt><dd data-performance-metric="selection">0</dd>
+            <dt>%worldmap.performance.debug.optimizations|Optimizations%</dt><dd data-performance-metric="optimizations">none</dd>
+        </dl>
+        <div class="performance-debug-corners" aria-label="%worldmap.performance.debug.snap|Snap overlay to corner%">
+            <button type="button" data-performance-corner="top-left" title="Top left" aria-label="Snap top left">↖</button>
+            <button type="button" data-performance-corner="top-right" title="Top right" aria-label="Snap top right">↗</button>
+            <button type="button" data-performance-corner="bottom-left" title="Bottom left" aria-label="Snap bottom left">↙</button>
+            <button type="button" data-performance-corner="bottom-right" title="Bottom right" aria-label="Snap bottom right">↘</button>
+        </div>
+    </aside>
     <div id="action-status" class="hidden" role="status" aria-live="polite"></div>
     <canvas id="main-canvas" tabindex="0" role="application" aria-label="%worldmap.canvas.label|Interactive Hearts of Iron IV world map. Use Shift+F10 for map tools.%" aria-describedby="map-accessible-status"></canvas>
     <div id="map-accessible-status" class="screen-reader-only" role="status" aria-live="polite"></div>
@@ -223,6 +265,11 @@
             <span id="paintbrush-draft-continent"></span>
         </div>
         <div id="paintbrush-draft-errors" style="display:none;font-size:11px;color:#e06060;margin-bottom:8px;max-height:60px;overflow-y:auto;"></div>
+        <div class="paintbrush-history-actions">
+            <button id="paintbrush-erase" type="button" aria-pressed="false">%worldmap.paintbrush.erase|Erase staged pixels%</button>
+            <button id="paintbrush-draft-undo" type="button" title="%worldmap.paintbrush.undo.tooltip|Restore the previous painted region (T)%">Undo (T)</button>
+            <button id="paintbrush-draft-redo" type="button" title="%worldmap.paintbrush.redo.tooltip|Reapply the next painted region (R)%">Redo (R)</button>
+        </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button id="paintbrush-cancel" style="background:#555;color:#fff;border:none;padding:6px 14px;border-radius:1px;cursor:pointer;">Cancel (Esc)</button>
             <button id="paintbrush-apply" style="background:#0e639c;color:#fff;border:none;padding:6px 14px;border-radius:1px;cursor:pointer;">Apply &amp; Exit</button>

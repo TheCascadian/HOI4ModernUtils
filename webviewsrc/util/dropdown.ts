@@ -2,6 +2,7 @@ import { Disposable, Subscriber, toDisposable } from "./event";
 import { feLocalize } from "./i18n";
 import { Checkbox } from "./checkbox";
 import { BehaviorSubject, fromEvent, Observable, Subject, Subscription } from 'rxjs';
+import { calculateDropdownMenuPlacement } from './dropdownposition';
 
 const dropdowns: Dropdown[] = [];
 export const numDropDownOpened$ = new BehaviorSubject<number>(0);
@@ -243,6 +244,8 @@ class DropdownMenu extends Subscriber {
     private list: HTMLUListElement;
     private items: HTMLLIElement[] = [];
     private subscriptionWhenOpen: Subscription[] = [];
+    private observersWhenOpen: Array<{ disconnect(): void }> = [];
+    private positionFrame: number | undefined;
 
     constructor(private options: Option[], private multiSelection: boolean = false) {
         super();
@@ -261,12 +264,9 @@ class DropdownMenu extends Subscriber {
 
     public show(host: Element) {
         this.hide();
-        const bbox = host.getBoundingClientRect();
-        this.list.style.left = bbox.left + 'px';
-        this.list.style.top = bbox.bottom + 'px';
-        this.list.style.width = bbox.width + 'px';
-        this.registerEventHandlerWhenOpen(host);
         document.body.appendChild(this.list);
+        this.position(host);
+        this.registerEventHandlerWhenOpen(host);
 
         const selectedOptionIndex = this.multiSelection ? 0 : Math.max(0, this.options.findIndex(o => o.selected));
         if (this.items.length > 0) {
@@ -277,6 +277,26 @@ class DropdownMenu extends Subscriber {
     public hide() {
         this.list.parentElement?.removeChild(this.list);
         this.subscriptionWhenOpen.forEach(s => s.unsubscribe());
+        this.subscriptionWhenOpen.length = 0;
+        this.observersWhenOpen.forEach(observer => observer.disconnect());
+        this.observersWhenOpen.length = 0;
+        if (this.positionFrame !== undefined) {
+            cancelAnimationFrame(this.positionFrame);
+            this.positionFrame = undefined;
+        }
+    }
+
+    private position(host: Element) {
+        const bbox = host.getBoundingClientRect();
+        const placement = calculateDropdownMenuPlacement(
+            bbox,
+            this.list.offsetHeight,
+            window.innerWidth,
+            window.innerHeight,
+        );
+        this.list.style.left = `${placement.left}px`;
+        this.list.style.top = `${placement.top}px`;
+        this.list.style.width = `${placement.width}px`;
     }
 
     private createList(): HTMLUListElement {
@@ -398,5 +418,27 @@ class DropdownMenu extends Subscriber {
                 closeDropdown(true);
             }
         }));
+
+        const schedulePosition = () => {
+            if (this.positionFrame !== undefined) {
+                cancelAnimationFrame(this.positionFrame);
+            }
+            this.positionFrame = requestAnimationFrame(() => {
+                this.positionFrame = undefined;
+                if (this.list.isConnected && host.isConnected) {
+                    this.position(host);
+                }
+            });
+        };
+        this.subscriptionWhenOpen.push(fromEvent(window, 'resize').subscribe(schedulePosition));
+        this.subscriptionWhenOpen.push(fromEvent(window, 'scroll', { capture: true }).subscribe(schedulePosition));
+
+        const hostResizeObserver = new ResizeObserver(schedulePosition);
+        hostResizeObserver.observe(host);
+        this.observersWhenOpen.push(hostResizeObserver);
+
+        const hostMoveObserver = new MutationObserver(schedulePosition);
+        hostMoveObserver.observe(document.body, { childList: true, subtree: true });
+        this.observersWhenOpen.push(hostMoveObserver);
     }
 }

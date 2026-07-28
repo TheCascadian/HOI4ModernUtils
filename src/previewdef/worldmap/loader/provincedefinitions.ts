@@ -2,6 +2,7 @@ import { readFileFromModOrHOI4 } from "../../../util/fileloader";
 import { localize } from "../../../util/i18n";
 import { ProgressReporter, ProvinceDefinition, WorldMapWarning } from "../definitions";
 import { FileLoader, LoadResultOD } from "./common";
+import { getLazyAssetService } from "../../../fileSystem/lazyassetservice";
 
 export class DefinitionsLoader extends FileLoader<ProvinceDefinition[]> {
     protected async loadFromFile(): Promise<LoadResultOD<ProvinceDefinition[]>> {
@@ -20,10 +21,12 @@ export class DefinitionsLoader extends FileLoader<ProvinceDefinition[]> {
 async function loadDefinitions(definitionsFile: string, progressReporter: ProgressReporter, warnings: WorldMapWarning[]): Promise<ProvinceDefinition[]> {
     await progressReporter(localize('worldmap.progress.loadingprovincedef', 'Loading province definitions...'));
 
-    const [definitionsBuffer] = await readFileFromModOrHOI4(definitionsFile);
-    const definition = definitionsBuffer.toString().split(/(?:\r\n|\n|\r)/).map(line => line.split(/[,;]/)).filter(v => v.length >= 8);
-
-    return definition.map(row => convertRowToProvince(row, warnings));
+    const [definitionsBuffer, sourceUri] = await readFileFromModOrHOI4(definitionsFile);
+    const parse = async () => {
+        const definition = definitionsBuffer.toString().split(/(?:\r\n|\n|\r)/).map(line => line.split(/[,;]/)).filter(v => v.length >= 8);
+        return definition.map(row => convertRowToProvince(row, warnings));
+    };
+    return await getLazyAssetService()?.getCachedJson('province-definitions', sourceUri, parse) ?? await parse();
 }
 
 function convertRowToProvince(row: string[], warnings: WorldMapWarning[]): ProvinceDefinition {

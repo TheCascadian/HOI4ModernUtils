@@ -247,6 +247,7 @@ export abstract class ContentLoader<T, E={}> extends Loader<T, E> {
     private expiryToken: string = '';
     protected loaderDependencies = new LoaderDependencies();
     protected readDependency = true;
+    protected sourceUri: vscode.Uri | undefined;
 
     constructor(public file: string, private contentProvider?: () => Promise<string>) {
         super();
@@ -274,9 +275,14 @@ export abstract class ContentLoader<T, E={}> extends Loader<T, E> {
         let content: string | undefined = undefined;
         let errorValue: any = undefined;
         try {
-            content = this.contentProvider === undefined ?
-                (await readFileFromModOrHOI4(this.file))[0].toString('utf-8').replace(/^\uFEFF/, '') :
-                await this.contentProvider();
+            if (this.contentProvider === undefined) {
+                const [buffer, sourceUri] = await readFileFromModOrHOI4(this.file);
+                this.sourceUri = sourceUri;
+                content = buffer.toString('utf-8').replace(/^\uFEFF/, '');
+            } else {
+                this.sourceUri = undefined;
+                content = await this.contentProvider();
+            }
         } catch(e) {
             error(e);
             errorValue = e;

@@ -75,6 +75,120 @@ export function replaceStateIdsInSupplyAreas(
     return { text: output, changed };
 }
 
+export interface PreservedStateFields {
+    name: string;
+    manpower: number;
+    category: string;
+    provinces: number[];
+    impassable: boolean;
+    owner?: string;
+    controller?: string;
+    cores: string[];
+    victoryPoints: Record<number, number | undefined>;
+    resources: Record<string, number | undefined>;
+}
+
+function namedBlockRange(text: string, name: string): { start: number; end: number } | undefined {
+    const match = new RegExp(`\\b${name}\\s*=\\s*\\{`).exec(text);
+    if (!match) {
+        return undefined;
+    }
+    const open = text.indexOf('{', match.index);
+    let depth = 0;
+    for (let index = open; index < text.length; index++) {
+        if (text[index] === '{') {
+            depth++;
+        }
+        if (text[index] === '}') {
+            depth--;
+            if (depth === 0) {
+                return { start: match.index, end: index + 1 };
+            }
+        }
+    }
+    return undefined;
+}
+
+/** Updates map-owned state fields while preserving buildings and unknown effects. */
+export function patchStatePreservingUnknownContent(
+    original: string,
+    state: PreservedStateFields,
+    eol: string
+): string {
+    let text = original;
+    const replaceScalar = (name: string, value: string) => {
+        const pattern = new RegExp(`\\b${name}\\s*=\\s*(?:"[^"]*"|[^\\s#}]+)`);
+        text = pattern.test(text)
+            ? text.replace(pattern, `${name} = ${value}`)
+            : text.replace(/\{/, `{${eol}\t${name} = ${value}`);
+    };
+    replaceScalar('name', `"${state.name.replace(/"/g, '\\"')}"`);
+    replaceScalar('manpower', String(state.manpower));
+    replaceScalar('state_category', state.category);
+    const provinces = [...state.provinces].sort((a, b) => a - b).join(' ');
+    text = text.replace(/\bprovinces\s*=\s*\{[^}]*\}/, `provinces = { ${provinces} }`);
+
+    text = text.replace(/^[\t ]*impassable\s*=\s*(?:yes|no)\s*(?:\r?\n)?/m, '');
+    if (state.impassable) {
+        text = text.replace(/\bprovinces\s*=\s*\{[^}]*\}/, match => `${match}${eol}\timpassable = yes`);
+    }
+
+    const resourceEntries = Object.entries(state.resources)
+        .filter(([, value]) => value !== undefined)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([key, value]) => `\t\t${key} = ${value}`);
+    const resources = resourceEntries.length > 0
+        ? ['resources = {', ...resourceEntries, '\t}'].join(eol)
+        : '';
+    text = /\bresources\s*=\s*\{[^}]*\}/.test(text)
+        ? text.replace(/\bresources\s*=\s*\{[^}]*\}/, resources)
+        : resources
+            ? text.replace(/\bhistory\s*=/, `\t${resources}${eol}\thistory =`)
+            : text;
+
+    const historyRange = namedBlockRange(text, 'history');
+    if (!historyRange) {
+        return text;
+    }
+    const lines = text.slice(historyRange.start, historyRange.end).split(/\r?\n/);
+    const retained: string[] = [];
+    let depth = 0;
+    for (const line of lines) {
+        const trimmed = line.trim();
+        const directKnownEntry = depth === 1 &&
+            /^(?:owner|controller|add_core_of)\s*=/.test(trimmed);
+        const directVictoryPoint = depth === 1 && /^victory_points\s*=/.test(trimmed);
+        if (!directKnownEntry && !directVictoryPoint) {
+            retained.push(line);
+        }
+        for (const char of line) {
+            if (char === '{') {
+                depth++;
+            }
+            if (char === '}') {
+                depth--;
+            }
+        }
+    }
+    const known: string[] = [];
+    if (state.owner) {
+        known.push(`\t\towner = ${state.owner}`);
+    }
+    if (state.controller) {
+        known.push(`\t\tcontroller = ${state.controller}`);
+    }
+    known.push(...[...state.cores]
+        .filter((value, index, values) => value && values.indexOf(value) === index)
+        .map(core => `\t\tadd_core_of = ${core}`));
+    known.push(...Object.entries(state.victoryPoints)
+        .map(([provinceId, value]) => [Number.parseInt(provinceId, 10), value] as const)
+        .filter(([, value]) => value !== undefined)
+        .sort((a, b) => a[0] - b[0])
+        .map(([provinceId, value]) => `\t\tvictory_points = { ${provinceId} ${value} }`));
+    retained.splice(1, 0, ...known);
+    return text.slice(0, historyRange.start) + retained.join(eol) + text.slice(historyRange.end);
+}
+
 export function removeAllCores(text: string): TextTransformResult {
     let changed = 0;
     const withoutCoreLines = text.replace(

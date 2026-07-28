@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { IndexBase } from './indexbase';
+import { forEachConcurrent, IndexBase } from './indexbase';
 import { IndexType } from './indexmanager';
 import { listFilesFromModOrHOI4, readFileFromModOrHOI4 } from '../util/fileloader';
 import { parseHoi4File } from '../hoiformat/hoiparser';
@@ -42,7 +42,9 @@ class EventIndex extends IndexBase<string> {
 
     public async buildIndex(index: Map<string, string>, estimatedSize: [number], options: { mod?: boolean; hoi4?: boolean; dlc?: boolean }): Promise<void> {
         const eventFiles = (await listFilesFromModOrHOI4('events', { ...options, recursively: true })).filter(f => f.toLocaleLowerCase().endsWith('.txt'));
-        await Promise.all(eventFiles.map(f => this.fillEventItems('events/' + f, index, options, estimatedSize)));
+        await forEachConcurrent(eventFiles, 4, f =>
+            this.fillEventItems('events/' + f, index, options, estimatedSize)
+        );
     }
 
     private async fillEventItems(eventFile: string, eventIndex: Map<string, string>, options: { mod?: boolean; hoi4?: boolean, dlc?: boolean }, estimatedSize?: [number]): Promise<void> {
