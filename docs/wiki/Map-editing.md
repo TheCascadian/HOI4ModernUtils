@@ -26,6 +26,8 @@ The paintbrush keeps edits in a draft until **Apply & Exit**. Version 0.4.4 batc
 - Create a state from the current selection.
 - Assign selected provinces to an existing state.
 - Create or assign a strategic region from selected states or provinces.
+- Use **New Strat Region from Selected Provinces** when the region must contain exactly the selected province IDs. This does not expand province selection to whole states, and source strategic regions that become empty are removed.
+- Use **Remove All Provinces from Selected State(s)** to clear province membership and direct victory points without deleting the state record. This intentionally leaves an empty, non-playable state until provinces are reassigned or the state is deleted.
 - Transfer provinces between states with the Transfer Wand.
 - Merge selected states after explicitly choosing the surviving state.
 
@@ -38,6 +40,18 @@ State merges combine provinces, manpower, resources, cores, and victory points. 
 - Create puppet relationships, release puppets, transfer states, and optionally auto-core transferred states.
 
 The **Auto-Core All Transferred States** option applies to transfers, country creation, and annexation. Review selection and ownership carefully before confirming.
+
+## Ocean-tile readiness
+
+**Verify Ocean-Tile Readiness** is read-only. For each selected province it checks:
+
+- Positive province ID, nonzero definition color, and loaded pixels.
+- `sea` province type, `ocean` terrain, continent `0`, and coastal flag disabled.
+- No state membership.
+- Membership in exactly one strategic region.
+- No loaded railway or supply-hub reference.
+
+The report does not scan `map/buildings.txt` or arbitrary scripted references. Province-to-ocean conversion keeps surviving IDs stable; assign converted provinces to an appropriate strategic region, then run readiness verification.
 
 ## Undo and persistence
 

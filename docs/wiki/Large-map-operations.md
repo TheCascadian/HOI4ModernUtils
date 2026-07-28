@@ -21,7 +21,7 @@ Selected-area and global actions include:
 - Clear railways, buildings, supply hubs, water crossings, and state resources in the selected area.
 - Set every affected state to one population.
 - Set affected states to the lowest non-wasteland development category, or include wasteland when explicitly enabled.
-- Convert an eligible selection to ocean and rebuild supported memberships and references. When exact rivers are selected, only the selected `rivers.bmp` pixels are extracted into new ocean provinces.
+- Convert an eligible selection to ocean and rebuild supported memberships and references without forcing a global reindex. When exact rivers are selected, only the selected `rivers.bmp` pixels are extracted into new ocean provinces. Assign ordinary converted provinces to an appropriate strategic region and run **Verify Ocean-Tile Readiness** afterward.
 - Optionally split the selected-area operation by continent.
 - Remove all water crossings or all state resources globally.
 - Remove all cores without changing state owner or controller.

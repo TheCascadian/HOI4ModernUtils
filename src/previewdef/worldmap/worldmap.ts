@@ -277,7 +277,11 @@ export class WorldMap {
                     }
                     break;
                 case 'persiststrategicregions':
-                    await this.persistStrategicRegions((msg as any).strategicRegions, (msg as any).deletedFiles ?? []);
+                    await this.persistStrategicRegions(
+                        (msg as any).strategicRegions,
+                        (msg as any).deletedFiles ?? [],
+                        (msg as any).deletedRegions ?? []
+                    );
                     break;
                 case 'persistvictorypointlocalisation':
                     await this.persistVictoryPointLocalisation(msg as PersistVictoryPointLocalisationMessage);

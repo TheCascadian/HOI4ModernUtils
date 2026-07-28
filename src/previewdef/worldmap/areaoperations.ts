@@ -18,6 +18,73 @@ export interface ProvinceTypeMergeItem {
     type: string;
 }
 
+export type OceanTileReadinessIssue =
+    'invalid-id' |
+    'missing-color' |
+    'missing-pixels' |
+    'not-sea' |
+    'not-ocean-terrain' |
+    'nonzero-continent' |
+    'coastal-flag' |
+    'state-membership' |
+    'strategic-region-membership' |
+    'railway-reference' |
+    'supply-node-reference';
+
+export interface OceanTileReadinessInput {
+    id: number;
+    color: number;
+    mass: number;
+    type: string;
+    terrain: string;
+    continent: number;
+    coastal: boolean;
+    stateIds: number[];
+    strategicRegionIds: number[];
+    railwayReferences: number;
+    hasSupplyNode: boolean;
+}
+
+export function verifyOceanTileReadiness(
+    tile: OceanTileReadinessInput
+): { ready: boolean; issues: OceanTileReadinessIssue[] } {
+    const issues: OceanTileReadinessIssue[] = [];
+    if (!Number.isInteger(tile.id) || tile.id <= 0) {
+        issues.push('invalid-id');
+    }
+    if (!Number.isInteger(tile.color) || tile.color <= 0) {
+        issues.push('missing-color');
+    }
+    if (!Number.isFinite(tile.mass) || tile.mass <= 0) {
+        issues.push('missing-pixels');
+    }
+    if (tile.type !== 'sea') {
+        issues.push('not-sea');
+    }
+    if (tile.terrain.toLowerCase() !== 'ocean') {
+        issues.push('not-ocean-terrain');
+    }
+    if (tile.continent !== 0) {
+        issues.push('nonzero-continent');
+    }
+    if (tile.coastal) {
+        issues.push('coastal-flag');
+    }
+    if (tile.stateIds.length > 0) {
+        issues.push('state-membership');
+    }
+    if (new Set(tile.strategicRegionIds).size !== 1) {
+        issues.push('strategic-region-membership');
+    }
+    if (tile.railwayReferences > 0) {
+        issues.push('railway-reference');
+    }
+    if (tile.hasSupplyNode) {
+        issues.push('supply-node-reference');
+    }
+    return { ready: issues.length === 0, issues };
+}
+
 /**
  * Builds a deterministic merge plan without ever crossing HOI4 province
  * types. In particular, lake provinces must not be painted into a sea

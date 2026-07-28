@@ -15,6 +15,7 @@ import { Zone } from "../../src/previewdef/worldmap/definitions";
 import { applyBrushStroke, getBrushBounds, getInterpolatedBrushPositions } from "./brush";
 import { PaintDraftHistory } from "./paintdraft";
 import { ProvinceSelectionHistory, ProvinceSelectionSnapshot, selectProvinceIds, selectRiverProvinceIds } from "./selection";
+import { OceanTileReadinessIssue, verifyOceanTileReadiness } from "../../src/previewdef/worldmap/areaoperations";
 
 export type ViewMode = 'province' | 'state' | 'strategicregion' | 'supplyarea' | 'warnings' | 'country';
 export type ColorSet = 'provinceid' | 'provincetype' | 'terrain' | 'owner' | 'controller' | 'stateid' | 'manpower' |
@@ -236,6 +237,7 @@ export class TopBar extends Subscriber {
         reindexAfter: boolean;
         riverIds: number[];
     } | undefined;
+    private pendingConfirmedAction: (() => void) | undefined;
     private paintTool: 'brush' | 'fill' | 'erase' = 'brush';
     private paintDraftHistory = new PaintDraftHistory();
     private paintStrokeHistoryRecorded = false;
@@ -581,7 +583,21 @@ export class TopBar extends Subscriber {
         this.loadResolveProvinceWarnings();
         this.loadAreaOperationResults();
         this.loadNorthAmericaPipelineModal();
+        this.loadOceanReadinessModal();
         this.initExportMapMessageListener();
+    }
+
+    private loadOceanReadinessModal() {
+        const modal = document.getElementById('ocean-readiness-modal') as HTMLDivElement | null;
+        const close = document.getElementById('ocean-readiness-close') as HTMLButtonElement | null;
+        if (!modal || !close) {
+            return;
+        }
+        this.addSubscription(fromEvent(close, 'click').subscribe(event => {
+            event.preventDefault();
+            modal.hidden = true;
+            modal.style.display = 'none';
+        }));
     }
 
     private loadAccessibilityControls() {
@@ -1839,10 +1855,11 @@ export class TopBar extends Subscriber {
             provinceIds,
             stateIds,
             perContinent,
-            reindexAfter: reindexAfter || (operation === 'convert-to-ocean' && riverIds.length === 0),
+            reindexAfter,
             riverIds,
         };
         modal.dataset.mode = 'area-operation';
+        this.setPipelineWarningVisible(false);
         title.textContent = feLocalize('worldmap.area.destructive.title', 'Confirm Destructive Action');
         summary.textContent = feLocalize(
             'worldmap.area.confirm',
@@ -1852,7 +1869,9 @@ export class TopBar extends Subscriber {
         );
         target.hidden = true;
         targetLabel.hidden = true;
+        apply.textContent = feLocalize('worldmap.area.confirm.apply', 'Continue');
         apply.disabled = false;
+        cancel.hidden = false;
         cancel.disabled = false;
         this.setNorthAmericaPipelineError('');
         modal.hidden = false;
@@ -1909,6 +1928,7 @@ export class TopBar extends Subscriber {
             event.preventDefault();
             if (!this.continentPipelinePending) {
                 this.pendingConfirmedAreaOperation = undefined;
+                this.pendingConfirmedAction = undefined;
                 this.hideNorthAmericaPipelineModal();
             }
         }));
@@ -1921,6 +1941,11 @@ export class TopBar extends Subscriber {
                 this.submitPendingAreaOperation();
             } else if (modal.dataset.mode === 'remove-all-cores') {
                 this.submitRemoveAllCores();
+            } else if (modal.dataset.mode === 'custom-action') {
+                const action = this.pendingConfirmedAction;
+                this.pendingConfirmedAction = undefined;
+                this.hideNorthAmericaPipelineModal();
+                action?.();
             } else if (modal.dataset.mode === 'all') {
                 this.submitAllContinentPipelines();
             } else {
@@ -1986,6 +2011,46 @@ export class TopBar extends Subscriber {
         }));
     }
 
+    private showDestructiveActionConfirmation(
+        titleText: string,
+        summaryText: string,
+        applyText: string,
+        action: () => void
+    ) {
+        const modal = document.getElementById('north-america-pipeline-modal') as HTMLDivElement | null;
+        const target = document.getElementById('north-america-pipeline-target') as HTMLSelectElement | null;
+        const targetLabel = document.getElementById('north-america-pipeline-target-label') as HTMLLabelElement | null;
+        const title = document.getElementById('north-america-pipeline-title');
+        const summary = document.getElementById('north-america-pipeline-summary');
+        const apply = document.getElementById('north-america-pipeline-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('north-america-pipeline-cancel') as HTMLButtonElement | null;
+        if (!modal || !target || !targetLabel || !title || !summary || !apply || !cancel) {
+            return;
+        }
+        this.pendingConfirmedAction = action;
+        modal.dataset.mode = 'custom-action';
+        title.textContent = titleText;
+        summary.textContent = summaryText;
+        target.hidden = true;
+        targetLabel.hidden = true;
+        this.setPipelineWarningVisible(false);
+        apply.textContent = applyText;
+        apply.disabled = false;
+        cancel.hidden = false;
+        cancel.disabled = false;
+        this.setNorthAmericaPipelineError('');
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        apply.focus();
+    }
+
+    private setPipelineWarningVisible(visible: boolean) {
+        const warning = document.getElementById('north-america-pipeline-warning');
+        if (warning) {
+            warning.hidden = !visible;
+        }
+    }
+
     private showNorthAmericaPipelineModal(continentId?: number) {
         const modal = document.getElementById('north-america-pipeline-modal') as HTMLDivElement | null;
         const target = document.getElementById('north-america-pipeline-target') as HTMLSelectElement | null;
@@ -2001,6 +2066,7 @@ export class TopBar extends Subscriber {
         const worldMap = this.loader.worldMap;
         const allMode = continentId === undefined;
         modal.dataset.mode = allMode ? 'all' : 'single';
+        this.setPipelineWarningVisible(true);
         this.selectedContinentPipelineId = continentId;
         title.textContent = allMode
             ? feLocalize('worldmap.continent.modal.alltitle', 'Run All Continental Workflows')
@@ -2040,6 +2106,8 @@ export class TopBar extends Subscriber {
 
         target.hidden = allMode;
         targetLabel.hidden = allMode;
+        apply.textContent = feLocalize('worldmap.northamerica.modal.apply', 'Run Pipeline');
+        cancel.hidden = false;
         const validContinents = this.getRunnableContinents();
         const preflightValid = allMode
             ? validContinents.length > 0
@@ -2164,6 +2232,7 @@ export class TopBar extends Subscriber {
         const cancel = document.getElementById('north-america-pipeline-cancel') as HTMLButtonElement | null;
         if (!modal || !target || !targetLabel || !title || !summary || !apply || !cancel) return;
         modal.dataset.mode = 'remove-all-cores';
+        this.setPipelineWarningVisible(false);
         title.textContent = feLocalize('worldmap.cores.title', 'REMOVE ALL CORES');
         summary.textContent = feLocalize(
             'worldmap.cores.warning',
@@ -2171,7 +2240,9 @@ export class TopBar extends Subscriber {
         );
         target.hidden = true;
         targetLabel.hidden = true;
+        apply.textContent = feLocalize('worldmap.cores.apply', 'Remove All Cores');
         apply.disabled = false;
+        cancel.hidden = false;
         cancel.disabled = false;
         this.setNorthAmericaPipelineError('');
         modal.hidden = false;
@@ -2200,6 +2271,7 @@ export class TopBar extends Subscriber {
         const cancel = document.getElementById('north-america-pipeline-cancel') as HTMLButtonElement | null;
         if (!modal || !target || !targetLabel || !title || !summary || !apply || !cancel) return;
         modal.dataset.mode = 'reindex-map';
+        this.setPipelineWarningVisible(false);
         title.textContent = feLocalize('worldmap.reindex.title', 'REINDEX ALL PROVINCES AND STATES');
         summary.textContent = feLocalize(
             'worldmap.reindex.warning',
@@ -2207,7 +2279,9 @@ export class TopBar extends Subscriber {
         );
         target.hidden = true;
         targetLabel.hidden = true;
+        apply.textContent = feLocalize('worldmap.reindex.apply', 'Reindex Map');
         apply.disabled = false;
+        cancel.hidden = false;
         cancel.disabled = false;
         this.setNorthAmericaPipelineError('');
         modal.hidden = false;
@@ -2701,14 +2775,14 @@ export class TopBar extends Subscriber {
             },
             {
                 label: feLocalize('worldmap.contextmenu.continents', 'Continental Consolidation'),
-                tooltip: feLocalize('worldmap.contextmenu.continents.tooltip', 'Consolidate each continent while preserving separate land and water provinces/strategic regions, clear infrastructure and water crossings, then sequentially reindex provinces and states.'),
+                tooltip: feLocalize('worldmap.contextmenu.continents.tooltip', 'Consolidate each continent while preserving separate land and water provinces, strategic regions, and existing surviving IDs.'),
                 disabled: this.continentPipelinePending,
                 submenu: [
                     ...this.getRunnableContinents().map(continentId => ({
                         label: this.loader.worldMap.continents[continentId],
                         tooltip: feLocalize(
                             'worldmap.contextmenu.continent.tooltip',
-                            'Consolidate {0} with separate land/water survivors, clear infrastructure and water crossings, sequentially reindex, and choose the resulting owner/controller.',
+                            'Consolidate {0} with separate land/water survivors, clear infrastructure and water crossings, preserve surviving IDs, and choose the resulting owner/controller.',
                             this.loader.worldMap.continents[continentId]
                         ),
                         disabled: this.continentPipelinePending,
@@ -2728,13 +2802,13 @@ export class TopBar extends Subscriber {
                 submenu: [
                     {
                         label: feLocalize('worldmap.contextmenu.removeallcrossings', 'REMOVE ALL WATER CROSSINGS'),
-                        tooltip: feLocalize('worldmap.contextmenu.removeallcrossings.tooltip', 'Remove every strait, canal, and water-based adjacency record, then sequentially reindex provinces and states.'),
+                        tooltip: feLocalize('worldmap.contextmenu.removeallcrossings.tooltip', 'Remove every strait, canal, and water-based adjacency record without renumbering provinces or states.'),
                         disabled: this.areaOperationPending,
                         action: () => this.runGlobalAreaOperation('clear-water-crossings'),
                     },
                     {
                         label: feLocalize('worldmap.contextmenu.clearallresources', 'CLEAR ALL RESOURCES'),
-                        tooltip: feLocalize('worldmap.contextmenu.clearallresources.tooltip', 'Remove resource blocks from every loaded state, then sequentially reindex provinces and states.'),
+                        tooltip: feLocalize('worldmap.contextmenu.clearallresources.tooltip', 'Remove resource blocks from every loaded state without renumbering provinces or states.'),
                         disabled: this.areaOperationPending,
                         action: () => this.runGlobalAreaOperation('clear-resources'),
                     },
@@ -2783,6 +2857,16 @@ export class TopBar extends Subscriber {
                         disabled: selectedProvinceIds.size === 0 || selectedStateId === undefined,
                         action: () => this.assignSelectionToState(),
                     },
+                    {
+                        label: feLocalize('worldmap.contextmenu.provincetools.createstrategic', 'New Strat Region from Selected Provinces'),
+                        disabled: selectedProvinceIds.size === 0,
+                        action: () => this.createStrategicRegionFromSelectedProvinces(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.provincetools.verifyocean', 'Verify Ocean-Tile Readiness'),
+                        disabled: selectedProvinceIds.size === 0,
+                        action: () => this.verifySelectedOceanTileReadiness(),
+                    },
                 ],
             },
             {
@@ -2800,13 +2884,18 @@ export class TopBar extends Subscriber {
                     },
                     {
                         label: feLocalize('worldmap.contextmenu.statetools.createstrategic', 'Create Strat Region from Selected States'),
-                        disabled: selectedProvinceIds.size === 0 && selectedStateIds.size === 0,
+                        disabled: selectedStateIds.size === 0,
                         action: () => this.createStrategicRegionFromSelection(),
                     },
                     {
                         label: feLocalize('worldmap.contextmenu.statetools.assignstrategic', 'Assign Selected State(s) to Existing Strat Region'),
                         disabled: (selectedProvinceIds.size === 0 && selectedStateIds.size === 0) || selectedStrategicRegionId === undefined,
                         action: () => this.assignStatesToStrategicRegion(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.statetools.empty', 'Remove All Provinces from Selected State(s)'),
+                        disabled: selectedStateIds.size === 0,
+                        action: () => this.confirmRemoveAllProvincesFromSelectedStates(),
                     },
                     {
                         label: feLocalize('worldmap.contextmenu.statetools.transfercountry', 'Transfer Selected State(s) to Country'),
@@ -2856,14 +2945,17 @@ export class TopBar extends Subscriber {
             if (value.includes('resource')) return 'Remove state resource blocks in the current selected area.';
             if (value.includes('development')) return 'Set selected states to the lowest available state category.';
             if (value.includes('wasteland')) return 'Allow the lowest-development action to use the wasteland category.';
+            if (value.includes('verify ocean')) return 'Check whether selected provinces satisfy loaded ocean-tile requirements without changing files.';
             if (value.includes('ocean')) return 'Convert selected provinces to ocean and rebuild affected map memberships.';
             if (value.includes('merge selected provinces')) return 'Transfer every selected province pixel into the first selected province and repair references.';
             if (value.includes('state from selected')) return 'Create a new state containing the selected provinces.';
             if (value.includes('assign selected provinces')) return 'Move selected provinces into the currently selected existing state.';
+            if (value.includes('new strat region')) return 'Move exactly the selected provinces into a newly created strategic region.';
             if (value.includes('create new tag')) return 'Create a country tag from the selected states.';
             if (value.includes('merge selected states')) return 'Combine selected states into a chosen surviving state.';
             if (value.includes('create strat')) return 'Create a strategic region from the current state or province selection.';
             if (value.includes('assign selected state')) return 'Move selected states into the currently selected strategic region.';
+            if (value.includes('remove all provinces')) return 'Clear province membership and direct victory points from the selected states while retaining their records.';
             if (value.includes('transfer selected')) return 'Change owner and controller for the selected states.';
             if (value.includes('auto-core')) return 'Automatically add the new owner as a core when transferring states.';
             if (value.includes('force puppet')) return 'Create or replace the selected country subject relationship.';
@@ -4556,14 +4648,19 @@ export class TopBar extends Subscriber {
         this.paintbrushCanRedo$.next(false);
     }
 
-    private persistStrategicRegions(srIds: number[], deletedFiles: string[] = []) {
+    private persistStrategicRegions(
+        srIds: number[],
+        deletedFiles: string[] = [],
+        deletedRegions: Array<{ id: number; file: string }> = []
+    ) {
         const payload = this.collectPersistedStrategicRegions(srIds);
 
-        if (payload.length > 0 || deletedFiles.length > 0) {
+        if (payload.length > 0 || deletedFiles.length > 0 || deletedRegions.length > 0) {
             vscode.postMessage<WorldMapMessage>({
                 command: 'persiststrategicregions',
                 strategicRegions: payload,
                 deletedFiles: Array.from(new Set(deletedFiles)),
+                deletedRegions,
             } as any);
         }
     }
@@ -4580,6 +4677,7 @@ export class TopBar extends Subscriber {
                 file: sr.file,
                 tokenStart: sr.token?.start,
                 tokenEnd: sr.token?.end,
+                preserveUnknownContent: !!sr.token,
             }));
     }
 
@@ -4605,17 +4703,182 @@ export class TopBar extends Subscriber {
         }
     }
 
-    private createStrategicRegionFromSelection() {
-        const explicitStateSelection = Array.from(this.selectedStateIds$.value.values());
+    private createStrategicRegionFromSelectedProvinces() {
         const selectedProvinceIds = Array.from(this.selectedProvinceIds$.value.values());
+        if (selectedProvinceIds.length === 0) {
+            this.showActionStatus(feLocalize(
+                'worldmap.action.createstrategic.provinces.missingselection',
+                'Select one or more provinces first.'
+            ), 'warn');
+            return;
+        }
+        this.showDestructiveActionConfirmation(
+            feLocalize('worldmap.action.createstrategic.provinces.title', 'Create Strategic Region from Provinces'),
+            feLocalize(
+                'worldmap.action.createstrategic.provinces.confirm',
+                'Move exactly {0} selected province(s) out of their current strategic regions and into a new strategic region? Empty source regions will be removed.',
+                selectedProvinceIds.length
+            ),
+            feLocalize('worldmap.action.createstrategic.provinces.apply', 'Create Region'),
+            () => this.applyCreateStrategicRegionFromProvinces(selectedProvinceIds)
+        );
+    }
 
-        const selectedStateIds = new Set<number>(explicitStateSelection.length > 0 ? explicitStateSelection : []);
-        if (selectedStateIds.size === 0) {
-            for (const provinceId of selectedProvinceIds) {
-                const s = this.loader.worldMap.getStateByProvinceId(provinceId);
-                if (s) selectedStateIds.add(s.id);
+    private applyCreateStrategicRegionFromProvinces(selectedProvinceIds: number[]) {
+        const nextId = this.loader.worldMap.getNextStrategicRegionId();
+        const beforeIds = new Set<number>([nextId]);
+        for (const provinceId of selectedProvinceIds) {
+            const source = this.loader.worldMap.getStrategicRegionByProvinceId(provinceId);
+            if (source) {
+                beforeIds.add(source.id);
             }
         }
+        const before = this.loader.worldMap.snapshotStrategicRegions(Array.from(beforeIds));
+        const created = this.loader.worldMap.createStrategicRegionFromProvinces(selectedProvinceIds);
+        if (!created) {
+            this.showActionStatus(feLocalize(
+                'worldmap.action.createstrategic.provinces.nochange',
+                'No strategic region was created.'
+            ), 'warn');
+            return;
+        }
+        const after = this.loader.worldMap.snapshotStrategicRegions(created.changedRegionIds);
+        this.recordMapEdit(before, after, 'strategicregion');
+        this.persistStrategicRegions(
+            created.changedRegionIds,
+            created.deletedFiles,
+            created.deletedRegions
+        );
+        this.selectedStrategicRegionId$.next(created.newStrategicRegionId);
+        this.mapMutation$.next(this.mapMutation$.value + 1);
+        this.showActionStatus(feLocalize(
+            'worldmap.action.createstrategic.provinces.done',
+            'Created strategic region {0} from {1} selected province(s).',
+            created.newStrategicRegionId,
+            selectedProvinceIds.length
+        ));
+    }
+
+    private verifySelectedOceanTileReadiness() {
+        const selectedProvinceIds = Array.from(this.selectedProvinceIds$.value.values());
+        if (selectedProvinceIds.length === 0) {
+            this.showActionStatus(feLocalize(
+                'worldmap.ocean.readiness.missingselection',
+                'Select one or more provinces to verify.'
+            ), 'warn');
+            return;
+        }
+        const selected = new Set(selectedProvinceIds);
+        const stateIdsByProvince = new Map<number, number[]>();
+        this.loader.worldMap.forEachState(state => {
+            for (const provinceId of state.provinces) {
+                if (!selected.has(provinceId)) {
+                    continue;
+                }
+                const ids = stateIdsByProvince.get(provinceId) ?? [];
+                ids.push(state.id);
+                stateIdsByProvince.set(provinceId, ids);
+            }
+        });
+        const regionIdsByProvince = new Map<number, number[]>();
+        this.loader.worldMap.forEachStrategicRegion(region => {
+            for (const provinceId of region.provinces) {
+                if (!selected.has(provinceId)) {
+                    continue;
+                }
+                const ids = regionIdsByProvince.get(provinceId) ?? [];
+                ids.push(region.id);
+                regionIdsByProvince.set(provinceId, ids);
+            }
+        });
+        const railwayReferences = new Map<number, number>();
+        this.loader.worldMap.forEachRailway(railway => {
+            for (const provinceId of new Set(railway.provinces)) {
+                if (selected.has(provinceId)) {
+                    railwayReferences.set(
+                        provinceId,
+                        (railwayReferences.get(provinceId) ?? 0) + 1
+                    );
+                }
+            }
+        });
+        const supplyNodeProvinceIds = new Set<number>();
+        this.loader.worldMap.forEachSupplyNode(node => {
+            if (selected.has(node.province)) {
+                supplyNodeProvinceIds.add(node.province);
+            }
+        });
+        const issueLabels: Record<OceanTileReadinessIssue, string> = {
+            'invalid-id': 'invalid or synthetic province ID',
+            'missing-color': 'missing nonzero definition color',
+            'missing-pixels': 'no loaded province pixels',
+            'not-sea': 'definition type is not sea',
+            'not-ocean-terrain': 'terrain is not ocean',
+            'nonzero-continent': 'continent is not 0',
+            'coastal-flag': 'coastal flag is true',
+            'state-membership': 'still belongs to a state',
+            'strategic-region-membership': 'must belong to exactly one strategic region',
+            'railway-reference': 'still referenced by a railway',
+            'supply-node-reference': 'still has a supply hub',
+        };
+        const reports = selectedProvinceIds.map(provinceId => {
+            const province = this.loader.worldMap.getProvinceById(provinceId);
+            const result = verifyOceanTileReadiness({
+                id: province?.id ?? provinceId,
+                color: province?.color ?? 0,
+                mass: province?.mass ?? 0,
+                type: province?.type ?? '',
+                terrain: province?.terrain ?? '',
+                continent: province?.continent ?? -1,
+                coastal: province?.coastal ?? false,
+                stateIds: stateIdsByProvince.get(provinceId) ?? [],
+                strategicRegionIds: regionIdsByProvince.get(provinceId) ?? [],
+                railwayReferences: railwayReferences.get(provinceId) ?? 0,
+                hasSupplyNode: supplyNodeProvinceIds.has(provinceId),
+            });
+            return { provinceId, ...result };
+        });
+        const readyCount = reports.filter(report => report.ready).length;
+        const lines = [
+            feLocalize(
+                'worldmap.ocean.readiness.summary',
+                '{0} of {1} selected province(s) are ocean-tile ready.',
+                readyCount,
+                reports.length
+            ),
+            feLocalize(
+                'worldmap.ocean.readiness.readonly',
+                'Read-only verification: no files were changed. Map-building and external scripted references are not loaded by this check.'
+            ),
+            '',
+            ...reports.slice(0, 100).map(report => report.ready
+                ? `READY  Province ${report.provinceId}`
+                : `BLOCKED  Province ${report.provinceId}: ${report.issues.map(issue => issueLabels[issue]).join('; ')}`
+            ),
+        ];
+        if (reports.length > 100) {
+            lines.push(feLocalize(
+                'worldmap.ocean.readiness.truncated',
+                'Only the first 100 province results are shown.'
+            ));
+        }
+        const modal = document.getElementById('ocean-readiness-modal') as HTMLDivElement | null;
+        const summary = document.getElementById('ocean-readiness-summary');
+        const close = document.getElementById('ocean-readiness-close') as HTMLButtonElement | null;
+        if (!modal || !summary || !close) {
+            this.showActionStatus(lines[0], readyCount === reports.length ? undefined : 'warn');
+            return;
+        }
+        summary.textContent = lines.join('\n');
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        close.focus();
+        this.showActionStatus(lines[0], readyCount === reports.length ? undefined : 'warn');
+    }
+
+    private createStrategicRegionFromSelection() {
+        const explicitStateSelection = Array.from(this.selectedStateIds$.value.values());
+        const selectedStateIds = new Set<number>(explicitStateSelection);
 
         if (selectedStateIds.size === 0) {
             this.showActionStatus(feLocalize('worldmap.action.createstrategic.missingselection', 'No states selected to create strategic region from.'), 'warn');
@@ -4640,7 +4903,11 @@ export class TopBar extends Subscriber {
         if (created !== undefined) {
             const after = this.loader.worldMap.snapshotStrategicRegions(created.changedRegionIds);
             this.recordMapEdit(before, after, 'strategicregion');
-            this.persistStrategicRegions(created.changedRegionIds);
+            this.persistStrategicRegions(
+                created.changedRegionIds,
+                created.deletedFiles,
+                created.deletedRegions
+            );
             this.selectedStrategicRegionId$.next(created.newStrategicRegionId);
             this.mapMutation$.next(this.mapMutation$.value + 1);
             this.showActionStatus(feLocalize('worldmap.action.createstrategic.done', 'Created strategic region {0} from selection.', created.newStrategicRegionId));
@@ -4691,6 +4958,53 @@ export class TopBar extends Subscriber {
                 tokenEnd: state.token?.end,
                 preserveUnknownContent: true,
             }));
+    }
+
+    private confirmRemoveAllProvincesFromSelectedStates() {
+        const stateIds = Array.from(this.selectedStateIds$.value)
+            .filter(id => !!this.loader.worldMap.getStateById(id));
+        if (stateIds.length === 0) {
+            this.showActionStatus(feLocalize(
+                'worldmap.action.emptystates.missingselection',
+                'Select one or more states first.'
+            ), 'warn');
+            return;
+        }
+        const provinceCount = new Set(stateIds.flatMap(
+            id => this.loader.worldMap.getStateById(id)?.provinces ?? []
+        )).size;
+        this.showDestructiveActionConfirmation(
+            feLocalize('worldmap.action.emptystates.title', 'Remove All Provinces from States'),
+            feLocalize(
+                'worldmap.action.emptystates.confirm',
+                'Remove {0} province membership(s) and all direct victory points from {1} selected state(s)? The state records and their other content remain. Empty states are not HOI4-ready until provinces are reassigned or the states are deleted.',
+                provinceCount,
+                stateIds.length
+            ),
+            feLocalize('worldmap.action.emptystates.apply', 'Remove Provinces'),
+            () => this.applyRemoveAllProvincesFromStates(stateIds)
+        );
+    }
+
+    private applyRemoveAllProvincesFromStates(stateIds: number[]) {
+        const before = this.loader.worldMap.snapshotStates(stateIds);
+        const changedStateIds = this.loader.worldMap.clearStateProvinceMembership(stateIds);
+        if (!changedStateIds) {
+            this.showActionStatus(feLocalize(
+                'worldmap.action.emptystates.nochange',
+                'The selected states already have no province membership.'
+            ));
+            return;
+        }
+        const after = this.loader.worldMap.snapshotStates(changedStateIds);
+        this.recordMapEdit(before, after, 'state');
+        this.persistStates(changedStateIds);
+        this.mapMutation$.next(this.mapMutation$.value + 1);
+        this.showActionStatus(feLocalize(
+            'worldmap.action.emptystates.done',
+            'Removed every province and direct victory point from {0} state(s).',
+            changedStateIds.length
+        ));
     }
 
     private assignStatesToStrategicRegion() {
@@ -4805,10 +5119,18 @@ export class TopBar extends Subscriber {
         return true;
     }
 
-    private getPersistenceTargets(target: any[], source: any[], type: 'state' | 'strategicregion' | 'province'): { ids: number[]; deletedFiles: string[] } {
+    private getPersistenceTargets(
+        target: any[],
+        source: any[],
+        type: 'state' | 'strategicregion' | 'province'
+    ): {
+        ids: number[];
+        deletedFiles: string[];
+        deletedRecords: Array<{ id: number; file: string }>;
+    } {
         const ids: number[] = [];
         const deletedFiles: string[] = [];
-        const currentFiles = new Set<string>();
+        const deletedRecords: Array<{ id: number; file: string }> = [];
 
         const sourceById: Record<number, any> = {};
         for (const snapshot of source) {
@@ -4822,7 +5144,6 @@ export class TopBar extends Subscriber {
 
             if (current) {
                 ids.push(snapshot.id);
-                if (current.file) currentFiles.add(current.file);
                 continue;
             }
         }
@@ -4832,24 +5153,60 @@ export class TopBar extends Subscriber {
                 type === 'province' ? snapshot.province : snapshot.state;
             if (current) continue;
             const previous = sourceById[snapshot.id];
-            if (previous?.file && !currentFiles.has(previous.file)) {
+            if (!previous?.file) {
+                continue;
+            }
+            let hasRetainedRecord = false;
+            if (type === 'strategicregion') {
+                this.loader.worldMap.forEachStrategicRegion(region => {
+                    if (region.file === previous.file) {
+                        hasRetainedRecord = true;
+                        return false;
+                    }
+                });
+            } else if (type === 'state') {
+                this.loader.worldMap.forEachState(state => {
+                    if (state.file === previous.file) {
+                        hasRetainedRecord = true;
+                        return false;
+                    }
+                });
+            }
+            if (hasRetainedRecord) {
+                deletedRecords.push({ id: snapshot.id, file: previous.file });
+            } else {
                 deletedFiles.push(previous.file);
             }
         }
 
-        return { ids, deletedFiles };
+        return { ids, deletedFiles, deletedRecords };
     }
 
-    private applyPersistence(persister: { ids: number[]; deletedFiles: string[] }, type: 'state' | 'strategicregion' | 'province') {
+    private applyPersistence(
+        persister: {
+            ids: number[];
+            deletedFiles: string[];
+            deletedRecords: Array<{ id: number; file: string }>;
+        },
+        type: 'state' | 'strategicregion' | 'province'
+    ) {
         switch (type) {
             case 'strategicregion':
-                this.persistStrategicRegions(persister.ids, persister.deletedFiles);
+                this.persistStrategicRegions(
+                    persister.ids,
+                    persister.deletedFiles,
+                    persister.deletedRecords
+                );
                 break;
             case 'province':
                 this.persistProvinces(persister.ids, persister.deletedFiles);
                 break;
             default:
-                this.persistStates(persister.ids, persister.deletedFiles);
+                this.persistStates(
+                    persister.ids,
+                    persister.deletedFiles,
+                    persister.deletedRecords
+                );
                 break;
         }
     }

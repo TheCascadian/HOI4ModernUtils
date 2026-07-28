@@ -14,6 +14,7 @@ import {
     replaceStateIdsInSupplyAreas,
     removeProvincesFromRegionBlocks,
     transformSelectedStates,
+    verifyOceanTileReadiness,
 } from '../../src/previewdef/worldmap/areaoperations';
 
 describe('selected area operations', () => {
@@ -179,6 +180,53 @@ describe('selected area operations', () => {
         assert.ok(result.includes('1939.1.1 = { owner = CAN }'));
         assert.ok(!result.includes('victory_points = { 41 2 }'));
         assert.ok(result.includes('victory_points = { 900 5 }'));
+    });
+
+    it('verifies complete ocean-tile readiness', () => {
+        const ready = verifyOceanTileReadiness({
+            id: 17,
+            color: 0x123456,
+            mass: 80,
+            type: 'sea',
+            terrain: 'ocean',
+            continent: 0,
+            coastal: false,
+            stateIds: [],
+            strategicRegionIds: [4],
+            railwayReferences: 0,
+            hasSupplyNode: false,
+        });
+        assert.deepStrictEqual(ready, { ready: true, issues: [] });
+    });
+
+    it('reports every loaded ocean-tile blocker', () => {
+        const blocked = verifyOceanTileReadiness({
+            id: 0,
+            color: 0,
+            mass: 0,
+            type: 'land',
+            terrain: 'plains',
+            continent: 2,
+            coastal: true,
+            stateIds: [8],
+            strategicRegionIds: [],
+            railwayReferences: 1,
+            hasSupplyNode: true,
+        });
+        assert.strictEqual(blocked.ready, false);
+        assert.deepStrictEqual(blocked.issues, [
+            'invalid-id',
+            'missing-color',
+            'missing-pixels',
+            'not-sea',
+            'not-ocean-terrain',
+            'nonzero-continent',
+            'coastal-flag',
+            'state-membership',
+            'strategic-region-membership',
+            'railway-reference',
+            'supply-node-reference',
+        ]);
     });
 
     it('repairs and deduplicates supply-area state IDs after a state merge', () => {

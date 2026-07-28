@@ -567,6 +567,8 @@ export interface PersistStrategicRegionsMessage {
     command: 'persiststrategicregions';
     strategicRegions: PersistedStrategicRegion[];
     deletedFiles?: string[];
+    /** Strategic-region blocks to remove while preserving sibling records. */
+    deletedRegions?: Array<{ id: number; file: string }>;
 }
 
 export interface PersistedProvince {

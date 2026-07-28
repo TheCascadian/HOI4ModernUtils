@@ -45,13 +45,25 @@ interface FEWorldMapClassExtra {
     assignProvincesToState(provinceIds: number[], targetStateId: number): number[] | undefined;
     createStateFromProvinces(provinceIds: number[]): { newStateId: number; changedStateIds: number[] } | undefined;
     mergeStates(targetStateId: number, sourceStateIds: number[]): { changedStateIds: number[]; deletedFiles: string[] } | undefined;
+    clearStateProvinceMembership(stateIds: number[]): number[] | undefined;
     getNextStateId(): number;
     snapshotStates(stateIds: number[]): StateSnapshot[];
     restoreStates(snapshots: StateSnapshot[]): void;
 
     assignProvincesToStrategicRegion(provinceIds: number[], targetSRId: number): number[] | undefined;
     assignStatesToStrategicRegion(stateIds: number[], targetSRId: number): number[] | undefined;
-    createStrategicRegionFromStates(stateIds: number[]): { newStrategicRegionId: number; changedRegionIds: number[] } | undefined;
+    createStrategicRegionFromProvinces(provinceIds: number[]): {
+        newStrategicRegionId: number;
+        changedRegionIds: number[];
+        deletedFiles: string[];
+        deletedRegions: Array<{ id: number; file: string }>;
+    } | undefined;
+    createStrategicRegionFromStates(stateIds: number[]): {
+        newStrategicRegionId: number;
+        changedRegionIds: number[];
+        deletedFiles: string[];
+        deletedRegions: Array<{ id: number; file: string }>;
+    } | undefined;
     getNextStrategicRegionId(): number;
     snapshotStrategicRegions(srIds: number[]): StrategicRegionSnapshot[];
     restoreStrategicRegions(snapshots: StrategicRegionSnapshot[]): void;
@@ -693,6 +705,22 @@ class FEWorldMapClass implements FEWorldMap {
             deletedFiles: Array.from(new Set(deletedFiles)),
             deletedStates: deletedStates.filter(state => !deletedFiles.includes(state.file)),
         };
+    }
+
+    public clearStateProvinceMembership(stateIds: number[]): number[] | undefined {
+        const changedStateIds: number[] = [];
+        for (const stateId of new Set(stateIds)) {
+            const state = this.getStateById(stateId);
+            if (!state || (state.provinces.length === 0 &&
+                Object.keys(state.victoryPoints).length === 0)) {
+                continue;
+            }
+            state.provinces = [];
+            state.victoryPoints = {};
+            this.recomputeStateGeometry(state);
+            changedStateIds.push(state.id);
+        }
+        return changedStateIds.length > 0 ? changedStateIds : undefined;
     }
 
     public getNextStateId(): number {
@@ -1736,9 +1764,14 @@ class FEWorldMapClass implements FEWorldMap {
         };
     }
 
-    public createStrategicRegionFromStates(stateIds: number[]): { newStrategicRegionId: number; changedRegionIds: number[] } | undefined {
-        const uniqueStateIds = Array.from(new Set(stateIds)).filter(id => !!this.getStateById(id));
-        if (uniqueStateIds.length === 0) {
+    public createStrategicRegionFromProvinces(provinceIds: number[]): {
+        newStrategicRegionId: number;
+        changedRegionIds: number[];
+        deletedFiles: string[];
+        deletedRegions: Array<{ id: number; file: string }>;
+    } | undefined {
+        const normalizedProvinceIds = this.normalizeProvinceIds(provinceIds);
+        if (normalizedProvinceIds.length === 0) {
             return undefined;
         }
 
@@ -1760,7 +1793,7 @@ class FEWorldMapClass implements FEWorldMap {
             this.strategicRegionsCount = newId + 1;
         }
 
-        const changed = this.assignStatesToStrategicRegion(uniqueStateIds, newId);
+        const changed = this.assignProvincesToStrategicRegion(normalizedProvinceIds, newId);
         if (!changed || changed.length === 0) {
             // Revert creation
             this.strategicRegions[newId] = undefined as any;
@@ -1776,7 +1809,52 @@ class FEWorldMapClass implements FEWorldMap {
             return undefined;
         }
 
-        return { newStrategicRegionId: newId, changedRegionIds: changed };
+        const deletedRegionRecords = changed
+            .filter(id => id !== newId)
+            .map(id => this.getStrategicRegionById(id))
+            .filter((region): region is StrategicRegion => !!region && region.provinces.length === 0)
+            .map(region => ({ id: region.id, file: region.file }));
+        for (const region of deletedRegionRecords) {
+            this.strategicRegions[region.id] = undefined as any;
+        }
+        let lastRegionId = this.badStrategicRegionsCount - 1;
+        for (let id = this.strategicRegions.length - 1; id >= this.badStrategicRegionsCount; id--) {
+            if (this.strategicRegions[id]) {
+                lastRegionId = id;
+                break;
+            }
+        }
+        this.strategicRegionsCount = Math.max(
+            this.badStrategicRegionsCount,
+            lastRegionId + 1
+        );
+        const deletedFiles = Array.from(new Set(
+            deletedRegionRecords
+                .map(region => region.file)
+                .filter(file => !this.strategicRegions.some(region => region?.file === file))
+        ));
+        return {
+            newStrategicRegionId: newId,
+            changedRegionIds: changed,
+            deletedFiles,
+            deletedRegions: deletedRegionRecords.filter(region => !deletedFiles.includes(region.file)),
+        };
+    }
+
+    public createStrategicRegionFromStates(stateIds: number[]): {
+        newStrategicRegionId: number;
+        changedRegionIds: number[];
+        deletedFiles: string[];
+        deletedRegions: Array<{ id: number; file: string }>;
+    } | undefined {
+        const provinceIds: number[] = [];
+        for (const stateId of new Set(stateIds)) {
+            const state = this.getStateById(stateId);
+            if (state) {
+                provinceIds.push(...state.provinces);
+            }
+        }
+        return this.createStrategicRegionFromProvinces(provinceIds);
     }
 
     private computeBoundingBox(boxes: Zone[]): Zone {

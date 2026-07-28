@@ -369,11 +369,20 @@
             <div id="north-america-pipeline-summary" class="worldmap-modal-summary"></div>
             <label id="north-america-pipeline-target-label" for="north-america-pipeline-target">%worldmap.continent.modal.target|Resulting owner and controller%</label>
             <select id="north-america-pipeline-target" size="8"></select>
-            <div class="worldmap-modal-summary">%worldmap.continent.modal.warning|This preserves separate land/water survivors, clears infrastructure and water crossings, and sequentially reindexes provinces/states. Province BMP undo does not restore all changed files.%</div>
+            <div id="north-america-pipeline-warning" class="worldmap-modal-summary">%worldmap.continent.modal.warning|This preserves separate land/water survivors and existing IDs while clearing scoped infrastructure and water crossings. Province BMP undo does not restore all changed files.%</div>
             <div id="north-america-pipeline-error" class="worldmap-modal-error" role="alert"></div>
             <div class="worldmap-modal-actions">
                 <button id="north-america-pipeline-cancel">%worldmap.northamerica.modal.cancel|Cancel%</button>
                 <button id="north-america-pipeline-apply" class="primary">%worldmap.northamerica.modal.apply|Run Pipeline%</button>
+            </div>
+        </div>
+    </div>
+    <div id="ocean-readiness-modal" class="worldmap-modal" hidden style="display:none;">
+        <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="ocean-readiness-title">
+            <div id="ocean-readiness-title" class="worldmap-modal-title">%worldmap.ocean.readiness.title|Ocean-Tile Readiness%</div>
+            <div id="ocean-readiness-summary" class="worldmap-modal-summary" style="white-space:pre-wrap;max-height:55vh;overflow:auto;"></div>
+            <div class="worldmap-modal-actions">
+                <button id="ocean-readiness-close" class="primary">%worldmap.ocean.readiness.close|Close%</button>
             </div>
         </div>
     </div>

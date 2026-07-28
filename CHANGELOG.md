@@ -8,6 +8,14 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## Unreleased
 
+### Added
+* Added an exact province-scoped action that moves only the selected provinces into a newly created strategic region and removes source regions that become empty.
+* Added a guarded action to remove all province membership and direct victory points from selected states while retaining the state records and unrelated content.
+* Added read-only ocean-tile readiness verification for definition fields, pixel presence, state and strategic-region membership, railways, and supply hubs.
+
+### Changed
+* Province-to-ocean conversion no longer forces a global province/state reindex. Existing IDs remain stable so users can rebuild strategic-region membership explicitly and verify readiness afterward.
+
 ## [0.4.4] - 2026-07-28
 
 ### Added

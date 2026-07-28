@@ -67,14 +67,16 @@ The Preview HOI4 file toolbar button is available for supported HOI4 text files,
 
 ### State, strategic-region, and country tools
 
-- Create states from the current selection, assign selected provinces to an existing state, and create or assign strategic regions.
+- Create states from the current selection, assign selected provinces to an existing state, and create or assign strategic regions. A province-scoped action can move exactly the selected province IDs into a new strategic region without expanding the selection to whole states.
 - Transfer provinces between states or copy state owner/controller assignments with the Transfer Wand.
 - Create a three-character country TAG from selected states, including country definition, history, and English localisation files.
 - Select multiple countries for bulk annexation, create puppet relationships, release puppets, transfer states, and optionally auto-core transferred states.
 - Merge selected states with an explicit surviving state. The merge combines provinces, manpower, resources, cores, and victory points.
+- Remove all province membership and direct victory points from selected states while keeping their files and unrelated content. The resulting empty states must be repopulated or deleted before the mod is HOI4-ready.
 - Consolidate a loaded continent or run the sequential all-continent workflow. These guarded operations merge provinces, states, and strategic regions, clear scoped infrastructure where required, repair references, and assign the result to the chosen country. Existing surviving IDs remain stable, already-consolidated continents can be rerun, and cross-continent state or strategic-region content is preserved.
 - Selected Area Tools can clear railways, buildings, supply hubs, water crossings, and resources; set population to one; lower development; or convert eligible selections to ocean. Actions are gated to the relevant Province, State, or Supply Area view and can optionally run per continent.
 - Guarded global actions can remove all water crossings, clear all state resources, remove all cores without changing owner/controller values, and reindex loaded province and state IDs while repairing dependent references.
+- Verify Ocean-Tile Readiness performs a read-only check of selected provinces for sea/ocean definition fields, continent and coastal flags, loaded pixels, state and strategic-region membership, railways, and supply hubs. Map-building and external scripted references remain outside this check.
 
 Destructive operations show confirmation UI. Review the affected selection and save or commit your mod before running them.
 
