@@ -22,6 +22,8 @@ Run the smallest relevant repair workflow first. Supported province repairs can 
 
 Do not repeat it blindly. Restore your backup, confirm the selected scope, and retry on a disposable copy. The consolidation workflow uses in-webview preflight and execution UI instead of browser prompts, so look for an open in-map dialog before assuming the action failed.
 
+Consolidation does not require sequential province or state IDs and does not automatically reindex the map. Prior edits are supported, including states and strategic regions that cross continent boundaries. If it fails, preserve the first reported error; an unreadable `provinces.bmp`, a continent with no state membership, or a missing selected descriptor when state files must be deleted still requires correction.
+
 ## Visual output changed after enabling Performance options
 
 Disable experimental fidelity-affecting settings. WebGL2 is not pixel-identical to Canvas2D, and edge decimation, river pixel collapse, label-grid deduplication, and coarse province rendering intentionally trade detail for less drawing work.

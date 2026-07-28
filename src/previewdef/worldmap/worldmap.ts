@@ -15,7 +15,7 @@ import { LoaderSession } from '../../util/loader/loader';
 import { TelemetryMessage, sendByMessage } from '../../util/telemetry';
 import { getConfiguration } from '../../util/vsccommon';
 import { repairAdjacencies, repairRailways, repairSupplyNodes, validateProvinceBmpEdit } from './provincefixes';
-import { clearMapBuildings, clearRailways, clearSupplyHubs, clearWaterCrossings, convertDefinitionsToOcean, partitionLandAndWaterProvinces, patchStatePreservingUnknownContent, planProvinceMergesByType, removeAllCores, removeProvincesFromRegionBlocks, replaceStateIdsInSupplyAreas, transformSelectedStates } from './areaoperations';
+import { clearMapBuildings, clearRailways, clearSupplyHubs, clearWaterCrossings, convertDefinitionsToOcean, partitionLandAndWaterProvinces, partitionMappedMembership, patchStateMembershipPreservingContent, patchStatePreservingUnknownContent, planProvinceMergesByType, removeAllCores, removeProvincesFromRegionBlocks, replaceStateIdsInSupplyAreas, transformSelectedStates } from './areaoperations';
 import { createSequentialIdMap, reindexCountryHistoryFile, reindexDefinitions, reindexMapBuildings, reindexStateFile, reindexStrategicRegionFile, reindexSupplyAreaFile } from './reindex';
 import { addReplacePathsToDescriptor } from '../../util/replacepath';
 import { buildClippedRiverOceanEdit } from './riverconversion';
@@ -1144,9 +1144,16 @@ export class WorldMap {
             }
 
             const original = text.substring(range.start, range.end);
-            const serialized = state.preserveUnknownContent
-                ? patchStatePreservingUnknownContent(original, state, eol)
-                : this.serializeState(state, eol);
+            const serialized = state.preserveOnlyProvinceMembership
+                ? patchStateMembershipPreservingContent(
+                    original,
+                    state.provinces,
+                    state.victoryPoints,
+                    eol
+                )
+                : state.preserveUnknownContent
+                    ? patchStatePreservingUnknownContent(original, state, eol)
+                    : this.serializeState(state, eol);
             text = text.substring(0, range.start) + serialized + text.substring(range.end);
         }
 
@@ -1401,7 +1408,10 @@ export class WorldMap {
                 throw new Error(`Failed to locate existing strategic region block by id ${sr.id} in ${relativePath}`);
             }
 
-            const serialized = this.serializeStrategicRegion(sr, eol);
+            const original = text.substring(range.start, range.end);
+            const serialized = sr.preserveUnknownContent
+                ? this.patchStrategicRegionPreservingUnknownContent(original, sr, eol)
+                : this.serializeStrategicRegion(sr, eol);
             text = text.substring(0, range.start) + serialized + text.substring(range.end);
         }
 
@@ -1485,6 +1495,30 @@ export class WorldMap {
         }
 
         return undefined;
+    }
+
+    private patchStrategicRegionPreservingUnknownContent(
+        original: string,
+        sr: PersistedStrategicRegion,
+        eol: string
+    ): string {
+        let text = original;
+        const escapedName = sr.name.replace(/"/g, '\\"');
+        text = /\bname\s*=\s*"[^"]*"/.test(text)
+            ? text.replace(/\bname\s*=\s*"[^"]*"/, `name = "${escapedName}"`)
+            : text.replace(/\{/, `{${eol}\tname = "${escapedName}"`);
+        const provinces = [...sr.provinces].sort((a, b) => a - b).join(' ');
+        text = /\bprovinces\s*=\s*\{[^}]*\}/.test(text)
+            ? text.replace(/\bprovinces\s*=\s*\{[^}]*\}/, `provinces = { ${provinces} }`)
+            : text.replace(/\{/, `{${eol}\tprovinces = { ${provinces} }`);
+        if (sr.navalTerrain) {
+            text = /\bnaval_terrain\s*=\s*[^\s#}]+/.test(text)
+                ? text.replace(/\bnaval_terrain\s*=\s*[^\s#}]+/, `naval_terrain = ${sr.navalTerrain}`)
+                : text.replace(/\}(\s*)$/, `\tnaval_terrain = ${sr.navalTerrain}${eol}}$1`);
+        } else {
+            text = text.replace(/^[ \t]*naval_terrain\s*=\s*[^\r\n#}]+(?:\r?\n)?/m, '');
+        }
+        return text;
     }
 
     private serializeStrategicRegion(sr: PersistedStrategicRegion, eol: string): string {
@@ -1620,6 +1654,7 @@ export class WorldMap {
         strategicRegions?: PersistedStrategicRegion[];
         deletedStrategicRegionFiles?: string[];
         deletedStrategicRegions?: Array<{ id: number; file: string }>;
+        relatedPaths?: string[];
         afterPersist?: () => Promise<void>;
     }) {
         validateProvinceBmpEdit(
@@ -1636,7 +1671,7 @@ export class WorldMap {
         // Read current BMP to save for undo
         const oldBmpBuffer = await this.readBmpFile(bmpRelativePath);
         if (!oldBmpBuffer) {
-            return; // Can't proceed without existing BMP
+            throw new Error(`Unable to read ${bmpRelativePath}; no consolidation changes were written.`);
         }
 
         // Apply pixel diffs
@@ -1683,6 +1718,7 @@ export class WorldMap {
             ...(msg.strategicRegions ?? []).map(region => region.file),
             ...(msg.deletedStrategicRegionFiles ?? []),
             ...(msg.deletedStrategicRegions ?? []).map(region => region.file),
+            ...(msg.relatedPaths ?? []),
         ]);
         if (msg.provinceReplacements && Object.keys(msg.provinceReplacements).length > 0) {
             relatedPaths.add(`map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`);
@@ -2316,8 +2352,8 @@ export class WorldMap {
             const continentProvinces = worldMap.provinces
                 .filter((province): province is NonNullable<typeof province> => !!province && province.continent === continentId)
                 .sort((a, b) => a.id - b.id);
-            if (continentProvinces.length < 2) {
-                throw new Error(`${continentName} must contain at least two loaded provinces to consolidate.`);
+            if (continentProvinces.length === 0) {
+                throw new Error(`${continentName} contains no loaded provinces to consolidate.`);
             }
             const landProvinces = continentProvinces.filter(province => province.type === 'land');
             const mergePlan = planProvinceMergesByType(continentProvinces);
@@ -2342,7 +2378,8 @@ export class WorldMap {
                 }
             }
             const colorByPosition = ((worldMap as any).colorByPosition ?? []) as number[];
-            if (colorByPosition.length !== worldMap.width * worldMap.height) {
+            if (replacementColorByColor.size > 0 &&
+                colorByPosition.length !== worldMap.width * worldMap.height) {
                 throw new Error('Province pixel data is unavailable for the consolidation pipeline.');
             }
             const paintedPixels: number[][] = [];
@@ -2351,45 +2388,66 @@ export class WorldMap {
                 if (replacementColor === undefined) {continue;}
                 paintedPixels.push([index % worldMap.width, Math.floor(index / worldMap.width), replacementColor]);
             }
-            if (paintedPixels.length === 0) {
-                throw new Error(`${continentName} provinces were found, but no non-surviving province pixels were available to merge.`);
-            }
-
             const touchedStates = worldMap.states
                 .filter((state): state is NonNullable<typeof state> => !!state && state.provinces.some(id => provinceIds.has(id)))
                 .sort((a, b) => a.id - b.id);
-            const targetState = touchedStates.find(state => state.provinces.includes(primarySurvivor.id)) ?? touchedStates[0];
+            const statePartitions = new Map(touchedStates.map(state => [
+                state.id,
+                partitionMappedMembership(state.provinces, provinceIds, replacements),
+            ]));
+            const fullyContainedStates = touchedStates.filter(
+                state => statePartitions.get(state.id)?.outside.length === 0
+            );
+            const targetState = fullyContainedStates.find(state => state.provinces.includes(primarySurvivor.id)) ??
+                fullyContainedStates[0] ??
+                touchedStates.find(state => state.provinces.includes(primarySurvivor.id)) ??
+                touchedStates[0];
             if (!targetState) {
                 throw new Error(`No state contains a ${continentName} province.`);
             }
-            const touchedStateIds = new Set(touchedStates.map(state => state.id));
-            const combinedStateProvinces = new Set<number>();
+            const targetPartition = statePartitions.get(targetState.id)!;
+            const stateSurvivorIds = new Set(
+                touchedStates.flatMap(state => statePartitions.get(state.id)!.inside)
+            );
+            const combinedStateProvinces = new Set<number>([
+                ...targetPartition.outside,
+                ...stateSurvivorIds,
+            ]);
             const combinedCores = new Set<string>([targetCountryTag]);
             const combinedVictoryPoints: Record<number, number | undefined> = {};
             const combinedResources: Record<string, number | undefined> = {};
             let manpower = 0;
-            for (const state of touchedStates) {
+            const aggregatedStates = touchedStates.filter(
+                state => state.id === targetState.id ||
+                    statePartitions.get(state.id)?.outside.length === 0
+            );
+            for (const state of aggregatedStates) {
                 manpower += state.manpower;
-                state.provinces.forEach(id => combinedStateProvinces.add(replacements[id] ?? id));
                 state.cores.forEach(core => {
                     if (core.condition === true && core.value) {
                         combinedCores.add(core.value);
                     }
                 });
-                for (const [provinceIdText, value] of Object.entries(state.victoryPoints)) {
-                    if (value === undefined) {
-                        continue;
-                    }
-                    const provinceId = replacements[Number(provinceIdText)] ?? Number(provinceIdText);
-                    combinedVictoryPoints[provinceId] = (combinedVictoryPoints[provinceId] ?? 0) + value;
-                }
                 for (const [resource, value] of Object.entries(state.resources)) {
                     if (value !== undefined) {
                         combinedResources[resource] = (combinedResources[resource] ?? 0) + value;
                     }
                 }
             }
-            const persistedState: PersistedState = {
+            for (const state of touchedStates) {
+                for (const [provinceIdText, value] of Object.entries(state.victoryPoints)) {
+                    if (value === undefined) {
+                        continue;
+                    }
+                    const originalProvinceId = Number(provinceIdText);
+                    if (!provinceIds.has(originalProvinceId) && state.id !== targetState.id) {
+                        continue;
+                    }
+                    const provinceId = replacements[originalProvinceId] ?? originalProvinceId;
+                    combinedVictoryPoints[provinceId] = (combinedVictoryPoints[provinceId] ?? 0) + value;
+                }
+            }
+            const persistedStates: PersistedState[] = [{
                 id: targetState.id,
                 name: targetState.name,
                 manpower,
@@ -2405,14 +2463,50 @@ export class WorldMap {
                 tokenStart: targetState.token?.start,
                 tokenEnd: targetState.token?.end,
                 preserveUnknownContent: true,
-            };
+            }];
+            for (const state of touchedStates) {
+                if (state.id === targetState.id) {
+                    continue;
+                }
+                const partition = statePartitions.get(state.id)!;
+                if (partition.outside.length === 0) {
+                    continue;
+                }
+                const outsideVictoryPoints = Object.fromEntries(
+                    Object.entries(state.victoryPoints)
+                        .map(([provinceId, value]) => [Number(provinceId), value] as const)
+                        .filter(([provinceId]) => !provinceIds.has(provinceId))
+                );
+                persistedStates.push({
+                    id: state.id,
+                    name: state.name,
+                    manpower: state.manpower,
+                    category: state.category,
+                    owner: state.owner.find(value => value.condition === true)?.value,
+                    controller: state.controller.find(value => value.condition === true)?.value,
+                    provinces: partition.outside,
+                    cores: state.cores
+                        .filter(value => value.condition === true && !!value.value)
+                        .map(value => value.value),
+                    impassable: state.impassable,
+                    victoryPoints: outsideVictoryPoints,
+                    resources: { ...state.resources },
+                    file: state.file,
+                    tokenStart: state.token?.start,
+                    tokenEnd: state.token?.end,
+                    preserveUnknownContent: true,
+                    preserveOnlyProvinceMembership: true,
+                });
+            }
             const deletedStateRecords = touchedStates
-                .filter(state => state.id !== targetState.id)
+                .filter(state => state.id !== targetState.id &&
+                    statePartitions.get(state.id)?.outside.length === 0)
                 .map(state => ({ id: state.id, file: state.file }));
+            const deletedStateIds = new Set(deletedStateRecords.map(state => state.id));
             const deletedStateFiles = Array.from(new Set(deletedStateRecords
                 .map(state => state.file)
                 .filter(file => !worldMap.states.some(state =>
-                    !!state && !touchedStateIds.has(state.id) && state.file === file
+                    !!state && !deletedStateIds.has(state.id) && state.file === file
                 ))));
             const sharedStateRecords = deletedStateRecords.filter(
                 state => !deletedStateFiles.includes(state.file)
@@ -2421,74 +2515,86 @@ export class WorldMap {
             const touchedRegions = worldMap.strategicRegions
                 .filter((region): region is NonNullable<typeof region> => !!region && region.provinces.some(id => provinceIds.has(id)))
                 .sort((a, b) => a.id - b.id);
-            if (touchedRegions.length === 0) {
-                throw new Error(`No strategic region contains a ${continentName} province.`);
-            }
             const provinceTypes = Object.fromEntries(
                 worldMap.provinces
                     .filter((province): province is NonNullable<typeof province> => !!province)
                     .map(province => [province.id, province.type])
             );
             const regionPartition = partitionLandAndWaterProvinces(
-                touchedRegions.flatMap(region => region.provinces),
+                continentProvinces.map(province => province.id),
                 replacements,
                 provinceTypes
             );
-            const landRegionProvinces = new Set(regionPartition.land);
-            const waterRegionProvinces = new Set(regionPartition.water);
+            const regionPartitions = new Map(touchedRegions.map(region => [
+                region.id,
+                partitionMappedMembership(region.provinces, provinceIds, replacements),
+            ]));
+            const fullyContainedRegions = touchedRegions.filter(
+                region => regionPartitions.get(region.id)?.outside.length === 0
+            );
             const usedRegionIds = new Set<number>();
             const chooseRegion = (survivorId: number | undefined) => {
-                const region = touchedRegions.find(candidate =>
+                const region = fullyContainedRegions.find(candidate =>
                     !usedRegionIds.has(candidate.id) && survivorId !== undefined && candidate.provinces.includes(survivorId)
-                ) ?? touchedRegions.find(candidate => !usedRegionIds.has(candidate.id));
+                ) ?? fullyContainedRegions.find(candidate => !usedRegionIds.has(candidate.id));
                 if (region) {usedRegionIds.add(region.id);}
                 return region;
             };
-            const landTargetRegion = landRegionProvinces.size > 0 ? chooseRegion(landSurvivor?.id) : undefined;
-            let waterTargetRegion = waterRegionProvinces.size > 0 ? chooseRegion(waterSurvivor?.id) : undefined;
-            const persistedRegions: PersistedStrategicRegion[] = [];
-            if (landTargetRegion) {
-                persistedRegions.push({
-                    id: landTargetRegion.id,
-                    name: `${continentName} Land`,
-                    provinces: Array.from(landRegionProvinces).sort((a, b) => a - b),
-                    navalTerrain: null,
-                    file: landTargetRegion.file,
-                    tokenStart: landTargetRegion.token?.start,
-                    tokenEnd: landTargetRegion.token?.end,
-                });
-            }
-            if (waterRegionProvinces.size > 0) {
-                if (!waterTargetRegion) {
-                    const id = Math.max(0, ...worldMap.strategicRegions.filter(Boolean).map(region => region!.id)) + 1;
-                    waterTargetRegion = {
-                        ...touchedRegions[0],
-                        id,
-                        name: `${continentName} Water`,
-                        provinces: [],
-                        file: `map/strategicregions/${id}-${continentName.replace(/[^A-Za-z0-9]+/g, '_')}_WATER.txt`,
-                        token: null,
-                    };
+            let nextRegionId = Math.max(
+                0,
+                ...worldMap.strategicRegions.filter(Boolean).map(region => region!.id)
+            ) + 1;
+            const safeContinentName = continentName.replace(/[^A-Za-z0-9]+/g, '_');
+            const persistedRegions: PersistedStrategicRegion[] = touchedRegions
+                .filter(region => regionPartitions.get(region.id)!.outside.length > 0)
+                .map(region => ({
+                    id: region.id,
+                    name: region.name,
+                    provinces: regionPartitions.get(region.id)!.outside,
+                    navalTerrain: region.navalTerrain,
+                    file: region.file,
+                    tokenStart: region.token?.start,
+                    tokenEnd: region.token?.end,
+                    preserveUnknownContent: true,
+                }));
+            const addConsolidatedRegion = (
+                kind: 'Land' | 'Water',
+                provinces: number[],
+                survivorId: number | undefined
+            ) => {
+                if (provinces.length === 0) {
+                    return;
                 }
+                const existing = chooseRegion(survivorId);
+                const id = existing?.id ?? nextRegionId++;
                 persistedRegions.push({
-                    id: waterTargetRegion.id,
-                    name: `${continentName} Water`,
-                    provinces: Array.from(waterRegionProvinces).sort((a, b) => a - b),
-                    navalTerrain: waterTargetRegion.navalTerrain ?? touchedRegions.find(region => !!region.navalTerrain)?.navalTerrain ?? null,
-                    file: waterTargetRegion.file,
-                    tokenStart: waterTargetRegion.token?.start,
-                    tokenEnd: waterTargetRegion.token?.end,
+                    id,
+                    name: `${continentName} ${kind}`,
+                    provinces,
+                    navalTerrain: kind === 'Water'
+                        ? existing?.navalTerrain ??
+                            touchedRegions.find(region => !!region.navalTerrain)?.navalTerrain ??
+                            null
+                        : null,
+                    file: existing?.file ??
+                        `map/strategicregions/${id}-${safeContinentName}_${kind.toUpperCase()}.txt`,
+                    tokenStart: existing?.token?.start,
+                    tokenEnd: existing?.token?.end,
+                    preserveUnknownContent: !!existing,
                 });
-            }
-            const touchedRegionIds = new Set(touchedRegions.map(region => region.id));
+            };
+            addConsolidatedRegion('Land', regionPartition.land, landSurvivor?.id);
+            addConsolidatedRegion('Water', regionPartition.water, waterSurvivor?.id);
             const targetRegionIds = new Set(persistedRegions.map(region => region.id));
             const deletedRegionRecords = touchedRegions
-                .filter(region => !targetRegionIds.has(region.id))
+                .filter(region => regionPartitions.get(region.id)!.outside.length === 0 &&
+                    !targetRegionIds.has(region.id))
                 .map(region => ({ id: region.id, file: region.file }));
+            const deletedRegionIds = new Set(deletedRegionRecords.map(region => region.id));
             const deletedRegionFiles = Array.from(new Set(deletedRegionRecords
                 .map(region => region.file)
                 .filter(file => !worldMap.strategicRegions.some(region =>
-                    !!region && !touchedRegionIds.has(region.id) && region.file === file
+                    !!region && !deletedRegionIds.has(region.id) && region.file === file
                 ))));
             const sharedRegionRecords = deletedRegionRecords.filter(
                 region => !deletedRegionFiles.includes(region.file)
@@ -2504,6 +2610,14 @@ export class WorldMap {
                     terrain: province.terrain,
                     continent: province.continent,
                 }));
+            let changedRecords = 0;
+            const defaultMap = await this.readDefaultMapConfig();
+            const optionalTransforms: Array<[string, (text: string) => { text: string; changed: number }]> = [
+                ['map/railways.txt', text => clearRailways(text, provinceIds)],
+                ['map/supply_nodes.txt', text => clearSupplyHubs(text, provinceIds)],
+                ['map/buildings.txt', text => clearMapBuildings(text, provinceIds)],
+                [`map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`, text => clearWaterCrossings(text, provinceIds)],
+            ];
             await this.persistProvinceBmp({
                 paintedPixels,
                 width: worldMap.width,
@@ -2521,7 +2635,7 @@ export class WorldMap {
                 provinceReplacements: replacements,
                 targetProvinceId: primarySurvivor.id,
                 targetProvinceIds: survivors.map(survivor => survivor.id),
-                states: [persistedState],
+                states: persistedStates,
                 deletedStateFiles,
                 deletedStates: sharedStateRecords,
                 stateReplacements: Object.fromEntries(
@@ -2530,79 +2644,31 @@ export class WorldMap {
                 strategicRegions: persistedRegions,
                 deletedStrategicRegionFiles: deletedRegionFiles,
                 deletedStrategicRegions: sharedRegionRecords,
-            });
-
-            let changedRecords = 0;
-            const defaultMap = await this.readDefaultMapConfig();
-            const optionalTransforms: Array<[string, (text: string) => { text: string; changed: number }]> = [
-                ['map/railways.txt', text => clearRailways(text, provinceIds)],
-                ['map/supply_nodes.txt', text => clearSupplyHubs(text, provinceIds)],
-                ['map/buildings.txt', text => clearMapBuildings(text, provinceIds)],
-                [`map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`, text => clearWaterCrossings(text, provinceIds)],
-            ];
-            for (const [path, transform] of optionalTransforms) {
-                try {
-                    const sourcePath = await getFilePathFromMod(path);
-                    const source = sourcePath
-                        ? (await readFileFromPath(sourcePath))[0]
-                        : (await readFileFromModOrHOI4(path))[0];
-                    const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
-                    const result = transform(sourceText);
-                    changedRecords += result.changed;
-                    if (result.text === sourceText) {
-                        continue;
-                    }
-                    const target = await this.resolveTargetFile(path);
-                    await mkdirs(dirUri(target));
-                    await writeFile(target, Buffer.from(result.text, 'utf-8'));
-                } catch {
-                    // Optional in small and total-conversion maps.
-                }
-            }
-
-            // Remove obsolete state IDs from supply-area membership and retain
-            // the consolidated state wherever any touched state appeared.
-            const touchedSupplyAreas = worldMap.supplyAreas
-                .filter((supplyArea): supplyArea is NonNullable<typeof supplyArea> =>
-                    !!supplyArea && supplyArea.states.some(id => touchedStateIds.has(id))
-                );
-            const targetSupplyArea = touchedSupplyAreas.find(supplyArea => supplyArea.states.includes(targetState.id)) ??
-                touchedSupplyAreas[0];
-            for (const supplyArea of touchedSupplyAreas) {
-                if (!supplyArea || !supplyArea.states.some(id => touchedStateIds.has(id))) {
-                    continue;
-                }
-                try {
-                    const sourcePath = await getFilePathFromMod(supplyArea.file);
-                    const source = sourcePath
-                        ? (await readFileFromPath(sourcePath))[0]
-                        : (await readFileFromModOrHOI4(supplyArea.file))[0];
-                    const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
-                    let changed = 0;
-                    const next = sourceText.replace(/\bstates\s*=\s*\{([^}]*)\}/g, (whole, body: string) => {
-                        const ids = body.trim().split(/\s+/).map(Number).filter(Number.isInteger);
-                        if (!ids.some(id => touchedStateIds.has(id))) {
-                            return whole;
+                relatedPaths: optionalTransforms.map(([path]) => path),
+                afterPersist: async () => {
+                    for (const [path, transform] of optionalTransforms) {
+                        let source: Buffer;
+                        try {
+                            const sourcePath = await getFilePathFromMod(path);
+                            source = sourcePath
+                                ? (await readFileFromPath(sourcePath))[0]
+                                : (await readFileFromModOrHOI4(path))[0];
+                        } catch {
+                            // Optional in small and total-conversion maps.
+                            continue;
                         }
-                        const kept = ids.filter(id => !touchedStateIds.has(id));
-                        if (supplyArea.id === targetSupplyArea?.id) {
-                            kept.push(targetState.id);
+                        const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
+                        const result = transform(sourceText);
+                        if (result.text === sourceText) {
+                            continue;
                         }
-                        changed += 1;
-                        return `states = { ${Array.from(new Set(kept)).sort((a, b) => a - b).join(' ')} }`;
-                    });
-                    if (next !== sourceText) {
-                        const target = await this.resolveTargetFile(supplyArea.file);
+                        const target = await this.resolveTargetFile(path);
                         await mkdirs(dirUri(target));
-                        await writeFile(target, Buffer.from(next, 'utf-8'));
-                        changedRecords += changed;
+                        await writeFile(target, Buffer.from(result.text, 'utf-8'));
+                        changedRecords += result.changed;
                     }
-                } catch {
-                    // Supply areas may be disabled or absent.
-                }
-            }
-
-            changedRecords += await this.reindexMapSequentially();
+                },
+            });
             this.cachedWorldMap = undefined;
             this.worldMapDependencies = undefined;
             await this.postMessageToWebview({
@@ -2612,8 +2678,8 @@ export class WorldMap {
                 continentName,
                 targetCountryTag,
                 mergedProvinces: deletedProvinceIds.length,
-                mergedStates: Math.max(0, touchedStates.length - 1),
-                mergedStrategicRegions: Math.max(0, touchedRegions.length - persistedRegions.length),
+                mergedStates: deletedStateRecords.length,
+                mergedStrategicRegions: deletedRegionRecords.length,
                 changedRecords,
             });
         } catch (e) {

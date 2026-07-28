@@ -47,6 +47,32 @@ export function planProvinceMergesByType(
     return { survivorIds, replacements };
 }
 
+/**
+ * Splits a region's current province membership around an operation scope.
+ * Only in-scope IDs are remapped. This keeps prior edits outside the current
+ * continent untouched, even when a state or strategic region crosses the
+ * continent boundary.
+ */
+export function partitionMappedMembership(
+    provinceIds: Iterable<number>,
+    scopedProvinceIds: ReadonlySet<number>,
+    replacements: Readonly<Record<number, number>>
+): { inside: number[]; outside: number[] } {
+    const inside = new Set<number>();
+    const outside = new Set<number>();
+    for (const id of provinceIds) {
+        if (scopedProvinceIds.has(id)) {
+            inside.add(replacements[id] ?? id);
+        } else {
+            outside.add(id);
+        }
+    }
+    return {
+        inside: Array.from(inside).sort((a, b) => a - b),
+        outside: Array.from(outside).sort((a, b) => a - b),
+    };
+}
+
 export function replaceStateIdsInSupplyAreas(
     text: string,
     replacements: Readonly<Record<number, number>>
@@ -186,6 +212,47 @@ export function patchStatePreservingUnknownContent(
         .sort((a, b) => a[0] - b[0])
         .map(([provinceId, value]) => `\t\tvictory_points = { ${provinceId} ${value} }`));
     retained.splice(1, 0, ...known);
+    return text.slice(0, historyRange.start) + retained.join(eol) + text.slice(historyRange.end);
+}
+
+/** Moves province membership and victory points without rewriting state data. */
+export function patchStateMembershipPreservingContent(
+    original: string,
+    provinces: number[],
+    victoryPoints: Record<number, number | undefined>,
+    eol: string
+): string {
+    const provinceList = [...provinces].sort((a, b) => a - b).join(' ');
+    let text = /\bprovinces\s*=\s*\{[^}]*\}/.test(original)
+        ? original.replace(/\bprovinces\s*=\s*\{[^}]*\}/, `provinces = { ${provinceList} }`)
+        : original.replace(/\{/, `{${eol}\tprovinces = { ${provinceList} }`);
+    const historyRange = namedBlockRange(text, 'history');
+    if (!historyRange) {
+        return text;
+    }
+    const lines = text.slice(historyRange.start, historyRange.end).split(/\r?\n/);
+    const retained: string[] = [];
+    let depth = 0;
+    for (const line of lines) {
+        const directVictoryPoint = depth === 1 && /^victory_points\s*=/.test(line.trim());
+        if (!directVictoryPoint) {
+            retained.push(line);
+        }
+        for (const char of line) {
+            if (char === '{') {
+                depth++;
+            }
+            if (char === '}') {
+                depth--;
+            }
+        }
+    }
+    const entries = Object.entries(victoryPoints)
+        .map(([provinceId, value]) => [Number.parseInt(provinceId, 10), value] as const)
+        .filter(([, value]) => value !== undefined)
+        .sort((a, b) => a[0] - b[0])
+        .map(([provinceId, value]) => `\t\tvictory_points = { ${provinceId} ${value} }`);
+    retained.splice(1, 0, ...entries);
     return text.slice(0, historyRange.start) + retained.join(eol) + text.slice(historyRange.end);
 }
 

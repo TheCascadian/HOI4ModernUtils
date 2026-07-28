@@ -10,6 +10,10 @@ The generalized workflow can run against every loaded continent. Its sequential 
 
 Consolidation keeps land and water survivors separate, and keeps Land/Water strategic regions separate. It also avoids merging lake provinces into sea provinces.
 
+Consolidation uses the IDs currently loaded from the effective mod, so prior world edits and non-sequential IDs are supported. It does not automatically run the global reindex action. States and strategic regions that cross a continent boundary keep their out-of-continent provinces and unrelated content; only records emptied by the consolidation are removed. If the continent has no existing land or water strategic region, the workflow creates the required region.
+
+Rerunning an already-consolidated continent is supported. A missing or unreadable `provinces.bmp` is still a hard failure because bitmap and definition changes cannot be safely separated.
+
 ## Batch actions
 
 Selected-area and global actions include:

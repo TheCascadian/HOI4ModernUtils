@@ -2043,7 +2043,7 @@ export class TopBar extends Subscriber {
         const validContinents = this.getRunnableContinents();
         const preflightValid = allMode
             ? validContinents.length > 0
-            : !!continentId && provinceIds.size >= 2 && stateCount > 0 && strategicRegionCount > 0 && tags.length > 0;
+            : !!continentId && provinceIds.size > 0 && stateCount > 0 && tags.length > 0;
         summary.textContent = allMode && preflightValid
             ? feLocalize(
                 'worldmap.continent.modal.allsummary',
@@ -2135,7 +2135,7 @@ export class TopBar extends Subscriber {
             if (province.continent > 0) counts.set(province.continent, (counts.get(province.continent) ?? 0) + 1);
         });
         return Array.from(counts)
-            .filter(([, count]) => count >= 2)
+            .filter(([, count]) => count > 0)
             .map(([id]) => id)
             .filter(id => !!this.loader.worldMap.continents[id])
             .sort((a, b) => this.loader.worldMap.continents[a].localeCompare(this.loader.worldMap.continents[b]));

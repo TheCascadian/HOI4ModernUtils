@@ -33,7 +33,7 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Province merging now repairs deleted province references in state victory points, strategic regions, `adjacencies.csv`, `railways.txt`, and `supply_nodes.txt`.
 * State transfer and annex tools now persist both owner and controller.
 * Continental destructive merging preserves separate land, lake, and sea province survivors and separate land/water strategic regions.
-* Major destructive actions sequentially reindex loaded province and state IDs and repair map, state, strategic-region, supply-area, country-capital, adjacency, railway, supply-node, and building references.
+* The dedicated reindex action sequentially rebuilds loaded province and state IDs and repairs map, state, strategic-region, supply-area, country-capital, adjacency, railway, supply-node, and building references. Consolidation keeps existing surviving IDs stable.
 * State-file updates preserve unrelated blocks and unknown effects while replacing supported map-owned fields.
 * Context menus, confirmation dialogs, large tooltips, and dropdown placement were made responsive and keyboard accessible.
 * Opt-in WebGL2 measured **82.6% lower median render time than the original Canvas2D renderer**, from 42.5 ms to 7.4 ms, or about 5.7x faster, over 312 authentic-map webview cases at 0.25x zoom. It is not pixel-identical and remains disabled by default.
@@ -42,6 +42,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Fixed the paintbrush becoming unusably slow on long or heavily staged strokes. Interpolated dabs now share one draft clone and one published update per sampled pointer event; the staged overlay is cached; redundant overlap updates are skipped; and draft-only changes no longer invalidate the base map.
 * A deterministic 20,000-staged-pixel, 256-dab synthetic workload measured 99.75% lower stroke-processing time than the prior per-dab implementation, from 662.4 ms to 1.65 ms. This is an algorithm microbenchmark, not a live UI frame-time result.
 * Fixed the continental consolidation command silently stopping in VS Code webviews by replacing browser prompts with an in-webview preflight and execution dialog.
+* Fixed consolidation failing after prior world edits. It now accepts already-consolidated continents, creates missing land or water strategic regions, preserves cross-continent state and strategic-region content, and does not force a whole-map reindex after each continent.
+* Made consolidation cleanup part of the same rollback boundary as province, state, and strategic-region persistence. Missing `provinces.bmp` now produces an explicit failure instead of allowing the workflow to continue.
 * Fixed edge-decimation and coarse-province Performance switches so they change the live renderer sampling context, matching the runtime profiler.
 * Normalized one-pixel brush bounds to positive zero so exact comparisons and serialized diagnostics stay stable.
 

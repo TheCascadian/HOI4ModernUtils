@@ -528,6 +528,8 @@ export interface PersistedState {
     tokenEnd?: number;
     /** Update known map fields without discarding unsupported state content. */
     preserveUnknownContent?: boolean;
+    /** Change only province membership and direct victory points. */
+    preserveOnlyProvinceMembership?: boolean;
 }
 
 export interface PersistStatesMessage {
@@ -557,6 +559,8 @@ export interface PersistedStrategicRegion {
     file: string;
     tokenStart?: number;
     tokenEnd?: number;
+    /** Update known region fields without discarding weather or unknown content. */
+    preserveUnknownContent?: boolean;
 }
 
 export interface PersistStrategicRegionsMessage {

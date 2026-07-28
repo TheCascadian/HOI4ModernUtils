@@ -7,6 +7,8 @@ import {
     convertDefinitionsToOcean,
     removeAllCores,
     partitionLandAndWaterProvinces,
+    partitionMappedMembership,
+    patchStateMembershipPreservingContent,
     patchStatePreservingUnknownContent,
     planProvinceMergesByType,
     replaceStateIdsInSupplyAreas,
@@ -137,6 +139,46 @@ describe('selected area operations', () => {
         ]);
         assert.deepStrictEqual(result.survivorIds, [2, 7, 9]);
         assert.deepStrictEqual(result.replacements, { 3: 2, 8: 7, 10: 9 });
+    });
+
+    it('preserves prior out-of-continent edits in boundary records', () => {
+        const result = partitionMappedMembership(
+            [41, 900, 77, 1200],
+            new Set([41, 77]),
+            { 77: 41 }
+        );
+        assert.deepStrictEqual(result.inside, [41]);
+        assert.deepStrictEqual(result.outside, [900, 1200]);
+    });
+
+    it('moves boundary membership without rewriting unrelated state data', () => {
+        const source = [
+            'state = {',
+            '\tid = 8',
+            '\tmanpower = 500',
+            '\tprovinces = { 41 900 77 }',
+            '\tresources = { steel = 3 }',
+            '\thistory = {',
+            '\t\towner = USA',
+            '\t\tvictory_points = { 41 2 }',
+            '\t\tvictory_points = { 900 5 }',
+            '\t\t1939.1.1 = { owner = CAN }',
+            '\t}',
+            '}',
+        ].join('\n');
+        const result = patchStateMembershipPreservingContent(
+            source,
+            [900],
+            { 900: 5 },
+            '\n'
+        );
+        assert.ok(result.includes('provinces = { 900 }'));
+        assert.ok(result.includes('manpower = 500'));
+        assert.ok(result.includes('resources = { steel = 3 }'));
+        assert.ok(result.includes('owner = USA'));
+        assert.ok(result.includes('1939.1.1 = { owner = CAN }'));
+        assert.ok(!result.includes('victory_points = { 41 2 }'));
+        assert.ok(result.includes('victory_points = { 900 5 }'));
     });
 
     it('repairs and deduplicates supply-area state IDs after a state merge', () => {
