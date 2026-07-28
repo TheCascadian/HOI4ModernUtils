@@ -6,6 +6,29 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 **Versioning note:** This fork ([TheCascadian/HOI4ModernUtils](https://github.com/TheCascadian/HOI4ModernUtils)) keeps its own `0.x` version line, independent of the upstream project it was forked from. Entries at `[0.4.0]` and above are this fork's own releases. Entries from `[0.15.1]` down to `[0.13.0]` are inherited from upstream (`herbix/hoi4modutilities`) and were merged into this fork's history alongside its own work; older upstream entries have been compressed out of this file -  see the [upstream changelog](https://github.com/herbix/hoi4modutilities/blob/master/CHANGELOG.md) for full history. Because the two projects numbered releases independently, some version numbers (e.g. `0.12.x`, `0.3.2`) appear twice in git history for unrelated changes at different dates; this file only lists one entry per number going forward.
 
+## Unreleased
+
+* Added a confirmation workflow to create a new three-character country TAG from selected states, including country definition, history, and English localisation files.
+* Added an Auto-Core All Transferred States option shared by state transfers, country creation, and country annexation.
+* Added multi-country selection for bulk annexation.
+* Added selected-state merging with an explicit surviving-state choice and combined provinces, manpower, resources, cores, and victory points.
+* Province merging now repairs deleted province references in state victory points, strategic regions, `adjacencies.csv`, `railways.txt`, and `supply_nodes.txt`.
+* Added a standalone safe province-warning resolver for invalid adjacency, railway, and supply-node province references.
+* Added a Transfer Wand for rapidly moving land, lake, and ocean provinces between states or copying both state owner and controller assignments.
+* Added pixel transfer between existing provinces, including a connected-region Fill Bucket that does not create new province IDs.
+* Added a built-in North America consolidation pipeline that merges continental provinces, touched states and strategic regions, clears scoped buildings and supply infrastructure, repairs references, and assigns the result to a chosen country.
+* Increased close editing zoom from 16x to 64x and kept wheel zoom centered on the pointer.
+* State transfer and annex tools now persist both owner and controller.
+* Fixed the North America consolidation command silently stopping in VS Code webviews by replacing browser prompts with an in-webview preflight and execution dialog.
+* Generalized consolidation into a nested workflow for every loaded continent and added an automatic sequential run-all flow that selects each continent's dominant current owner.
+* Added a guarded `REMOVE ALL CORES` destructive action that removes core history records without changing state owners or controllers.
+* Added hover descriptions to every map action and a toggleable Compact Large Tooltips display option.
+* Fixed edge-decimation and coarse-province Performance switches so they now change the live renderer sampling context, matching the runtime profiler.
+* Added selected-area and global batch actions for removing water crossings and clearing state resources.
+* Continental destructive merging now preserves separate land and water province survivors and separate Land/Water strategic regions.
+* Major destructive actions now sequentially reindex loaded province and state IDs and repair map, state, strategic-region, supply-area, country-capital, adjacency, railway, supply-node, and building references.
+* Added a guarded standalone `REINDEX ALL PROVINCES AND STATES` action.
+
 ## [0.4.2] - 2026-07-27
 
 ### Added

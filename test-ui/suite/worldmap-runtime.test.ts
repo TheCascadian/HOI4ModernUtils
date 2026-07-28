@@ -19,6 +19,7 @@ const displayFlags = [
     'oceanstateboundary',
     'fastrending',
     'adaptzooming',
+    'compacttooltip',
 ];
 
 suite('World-map real webview runtime', () => {
@@ -72,7 +73,7 @@ suite('World-map real webview runtime', () => {
                 ? [{ name: 'minimum', scale: 0.25, xRatio: 0, yRatio: 0 }]
                 : [
                     { name: 'minimum', scale: 0.25, xRatio: 0, yRatio: 0 },
-                    { name: 'maximum-wrap', scale: 16, xRatio: 0.999, yRatio: 0.5 },
+                    { name: 'maximum-wrap', scale: 64, xRatio: 0.999, yRatio: 0.5 },
                 ];
             const cases: WorldMapRuntimeTestCase[] = [];
             for (const pair of pairs) {

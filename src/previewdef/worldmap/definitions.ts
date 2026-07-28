@@ -5,8 +5,10 @@ import { Warning } from "../../util/common";
 export interface WorldMapData {
     width: number;
     height: number;
+    colorByPosition: number[]; // width * height
     provinces: (Province | undefined | null)[]; // count of provinces
     states: (State | undefined | null)[];
+    stateCategories?: StateCategory[];
     countries: Country[];
     strategicRegions: (StrategicRegion | undefined | null)[];
     supplyAreas: (SupplyArea | undefined | null)[];
@@ -213,6 +215,7 @@ export interface SupplyArea extends Region, TokenInFile {
 export interface StateCategory {
     name: string;
     color: number;
+    localBuildingSlots: number;
     file: string;
 }
 
@@ -251,7 +254,7 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStrategicRegionsMessage | PersistProvincesMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | PersistVictoryPointLocalisationMessage | SetConfirmNewProvinceCreationMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage | WorldMapRuntimeTestReadyMessage | WorldMapRuntimeTestRequestMessage | WorldMapRuntimeTestResultMessage;
+export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStatesResultMessage | PersistStrategicRegionsMessage | PersistProvincesMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | ResolveProvinceWarningsMessage | ResolveProvinceWarningsResultMessage | RunAreaOperationMessage | AreaOperationResultMessage | RunContinentPipelineMessage | ContinentPipelineResultMessage | RemoveAllCoresMessage | RemoveAllCoresResultMessage | ReindexMapMessage | ReindexMapResultMessage | PersistVictoryPointLocalisationMessage | SetConfirmNewProvinceCreationMessage | SetAutoCoreTransfersMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage | CreateCountryMessage | CreateCountryResultMessage | WorldMapRuntimeTestReadyMessage | WorldMapRuntimeTestRequestMessage | WorldMapRuntimeTestResultMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
@@ -392,6 +395,104 @@ export interface SetConfirmNewProvinceCreationMessage {
     value: boolean;
 }
 
+export interface SetAutoCoreTransfersMessage {
+    command: 'setautocoretransfers';
+    value: boolean;
+}
+
+export interface ResolveProvinceWarningsMessage {
+    command: 'resolveprovincewarnings';
+}
+
+export interface ResolveProvinceWarningsResultMessage {
+    command: 'resolveprovincewarningsresult';
+    success: boolean;
+    warnings?: string[];
+    error?: string;
+}
+
+export type AreaOperation = 'clear-railways' | 'clear-buildings' | 'one-population-per-state' |
+    'clear-supply-hubs' | 'clear-water-crossings' | 'clear-resources' |
+    'lowest-development' | 'convert-to-ocean';
+
+export interface RunAreaOperationMessage {
+    command: 'runareaoperation';
+    operation: AreaOperation;
+    provinceIds: number[];
+    stateIds: number[];
+    perContinent: boolean;
+    includeWasteland: boolean;
+    reindexAfter?: boolean;
+    /** Exact rivers.bmp components to clip when converting river pixels to ocean. */
+    riverIds?: number[];
+}
+
+export interface AreaOperationResultMessage {
+    command: 'areaoperationresult';
+    success: boolean;
+    operation: AreaOperation;
+    affectedProvinces?: number;
+    affectedStates?: number;
+    changedRecords?: number;
+    error?: string;
+}
+
+export interface RunContinentPipelineMessage {
+    command: 'runcontinentpipeline';
+    continentId: number;
+    targetCountryTag: string;
+}
+
+export interface ContinentPipelineResultMessage {
+    command: 'continentpipelineresult';
+    success: boolean;
+    continentId: number;
+    continentName?: string;
+    targetCountryTag?: string;
+    mergedProvinces?: number;
+    mergedStates?: number;
+    mergedStrategicRegions?: number;
+    changedRecords?: number;
+    error?: string;
+}
+
+export interface RemoveAllCoresMessage {
+    command: 'removeallcores';
+}
+
+export interface RemoveAllCoresResultMessage {
+    command: 'removeallcoresresult';
+    success: boolean;
+    affectedStates?: number;
+    changedRecords?: number;
+    error?: string;
+}
+
+export interface ReindexMapMessage {
+    command: 'reindexmap';
+}
+
+export interface ReindexMapResultMessage {
+    command: 'reindexmapresult';
+    success: boolean;
+    changedRecords?: number;
+    error?: string;
+}
+
+export interface CreateCountryMessage {
+    command: 'createcountry';
+    tag: string;
+    localizedName: string;
+    capitalStateId: number;
+}
+
+export interface CreateCountryResultMessage {
+    command: 'createcountryresult';
+    success: boolean;
+    tag?: string;
+    error?: string;
+}
+
 export interface PersistCountryDiplomacyMessage {
     command: 'persistcountrydiplomacy';
     action: 'puppet' | 'end_puppet';
@@ -413,6 +514,7 @@ export interface PersistedState {
     manpower: number;
     category: string;
     owner?: string;
+    controller?: string;
     provinces: number[];
     cores: string[];
     impassable: boolean;
@@ -427,6 +529,19 @@ export interface PersistStatesMessage {
     command: 'persiststates';
     states: PersistedState[];
     deletedFiles?: string[];
+    /** State blocks to remove while preserving other blocks in the same file. */
+    deletedStates?: Array<{ id: number; file: string }>;
+    /** Correlates destructive writes with their completion response. */
+    requestId?: string;
+    /** Deleted state ID to surviving state ID for supply-area repair. */
+    stateReplacements?: Record<number, number>;
+}
+
+export interface PersistStatesResultMessage {
+    command: 'persiststatesresult';
+    requestId?: string;
+    success: boolean;
+    error?: string;
 }
 
 export interface PersistedStrategicRegion {
@@ -476,8 +591,21 @@ export interface PersistProvinceBmpMessage {
     previousProvinces?: PersistedProvince[];
     /** Province definition rows removed by this operation. */
     deletedProvinceIds?: number[];
+    /** Deleted province ID to surviving province ID, used to repair dependent map files. */
+    provinceReplacements?: Record<number, number>;
     /** The province ID being painted from (source) */
     targetProvinceId: number;
+    /** Additional target provinces permitted in one atomic multi-color edit. */
+    targetProvinceIds?: number[];
+    /** Related state changes committed as part of the same province edit. */
+    states?: PersistedState[];
+    deletedStateFiles?: string[];
+    deletedStates?: Array<{ id: number; file: string }>;
+    stateReplacements?: Record<number, number>;
+    /** Related strategic-region changes committed as part of the same province edit. */
+    strategicRegions?: PersistedStrategicRegion[];
+    deletedStrategicRegionFiles?: string[];
+    deletedStrategicRegions?: Array<{ id: number; file: string }>;
 }
 
 /**

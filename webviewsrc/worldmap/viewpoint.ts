@@ -5,6 +5,27 @@ import { bboxCenter } from "./graphutils";
 import { BehaviorSubject, fromEvent, Observable } from 'rxjs';
 
 type ViewPointObj = { x: number; y: number; scale: number; };
+const MIN_ZOOM_SCALE = 0.25;
+const MAX_ZOOM_SCALE = 64;
+const WHEEL_ZOOM_FACTOR = 1.1;
+const FINE_WHEEL_ZOOM_FACTOR = 1.025;
+
+/**
+ * Calculates continuous wheel zoom while retaining the supported map limits.
+ * Shift makes each wheel notch a smaller, precision adjustment.
+ */
+export function calculateWheelZoom(
+    scale: number,
+    deltaY: number,
+    deltaMode: number,
+    fineAdjustment: boolean,
+): number {
+    // DOM_DELTA_PIXEL is 0, DOM_DELTA_LINE is 1, and DOM_DELTA_PAGE is 2.
+    // A conventional mouse wheel reports about 100 pixels per notch.
+    const wheelSteps = deltaMode === 1 ? deltaY : deltaMode === 2 ? deltaY * 3 : deltaY / 100;
+    const factor = fineAdjustment ? FINE_WHEEL_ZOOM_FACTOR : WHEEL_ZOOM_FACTOR;
+    return Math.min(MAX_ZOOM_SCALE, Math.max(MIN_ZOOM_SCALE, scale * Math.pow(factor, -wheelSteps)));
+}
 
 export class ViewPoint extends Subscriber {
     public x: number;
@@ -138,27 +159,16 @@ export class ViewPoint extends Subscriber {
         }));
     
         this.addSubscription(fromEvent<WheelEvent>(this.canvas, 'wheel').subscribe((e) => {
-            this.x += e.pageX / this.scale;
-            this.y += e.pageY / this.scale;
+            e.preventDefault();
+            const rect = this.canvas.getBoundingClientRect();
+            const canvasX = (e.clientX - rect.left) * (this.canvas.width / Math.max(1, rect.width));
+            const canvasY = (e.clientY - rect.top) * (this.canvas.height / Math.max(1, rect.height));
+            this.x += canvasX / this.scale;
+            this.y += canvasY / this.scale;
+            this.scale = calculateWheelZoom(this.scale, e.deltaY, e.deltaMode, e.shiftKey);
     
-            if (e.deltaY > 0) {
-                if (this.scale <= 1) {
-                    if (this.scale > 0.25) {
-                        this.scale /= 2;
-                    }
-                } else {
-                    this.scale = Math.max(1, this.scale - 1);
-                }
-            } else if (e.deltaY < 0) {
-                if (this.scale < 1) {
-                    this.scale *= 2;
-                } else {
-                    this.scale = Math.min(16, Math.floor(this.scale + 1));
-                }
-            }
-    
-            this.x -= e.pageX / this.scale;
-            this.y -= e.pageY / this.scale;
+            this.x -= canvasX / this.scale;
+            this.y -= canvasY / this.scale;
     
             this.alignViewPointXY();
             this.updateObservable();

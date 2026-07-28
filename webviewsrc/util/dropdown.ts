@@ -26,6 +26,8 @@ class Dropdown extends Subscriber {
     }
 
     private init() {
+        this.select.setAttribute('aria-haspopup', 'listbox');
+        this.select.setAttribute('aria-expanded', 'false');
         this.addSubscription(fromEvent<MouseEvent>(this.select, 'mousedown').subscribe(e => {
             e.preventDefault();
             this.select.focus();
@@ -49,6 +51,7 @@ class Dropdown extends Subscriber {
 
     private showSelectionsForDropdown() {
         this.select.classList.add('dropdown-opened');
+        this.select.setAttribute('aria-expanded', 'true');
         const options = this.select.querySelectorAll('option');
         const optionForDropdownMenu: Option[] = [];
         options.forEach(option => {
@@ -85,6 +88,7 @@ class Dropdown extends Subscriber {
         numDropDownOpened$.next(numDropDownOpened$.value + 1);
         this.closeDropdown = () => {
             this.select.classList.remove('dropdown-opened');
+            this.select.setAttribute('aria-expanded', 'false');
             dropdownMenu.hide();
             dropdownMenuSubscriptions.forEach(d => d.dispose());
             numDropDownOpened$.next(numDropDownOpened$.value - 1);
@@ -133,6 +137,9 @@ export class DivDropdown extends Subscriber {
     }
 
     private init() {
+        this.select.setAttribute('role', 'combobox');
+        this.select.setAttribute('aria-haspopup', 'listbox');
+        this.select.setAttribute('aria-expanded', 'false');
         this.addSubscription(fromEvent<MouseEvent>(this.select, 'mousedown').subscribe(e => {
             e.preventDefault();
             this.select.focus();
@@ -144,7 +151,7 @@ export class DivDropdown extends Subscriber {
         }));
 
         this.addSubscription(fromEvent<KeyboardEvent>(this.select, 'keydown').subscribe(e => {
-            if (e.code === 'Enter') {
+            if (e.code === 'Enter' || e.code === 'Space' || e.code === 'ArrowDown') {
                 e.preventDefault();
                 if (this.closeDropdown) {
                     this.closeDropdown();
@@ -160,6 +167,7 @@ export class DivDropdown extends Subscriber {
 
     private showSelectionsForDropdown() {
         this.select.classList.add('dropdown-opened');
+        this.select.setAttribute('aria-expanded', 'true');
 
         const dropdownMenu = new DropdownMenu(this.getOptions(), this.multiSelection);
         const dropdownMenuSubscriptions: Disposable[] = [ dropdownMenu ];
@@ -183,6 +191,7 @@ export class DivDropdown extends Subscriber {
         numDropDownOpened$.next(numDropDownOpened$.value + 1);
         this.closeDropdown = () => {
             this.select.classList.remove('dropdown-opened');
+            this.select.setAttribute('aria-expanded', 'false');
             dropdownMenu.hide();
             dropdownMenuSubscriptions.forEach(d => d.dispose());
             numDropDownOpened$.next(numDropDownOpened$.value - 1);
@@ -274,6 +283,8 @@ class DropdownMenu extends Subscriber {
         const options = this.options;
         const list = document.createElement('ul');
         list.classList.add('select-dropdown');
+        list.setAttribute('role', 'listbox');
+        list.setAttribute('aria-multiselectable', String(this.multiSelection));
 
         const items = this.items;
     
@@ -289,6 +300,7 @@ class DropdownMenu extends Subscriber {
     private createDropdownItem(option: Option, index: number, items: HTMLLIElement[]): HTMLLIElement {
         const item = document.createElement('li');
         item.setAttribute('role', 'option');
+        item.setAttribute('aria-selected', String(option.selected));
         item.tabIndex = -1;
 
         if (this.multiSelection) {
@@ -302,6 +314,7 @@ class DropdownMenu extends Subscriber {
 
             fromEvent(checkbox, 'change').subscribe(() => {
                 option.selected = checkbox.checked;
+                item.setAttribute('aria-selected', String(option.selected));
                 this.writableOptions$.next(this.options);
             });
 
@@ -323,6 +336,9 @@ class DropdownMenu extends Subscriber {
             const updateValue = () => {
                 this.options.forEach(o => o.selected = false);
                 option.selected = true;
+                items.forEach((candidate, candidateIndex) => {
+                    candidate.setAttribute('aria-selected', String(candidateIndex === index));
+                });
                 this.writableOptions$.next(this.options);
             };
 

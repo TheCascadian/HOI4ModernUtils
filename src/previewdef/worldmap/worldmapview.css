@@ -1,6 +1,10 @@
 body {
     margin: 0;
     padding: 0;
+    --worldmap-ui-scale: 1;
+    --worldmap-control-height: 26px;
+    --worldmap-corner: 2px;
+    --worldmap-corner-tight: 1px;
 }
 
 /* Prevent page-level scrollbars from appearing inside the webview */
@@ -27,14 +31,24 @@ html, body {
     height: 68px;
     padding: 6px 12px;
     overflow: hidden;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.14));
+    background: var(--vscode-editor-background);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0)),
+        color-mix(in srgb, var(--vscode-editor-background) 88%, transparent);
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22);
+    backdrop-filter: blur(12px);
 }
 
 .toolbar {
+    box-sizing: border-box;
+    width: 100%;
     height: 55px;
     align-content: flex-start;
     align-items: center;
-    flex-wrap: wrap;
-    column-gap: 0;
+    flex-wrap: nowrap;
+    min-width: 0;
+    column-gap: 5px;
     row-gap: 6px;
 }
 
@@ -55,38 +69,123 @@ span.divider {
 }
 
 .group {
-    display: inline-block;
-    margin-right: 10px;
+    display: inline-flex;
+    flex: 0 1 auto;
+    align-items: center;
+    gap: 5px;
+    margin-right: 8px;
     min-width: 0;
+    min-height: 34px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+}
+
+.toolbar > .group {
+    flex-shrink: 1;
+}
+
+.toolbar .select-container,
+.toolbar select,
+.toolbar input {
+    min-width: 0;
+}
+
+.toolbar button {
+    flex: 0 0 auto;
+}
+
+.group:hover,
+.group:focus-within {
+    border-color: transparent;
+    background: transparent;
+}
+
+.toolbar label {
+    color: var(--vscode-descriptionForeground);
+    font-size: calc(11px * var(--worldmap-ui-scale));
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.toolbar select,
+.toolbar input,
+.toolbar .select,
+.toolbar button {
+    min-height: var(--worldmap-control-height);
+    border-radius: var(--worldmap-corner);
+    font-size: calc(12px * var(--worldmap-ui-scale));
+}
+
+.toolbar button {
+    transition:
+        color 120ms ease,
+        background-color 120ms ease,
+        border-color 120ms ease,
+        box-shadow 120ms ease,
+        transform 120ms ease;
+}
+
+.toolbar button:hover:not(:disabled) {
+    color: var(--vscode-focusBorder, var(--vscode-foreground));
+    transform: none;
+    box-shadow: none;
+}
+
+.toolbar button.active,
+.toolbar button[aria-pressed="true"] {
+    color: var(--vscode-focusBorder, var(--vscode-foreground));
+    background: transparent;
+    border-color: transparent;
+    box-shadow: inset 0 -2px 0 var(--vscode-focusBorder, #007fd4);
+}
+
+.toolbar button:focus-visible,
+.worldmap-modal button:focus-visible,
+.context-menu-item:focus-visible,
+#main-canvas:focus-visible {
+    outline: 2px solid var(--vscode-focusBorder, #007fd4) !important;
+    outline-offset: 2px;
 }
 
 .render-optimizations {
     position: relative;
 }
 
-#render-optimizations-button {
+.accessibility-options {
+    position: relative;
+}
+
+#render-optimizations-button,
+#accessibility-options-button {
     display: inline-flex;
     align-items: center;
     gap: 4px;
     width: auto;
+    min-width: max-content;
     padding-inline: 7px;
 }
 
-#render-optimizations-button.active {
-    outline: 1px solid var(--vscode-focusBorder, #007fd4);
-    outline-offset: -1px;
+#render-optimizations-button.active,
+#accessibility-options-button.active {
+    outline: none;
+}
+
+#accessibility-options-reset:focus-visible {
+    outline: 2px solid var(--vscode-focusBorder, #007fd4) !important;
+    outline-offset: 2px;
 }
 
 .render-optimizations-count {
-    min-width: 16px;
-    height: 16px;
-    padding: 0 4px;
-    border-radius: 8px;
+    min-width: 0;
+    height: auto;
+    padding: 0 2px;
+    border-radius: 0;
     box-sizing: border-box;
-    background: var(--vscode-badge-background, #4d4d4d);
-    color: var(--vscode-badge-foreground, #fff);
+    background: transparent;
+    color: var(--vscode-descriptionForeground, #aaa);
     font-size: 10px;
-    line-height: 16px;
+    line-height: 1;
     text-align: center;
 }
 
@@ -96,7 +195,7 @@ span.divider {
 
 .render-optimizations-menu {
     position: fixed;
-    z-index: 10010;
+    z-index: 10030;
     top: 42px;
     right: 12px;
     box-sizing: border-box;
@@ -105,14 +204,100 @@ span.divider {
     overflow-y: auto;
     padding: 10px;
     border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, #555));
-    border-radius: 4px;
+    border-radius: var(--worldmap-corner);
     background: var(--vscode-menu-background, var(--vscode-editorWidget-background, #252526));
     color: var(--vscode-menu-foreground, var(--vscode-editorWidget-foreground, #ccc));
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+    transform-origin: top right;
+    animation: worldmap-menu-in 150ms ease-out;
 }
 
 .render-optimizations-menu[hidden] {
     display: none !important;
+}
+
+.accessibility-options-menu {
+    position: fixed;
+    z-index: 10030;
+    top: 62px;
+    right: 12px;
+    box-sizing: border-box;
+    width: min(360px, calc(100vw - 24px));
+    max-height: calc(100vh - 74px);
+    overflow-y: auto;
+    padding: 10px;
+    border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border, #555));
+    border-radius: var(--worldmap-corner);
+    background: var(--vscode-menu-background, var(--vscode-editorWidget-background, #252526));
+    color: var(--vscode-menu-foreground, var(--vscode-editorWidget-foreground, #ccc));
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.48);
+    transform-origin: top right;
+    animation: worldmap-menu-in 150ms ease-out;
+}
+
+.accessibility-options-menu[hidden] {
+    display: none !important;
+}
+
+.accessibility-options-heading {
+    font-weight: 650;
+}
+
+.accessibility-options-note {
+    margin: 3px 0 9px;
+    color: var(--vscode-descriptionForeground, #aaa);
+    font-size: calc(11px * var(--worldmap-ui-scale));
+    line-height: 1.4;
+}
+
+.accessibility-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    margin: 0;
+    padding: 8px 7px;
+    border-radius: var(--worldmap-corner-tight);
+    cursor: pointer;
+}
+
+.accessibility-option:hover,
+.accessibility-option:focus-within {
+    background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.accessibility-option input {
+    flex: 0 0 auto;
+    width: auto;
+    min-width: 0;
+    margin: 3px 0 0;
+}
+
+.accessibility-option span,
+.accessibility-option small {
+    display: block;
+}
+
+.accessibility-option small {
+    margin-top: 2px;
+    color: var(--vscode-descriptionForeground, #aaa);
+    font-size: calc(11px * var(--worldmap-ui-scale));
+    line-height: 1.35;
+}
+
+#accessibility-options-reset {
+    width: 100%;
+    min-height: var(--worldmap-control-height);
+    margin-top: 8px;
+    padding: 5px 9px;
+    border: 1px solid var(--vscode-button-border, var(--vscode-panel-border, #666));
+    border-radius: var(--worldmap-corner);
+    background: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #fff);
+    font-size: calc(12px * var(--worldmap-ui-scale));
+}
+
+#accessibility-options-reset:hover {
+    background: var(--vscode-button-secondaryHoverBackground, #45494e);
 }
 
 .render-optimizations-heading {
@@ -145,7 +330,7 @@ span.divider {
     gap: 8px;
     margin: 0;
     padding: 7px 6px;
-    border-radius: 3px;
+    border-radius: var(--worldmap-corner-tight);
     cursor: pointer;
 }
 
@@ -237,23 +422,38 @@ span.divider {
 }
 
 #action-status {
-    display: inline-block;
-    max-width: 55vw;
+    position: fixed;
+    z-index: 10015;
+    top: 76px;
+    right: 12px;
+    box-sizing: border-box;
+    width: max-content;
+    max-width: min(440px, calc(100vw - 24px));
+    padding: 8px 12px 9px;
+    border: 1px solid var(--vscode-panel-border, rgba(255, 255, 255, 0.18));
+    border-left: 3px solid var(--vscode-notificationsInfoIcon-foreground, var(--vscode-focusBorder, #007fd4));
+    border-radius: var(--worldmap-corner);
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0)),
+        color-mix(in srgb, var(--vscode-editor-background) 91%, transparent);
+    box-shadow: 0 7px 22px rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(12px);
+    pointer-events: none;
     white-space: normal;
-    overflow-wrap: break-word;
-    word-break: break-word;
-    vertical-align: middle;
-    font-size: 12px;
-    color: var(--vscode-descriptionForeground);
-    opacity: 0.95;
+    overflow-wrap: anywhere;
+    font-size: calc(12px * var(--worldmap-ui-scale));
+    line-height: 1.35;
+    color: var(--vscode-foreground);
+    opacity: 0.98;
+    animation: worldmap-status-in 180ms ease-out;
 }
 
 #action-status.warn {
-    color: var(--vscode-editorWarning-foreground, var(--vscode-notificationsWarningIcon-foreground, var(--vscode-descriptionForeground)));
+    border-left-color: var(--vscode-notificationsWarningIcon-foreground, var(--vscode-editorWarning-foreground, #cca700));
 }
 
 #action-status.hidden {
-    visibility: hidden;
+    display: none;
 }
 
 .worldmap-modal {
@@ -263,6 +463,7 @@ span.divider {
     background: rgba(0, 0, 0, 0.58);
     align-items: center;
     justify-content: center;
+    animation: worldmap-fade-in 140ms ease-out;
 }
 
 .worldmap-modal-card {
@@ -273,10 +474,96 @@ span.divider {
     overflow-y: auto;
     padding: 18px 20px;
     border: 1px solid var(--vscode-panel-border, #555);
-    border-radius: 6px;
+    border-radius: var(--worldmap-corner);
     background: var(--vscode-editorWidget-background, #1e1e1e);
     color: var(--vscode-editorWidget-foreground, #ccc);
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.7);
+    animation: worldmap-card-in 170ms ease-out;
+}
+
+.screen-reader-only {
+    position: fixed !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+}
+
+body[data-large-text="true"] {
+    --worldmap-ui-scale: 1.18;
+}
+
+body[data-large-targets="true"] {
+    --worldmap-control-height: 34px;
+}
+
+body[data-high-contrast="true"] .toolbar-outer,
+body[data-high-contrast="true"] #action-status,
+body[data-high-contrast="true"] .render-optimizations-menu,
+body[data-high-contrast="true"] .accessibility-options-menu,
+body[data-high-contrast="true"] .worldmap-modal-card {
+    border-color: var(--vscode-contrastBorder, var(--vscode-focusBorder, #fff));
+    box-shadow: 0 0 0 1px var(--vscode-contrastBorder, #fff), 0 8px 28px rgba(0, 0, 0, 0.72);
+}
+
+body[data-high-contrast="true"] .toolbar button,
+body[data-high-contrast="true"] .toolbar select,
+body[data-high-contrast="true"] .toolbar input,
+body[data-high-contrast="true"] .toolbar .select {
+    border-color: var(--vscode-contrastBorder, var(--vscode-panel-border, #fff));
+}
+
+@keyframes worldmap-menu-in {
+    from { opacity: 0; transform: translateY(-5px) scale(0.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes worldmap-status-in {
+    from { opacity: 0; transform: translateY(-3px); }
+    to { opacity: 0.98; transform: translateY(0); }
+}
+
+@keyframes worldmap-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes worldmap-card-in {
+    from { opacity: 0; transform: translateY(8px) scale(0.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        scroll-behavior: auto !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+body[data-reduced-motion="true"] *,
+body[data-reduced-motion="true"] *::before,
+body[data-reduced-motion="true"] *::after {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+}
+
+@media (forced-colors: active) {
+    .toolbar-outer,
+    #action-status,
+    .render-optimizations-menu,
+    .accessibility-options-menu,
+    .worldmap-modal-card {
+        border: 1px solid CanvasText;
+    }
 }
 
 .worldmap-modal-card label,

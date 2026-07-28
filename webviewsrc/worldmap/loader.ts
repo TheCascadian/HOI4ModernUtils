@@ -44,6 +44,7 @@ interface FEWorldMapClassExtra {
 
     assignProvincesToState(provinceIds: number[], targetStateId: number): number[] | undefined;
     createStateFromProvinces(provinceIds: number[]): { newStateId: number; changedStateIds: number[] } | undefined;
+    mergeStates(targetStateId: number, sourceStateIds: number[]): { changedStateIds: number[]; deletedFiles: string[] } | undefined;
     getNextStateId(): number;
     snapshotStates(stateIds: number[]): StateSnapshot[];
     restoreStates(snapshots: StateSnapshot[]): void;
@@ -322,7 +323,7 @@ class FEWorldMapClass implements FEWorldMap {
 
     constructor(worldMap?: WorldMapData & ExtraMapData) {
         Object.assign(this, worldMap ?? ({
-            width: 0, height: 0,
+            width: 0, height: 0, colorByPosition: [],
             provinces: [], states: [], countries: [], warnings: [], continents: [], strategicRegions: [], supplyAreas: [], terrains: [],
             railways: [], supplyNodes: [], resources: [], rivers: [],
             provincesCount: 0, statesCount: 0, countriesCount: 0, strategicRegionsCount: 0, supplyAreasCount: 0,
@@ -636,6 +637,62 @@ class FEWorldMapClass implements FEWorldMap {
         }
 
         return { newStateId, changedStateIds };
+    }
+
+    public mergeStates(targetStateId: number, sourceStateIds: number[]): {
+        changedStateIds: number[];
+        deletedFiles: string[];
+        deletedStates: Array<{ id: number; file: string }>;
+    } | undefined {
+        const target = this.getStateById(targetStateId);
+        const sources = Array.from(new Set(sourceStateIds))
+            .filter(id => id !== targetStateId)
+            .map(id => this.getStateById(id))
+            .filter((state): state is State => !!state);
+        if (!target || sources.length === 0) {
+            return undefined;
+        }
+
+        const deletedFiles: string[] = [];
+        const deletedStates = sources.map(source => ({ id: source.id, file: source.file }));
+        const provinces = new Set(target.provinces);
+        const coreKeys = new Set(target.cores.map(core => JSON.stringify(core)));
+        for (const source of sources) {
+            source.provinces.forEach(id => provinces.add(id));
+            target.manpower += source.manpower;
+            for (const [resource, value] of Object.entries(source.resources)) {
+                if (value !== undefined) {
+                    target.resources[resource] = (target.resources[resource] ?? 0) + value;
+                }
+            }
+            for (const [province, value] of Object.entries(source.victoryPoints)) {
+                if (value !== undefined) {
+                    target.victoryPoints[Number(province)] = (target.victoryPoints[Number(province)] ?? 0) + value;
+                }
+            }
+            for (const core of source.cores) {
+                const key = JSON.stringify(core);
+                if (!coreKeys.has(key)) {
+                    coreKeys.add(key);
+                    target.cores.push(core);
+                }
+            }
+            this.states[source.id] = undefined;
+        }
+        for (const file of new Set(sources.map(source => source.file))) {
+            const hasRetainedState = this.states.some(state => state?.file === file);
+            if (!hasRetainedState) {
+                deletedFiles.push(file);
+            }
+        }
+
+        target.provinces = Array.from(provinces).sort((a, b) => a - b);
+        this.recomputeStateGeometry(target);
+        return {
+            changedStateIds: [targetStateId, ...sources.map(source => source.id)],
+            deletedFiles: Array.from(new Set(deletedFiles)),
+            deletedStates: deletedStates.filter(state => !deletedFiles.includes(state.file)),
+        };
     }
 
     public getNextStateId(): number {
@@ -1018,7 +1075,9 @@ class FEWorldMapClass implements FEWorldMap {
             .filter(id => id !== targetProvinceId)
             .map(id => this.getProvinceById(id))
             .filter((province): province is Province => !!province);
-        if (!target || sources.length === 0 || !this.colorByPosition) {
+        if (!target || target.id <= 0 || target.color === 0 ||
+            sources.length === 0 || sources.some(source => source.id <= 0 || source.color === 0) ||
+            !this.colorByPosition) {
             return undefined;
         }
         if (sources.some(source => source.type !== target.type)) {
@@ -1047,6 +1106,14 @@ class FEWorldMapClass implements FEWorldMap {
                 state.provinces = next;
                 changedStateIds.add(state.id);
                 this.recomputeStateGeometry(state);
+            }
+            for (const deletedId of deletedProvinceIds) {
+                const value = state.victoryPoints[deletedId];
+                if (value !== undefined) {
+                    state.victoryPoints[targetProvinceId] = (state.victoryPoints[targetProvinceId] ?? 0) + value;
+                    delete state.victoryPoints[deletedId];
+                    changedStateIds.add(state.id);
+                }
             }
         });
         const targetState = this.getStateByProvinceId(targetProvinceId);
@@ -1204,13 +1271,23 @@ class FEWorldMapClass implements FEWorldMap {
      * @returns Affected province IDs and new province ID if one was created
      */
     public applyPaintbrushEdits(paintedPixels: Map<string, number>, sourceProvinceId?: number): { affectedProvinceIds: number[]; newProvinceId?: number } {
+        const affectedProvinceIds = new Set<number>();
+        // Record donor provinces before replacing their colors. Their geometry
+        // must be rebuilt just as the receiving province's geometry is.
+        for (const key of paintedPixels.keys()) {
+            const [x, y] = key.split(',').map(Number);
+            const previousColor = this.getColorAt(x, y);
+            if (previousColor === undefined) continue;
+            const previousProvince = this.getProvinceByColor(previousColor);
+            if (previousProvince) affectedProvinceIds.add(previousProvince.id);
+        }
+
         // --- Write draft pixels into the live colour buffer ---------------
         for (const [key, color] of paintedPixels) {
             const [x, y] = key.split(',').map(Number);
             this.setColorAt(x, y, color);
         }
 
-        const affectedProvinceIds = new Set<number>();
         let newProvinceId: number | undefined;
 
         // Collect unique colors used in paint operations

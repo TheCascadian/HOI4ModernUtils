@@ -77,6 +77,7 @@ interface StateCategoryFile {
 
 interface StateCategoryDefinition {
     color: DetailValue<Enum>;
+    local_building_slots: number;
 }
 
 const stateCategoryFileSchema: SchemaDef<StateCategoryFile> = {
@@ -86,6 +87,7 @@ const stateCategoryFileSchema: SchemaDef<StateCategoryFile> = {
                 _innerType: "enum",
                 _type: "detailvalue",
             },
+            local_building_slots: "number",
         },
         _type: "map",
     },
@@ -93,7 +95,7 @@ const stateCategoryFileSchema: SchemaDef<StateCategoryFile> = {
 
 type StateNoBoundingBox = Omit<State, keyof Region>;
 
-type StateLoaderResult = { states: State[], badStatesCount: number };
+type StateLoaderResult = { states: State[], stateCategories: StateCategory[], badStatesCount: number };
 export class StatesLoader extends FolderLoader<StateLoaderResult, StateNoBoundingBox[], [() => BookmarksLoader]> {
     private categoriesLoader: StateCategoriesLoader;
 
@@ -163,6 +165,7 @@ export class StatesLoader extends FolderLoader<StateLoaderResult, StateNoBoundin
         return {
             result: {
                 states: filledStates,
+                stateCategories: Object.values(stateCategories.result),
                 badStatesCount,
             },
             dependencies: [this.folder + '/*', ...stateCategories.dependencies],
@@ -600,8 +603,9 @@ async function loadStateCategory(file: string, warning: WorldMapWarning[]): Prom
         for (const categories of Object.values(data.state_categories._map)) {
             const name = categories._key;
             const color = convertColor(categories._value.color);
+            const localBuildingSlots = categories._value.local_building_slots ?? 0;
 
-            result.push({ name, color, file });
+            result.push({ name, color, localBuildingSlots, file });
         }
 
         return result;

@@ -1,4 +1,5 @@
 import { Subscription } from 'rxjs';
+import { hashRgbaBytes } from './pixelhash';
 import {
     WorldMapRuntimeTestCase,
     WorldMapRuntimeTestCaseResult,
@@ -310,15 +311,10 @@ function createRenderOptions(
     display: string[],
     optimizations: WorldMapRuntimeTestOptimization[],
 ) {
-    const fastRendering = display.includes('fastrending');
-    const options = new Set(optimizations);
-    return {
-        optimizations: options,
-        preciseEdge: options.has('edge-decimation') ? false : (fastRendering ? undefined : true),
-        edgeSampleBase: options.has('edge-decimation') ? 20 : undefined,
-        overwriteRenderPrecision: options.has('coarse-provinces') || fastRendering ? undefined : 1,
-        renderPrecisionBase: options.has('coarse-provinces') ? 4 : undefined,
-    };
+    return Renderer.resolveRenderOptions(
+        display.includes('fastrending'),
+        new Set(optimizations)
+    );
 }
 
 function resolveViewport(
@@ -327,7 +323,7 @@ function resolveViewport(
     mapHeight: number,
 ): { x: number; y: number; scale: number } {
     const scale = testCase.viewport.scale;
-    if (!Number.isFinite(scale) || scale < 0.25 || scale > 16) {
+    if (!Number.isFinite(scale) || scale < 0.25 || scale > 64) {
         throw new Error(`Invalid scale for ${testCase.id}: ${scale}.`);
     }
 
@@ -369,6 +365,7 @@ function validateDisplay(display: string[]): void {
         'mousehighlight',
         'fastrending',
         'adaptzooming',
+        'compacttooltip',
     ]);
     const invalid = display.filter(value => !validValues.has(value));
     if (invalid.length > 0 || new Set(display).size !== display.length) {
@@ -406,8 +403,10 @@ function validateOptimizations(values: WorldMapRuntimeTestOptimization[]): World
 }
 
 function waitForWorldMap(loader: Loader, timeoutMs: number): Promise<void> {
-    if (!loader.loading$.value && loader.worldMap.width > 0) {
-        return Promise.resolve();
+    if (!loader.loading$.value) {
+        return loader.worldMap.width > 0
+            ? Promise.resolve()
+            : Promise.reject(new Error(loader.progressText || 'World map finished loading without map data.'));
     }
 
     return new Promise<void>((resolve, reject) => {
@@ -432,13 +431,7 @@ function waitForWorldMap(loader: Loader, timeoutMs: number): Promise<void> {
 
 function hashCanvas(canvas: HTMLCanvasElement): string {
     const data = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data;
-    const step = Math.max(4, Math.floor(data.length / 65536 / 4) * 4);
-    let hash = 0x811c9dc5;
-    for (let i = 0; i < data.length; i += step) {
-        hash ^= data[i];
-        hash = Math.imul(hash, 0x01000193);
-    }
-    return toHash(hash);
+    return hashRgbaBytes(data);
 }
 
 function hashString(value: string, initial: number): number {

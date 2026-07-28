@@ -4,16 +4,21 @@ import worldmapviewstyles from './worldmapview.css';
 import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistVictoryPointLocalisationMessage, PersistCountryDiplomacyMessage, WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest, WorldMapRuntimeTestResultMessage } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistVictoryPointLocalisationMessage, PersistCountryDiplomacyMessage, CreateCountryMessage, RunAreaOperationMessage, RunContinentPipelineMessage, WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest, WorldMapRuntimeTestResultMessage } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
-import { getFilePathFromMod, getHoiOpenedFileOriginalUri, readFileFromModOrHOI4, readFileFromPath, getModPathFromDescriptor } from '../../util/fileloader';
+import { getFilePathFromMod, getHoiOpenedFileOriginalUri, readFileFromModOrHOI4, readFileFromPath, getModPathFromDescriptor, getSelectedModFileUri, invalidateModDescriptorCaches, listFilesFromModOrHOI4 } from '../../util/fileloader';
 import { WorldMapLoader } from './loader/worldmaploader';
 import { isEqual } from 'lodash';
 import { LoaderSession } from '../../util/loader/loader';
 import { TelemetryMessage, sendByMessage } from '../../util/telemetry';
 import { getConfiguration } from '../../util/vsccommon';
+import { repairAdjacencies, repairRailways, repairSupplyNodes, validateProvinceBmpEdit } from './provincefixes';
+import { clearMapBuildings, clearRailways, clearSupplyHubs, clearWaterCrossings, convertDefinitionsToOcean, partitionLandAndWaterProvinces, planProvinceMergesByType, removeAllCores, removeProvincesFromRegionBlocks, replaceStateIdsInSupplyAreas, transformSelectedStates } from './areaoperations';
+import { createSequentialIdMap, reindexCountryHistoryFile, reindexDefinitions, reindexMapBuildings, reindexStateFile, reindexStrategicRegionFile, reindexSupplyAreaFile } from './reindex';
+import { addReplacePathsToDescriptor } from '../../util/replacepath';
+import { buildClippedRiverOceanEdit } from './riverconversion';
 
 export const WorldMapRuntimeTestCommand = 'hoi4modernutils.test.worldmap.renderCases';
 
@@ -29,6 +34,7 @@ export class WorldMap {
     private worldMapLoader: WorldMapLoader;
     private worldMapDependencies: string[] | undefined;
     private cachedWorldMap: WorldMapData | undefined;
+    private messageQueue: Promise<void> = Promise.resolve();
 
     private lastRequestedExportUri: vscode.Uri | undefined;
     private runtimeTestReady = false;
@@ -62,7 +68,11 @@ export class WorldMap {
 
         const webview = this.panel.webview;
         webview.html = this.renderWorldMap(webview);
-        webview.onDidReceiveMessage((msg) => this.onMessage(msg));
+        webview.onDidReceiveMessage((msg) => {
+            this.messageQueue = this.messageQueue
+                .then(() => this.onMessage(msg))
+                .catch(e => error(e));
+        });
     }
 
     public onDocumentChange = debounceByInput(
@@ -146,6 +156,7 @@ export class WorldMap {
                 { content: 'window.__stateBoundaryWidth = ' + getConfiguration().stateBoundaryWidth + ';' },
                 { content: 'window.__worldMapKeybinds = ' + JSON.stringify(worldMapKeybinds) + ';' },
                 { content: 'window.__confirmNewProvinceCreation = ' + (conf.get<boolean>('worldMapConfirmNewProvinceCreation', true)) + ';' },
+                { content: 'window.__autoCoreTransfers = ' + (conf.get<boolean>('worldMapAutoCoreTransfers', false)) + ';' },
                 { content: 'window.__worldMapRuntimeTestEnabled = ' + isWorldMapRuntimeTestEnabled() + ';' },
                 'common.js',
                 'worldmap.js'
@@ -207,11 +218,51 @@ export class WorldMap {
                 case 'setconfirmnewprovincecreation':
                     await this.setConfirmNewProvinceCreation((msg as any).value);
                     break;
+                case 'setautocoretransfers':
+                    await getConfiguration().update('worldMapAutoCoreTransfers', (msg as any).value, vscode.ConfigurationTarget.Global);
+                    break;
+                case 'createcountry':
+                    await this.createCountry(msg as CreateCountryMessage);
+                    break;
+                case 'resolveprovincewarnings':
+                    await this.resolveProvinceWarnings();
+                    break;
+                case 'runareaoperation':
+                    await this.runAreaOperation(msg as RunAreaOperationMessage);
+                    break;
+                case 'runcontinentpipeline':
+                    await this.runContinentPipeline(msg as RunContinentPipelineMessage);
+                    break;
+                case 'removeallcores':
+                    await this.removeAllCores();
+                    break;
+                case 'reindexmap':
+                    await this.runReindexMap();
+                    break;
                 case 'exportmap':
                     await this.exportMap(msg.dataUrl);
                     break;
                 case 'persiststates':
-                    await this.persistStates(msg.states, msg.deletedFiles ?? []);
+                    try {
+                        await this.persistStates(
+                            msg.states,
+                            msg.deletedFiles ?? [],
+                            msg.deletedStates ?? [],
+                            msg.stateReplacements ?? {}
+                        );
+                        await this.postMessageToWebview({
+                            command: 'persiststatesresult',
+                            requestId: msg.requestId,
+                            success: true,
+                        });
+                    } catch (e) {
+                        await this.postMessageToWebview({
+                            command: 'persiststatesresult',
+                            requestId: msg.requestId,
+                            success: false,
+                            error: e instanceof Error ? e.message : String(e),
+                        });
+                    }
                     break;
                 case 'persistcountrydiplomacy':
                     try {
@@ -595,19 +646,29 @@ export class WorldMap {
         }
     }
 
-    private async persistStates(states: PersistedState[], deletedFiles: string[]) {
+    private async persistStates(
+        states: PersistedState[],
+        deletedFiles: string[],
+        deletedStates: Array<{ id: number; file: string }> = [],
+        stateReplacements: Record<number, number> = {}
+    ) {
         const uniqueDeletedFiles = Array.from(new Set(deletedFiles));
-        for (const relativePath of uniqueDeletedFiles) {
-            const targetFile = await this.resolveTargetFile(relativePath);
-            try {
-                await vscode.workspace.fs.delete(targetFile, { useTrash: false, recursive: false });
-            } catch {
-                // Ignore if file does not exist or cannot be deleted.
-            }
-        }
+        const replaceStateFolder = uniqueDeletedFiles.length > 0;
+        let descriptorSnapshot: { target: vscode.Uri; previous: Buffer } | undefined;
 
-        if (states.length === 0) {
-            return;
+        // Deleting state records cannot be represented safely with isolated
+        // overrides alone. Preflight the descriptor before changing any file.
+        if (replaceStateFolder) {
+            const descriptor = await getSelectedModFileUri();
+            if (!descriptor) {
+                throw new Error(
+                    'Merging or deleting states requires a selected .mod descriptor so replace_path can be set for history/states.'
+                );
+            }
+            descriptorSnapshot = {
+                target: descriptor,
+                previous: Buffer.from(await vscode.workspace.fs.readFile(descriptor)),
+            };
         }
 
         const groupedByFile = new Map<string, PersistedState[]>();
@@ -619,9 +680,55 @@ export class WorldMap {
                 groupedByFile.set(state.file, [state]);
             }
         }
+        const deletedStateIdsByFile = new Map<string, number[]>();
+        for (const deleted of deletedStates) {
+            if (!Number.isInteger(deleted.id) || deleted.id <= 0 || !deleted.file) {
+                continue;
+            }
+            const ids = deletedStateIdsByFile.get(deleted.file) ?? [];
+            ids.push(deleted.id);
+            deletedStateIdsByFile.set(deleted.file, ids);
+            if (!groupedByFile.has(deleted.file)) {
+                groupedByFile.set(deleted.file, []);
+            }
+        }
+
+        const pending = new Map<string, {
+            target: vscode.Uri;
+            previous?: Buffer;
+            next?: Buffer;
+        }>();
+        const queue = async (relativePath: string, next?: Buffer) => {
+            const existing = pending.get(relativePath);
+            if (existing) {
+                existing.next = next;
+                return;
+            }
+            const target = await this.resolveTargetFile(relativePath);
+            let previous: Buffer | undefined;
+            try {
+                previous = Buffer.from(await vscode.workspace.fs.readFile(target));
+            } catch {
+                // The mod does not own this effective file yet.
+            }
+            pending.set(relativePath, { target, previous, next });
+        };
+
+        if (replaceStateFolder) {
+            // replace_path hides the entire inherited folder. Materialize every
+            // effective file first, including files with no changed state.
+            const effectiveFiles = await listFilesFromModOrHOI4(
+                'history/states',
+                { recursively: true }
+            );
+            for (const file of effectiveFiles) {
+                const relativePath = `history/states/${file}`.replace(/\\/g, '/');
+                const [source] = await readFileFromModOrHOI4(relativePath);
+                await queue(relativePath, source);
+            }
+        }
 
         for (const [relativePath, fileStates] of groupedByFile) {
-            const targetFile = await this.resolveTargetFile(relativePath);
             let sourceText = '';
             try {
                 const sourcePath = await getFilePathFromMod(relativePath);
@@ -635,10 +742,113 @@ export class WorldMap {
             }
 
             const eol = sourceText.includes('\r\n') ? '\r\n' : '\n';
-            const newContent = this.applyStateUpdates(sourceText, fileStates, eol, relativePath);
+            const newContent = this.applyStateUpdates(
+                sourceText,
+                fileStates,
+                eol,
+                relativePath,
+                deletedStateIdsByFile.get(relativePath) ?? []
+            );
 
-            await mkdirs(dirUri(targetFile));
-            await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
+            await queue(relativePath, Buffer.from(newContent, 'utf-8'));
+        }
+
+        for (const relativePath of uniqueDeletedFiles) {
+            // Once history/states is replaced, omitting the old file is the
+            // correct deletion. No empty placeholder is needed.
+            await queue(relativePath, undefined);
+        }
+        if (Object.keys(stateReplacements).length > 0) {
+            const supplyAreaFiles = await listFilesFromModOrHOI4(
+                'map/supplyareas',
+                { recursively: true }
+            );
+            for (const file of supplyAreaFiles) {
+                const relativePath = `map/supplyareas/${file}`.replace(/\\/g, '/');
+                let source: Buffer;
+                try {
+                    [source] = await readFileFromModOrHOI4(relativePath);
+                } catch {
+                    continue;
+                }
+                const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
+                const nextText = replaceStateIdsInSupplyAreas(
+                    sourceText,
+                    stateReplacements
+                ).text;
+                if (nextText !== sourceText) {
+                    await queue(relativePath, Buffer.from(nextText, 'utf-8'));
+                }
+            }
+            const countryHistoryFiles = await listFilesFromModOrHOI4(
+                'history/countries',
+                { recursively: true }
+            );
+            for (const file of countryHistoryFiles) {
+                const relativePath = `history/countries/${file}`.replace(/\\/g, '/');
+                let source: Buffer;
+                try {
+                    [source] = await readFileFromModOrHOI4(relativePath);
+                } catch {
+                    continue;
+                }
+                const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
+                const nextText = reindexCountryHistoryFile(
+                    sourceText,
+                    stateReplacements
+                ).text;
+                if (nextText !== sourceText) {
+                    await queue(relativePath, Buffer.from(nextText, 'utf-8'));
+                }
+            }
+        }
+
+        const completed: Array<{
+            target: vscode.Uri;
+            previous?: Buffer;
+            next?: Buffer;
+        }> = [];
+        try {
+            for (const operation of pending.values()) {
+                if (operation.next) {
+                    await mkdirs(dirUri(operation.target));
+                    await writeFile(operation.target, operation.next);
+                } else if (operation.previous) {
+                    await vscode.workspace.fs.delete(
+                        operation.target,
+                        { recursive: false, useTrash: false }
+                    );
+                }
+                completed.push(operation);
+            }
+            if (replaceStateFolder) {
+                await this.ensureDescriptorReplacePaths(['history/states']);
+            }
+        } catch (e) {
+            for (const operation of completed.reverse()) {
+                try {
+                    if (operation.previous) {
+                        await mkdirs(dirUri(operation.target));
+                        await writeFile(operation.target, operation.previous);
+                    } else if (operation.next) {
+                        await vscode.workspace.fs.delete(
+                            operation.target,
+                            { recursive: false, useTrash: false }
+                        );
+                    }
+                } catch {
+                    // Preserve the original persistence failure.
+                }
+            }
+            if (descriptorSnapshot) {
+                try {
+                    await writeFile(descriptorSnapshot.target, descriptorSnapshot.previous);
+                    invalidateModDescriptorCaches();
+                } catch {
+                    // Preserve the original persistence failure.
+                }
+            }
+            throw e;
         }
     }
 
@@ -704,6 +914,125 @@ export class WorldMap {
         });
     }
 
+    private async createCountry(msg: CreateCountryMessage): Promise<void> {
+        const tag = msg.tag.trim().toUpperCase();
+        const localizedName = msg.localizedName.trim();
+        try {
+            if (!/^[A-Z0-9]{3}$/.test(tag)) {
+                throw new Error('Country tag must contain exactly three letters or digits.');
+            }
+            if (!localizedName) {
+                throw new Error('Localized country name is required.');
+            }
+            if (!Number.isInteger(msg.capitalStateId) || msg.capitalStateId <= 0) {
+                throw new Error('A valid selected capital state is required.');
+            }
+
+            const worldMap = await this.worldMapLoader.getWorldMap();
+            if (worldMap.countries.some(country => country.tag.toUpperCase() === tag)) {
+                throw new Error(`Country tag ${tag} already exists.`);
+            }
+
+            const hash = Array.from(tag).reduce((value, char) => ((value * 33) ^ char.charCodeAt(0)) >>> 0, 5381);
+            const red = 48 + (hash & 0x9f);
+            const green = 48 + ((hash >>> 8) & 0x9f);
+            const blue = 48 + ((hash >>> 16) & 0x9f);
+            const writes = [
+                {
+                    path: 'common/country_tags/zz_hoi4modernutils_tags.txt',
+                    append: `${tag} = "countries/${tag}.txt"`,
+                },
+                {
+                    path: `common/countries/${tag}.txt`,
+                    create: `color = rgb { ${red} ${green} ${blue} }\ncolor_ui = rgb { ${red} ${green} ${blue} }\n`,
+                },
+                {
+                    path: `history/countries/${tag} - ${this.sanitizeFileName(localizedName)}.txt`,
+                    create: `capital = ${msg.capitalStateId}\nset_research_slots = 2\nset_stability = 0.5\nset_war_support = 0.5\n`,
+                },
+                {
+                    path: 'localisation/english/hoi4modernutils_countries_l_english.yml',
+                    append: [
+                        ` ${tag}:0 "${this.escapeLocalisation(localizedName)}"`,
+                        ` ${tag}_DEF:0 "${this.escapeLocalisation(localizedName)}"`,
+                        ` ${tag}_ADJ:0 "${this.escapeLocalisation(localizedName)}"`,
+                    ].join('\n'),
+                    header: 'l_english:',
+                    bom: true,
+                },
+            ];
+
+            const pending: { target: vscode.Uri; previous?: Buffer; next: Buffer }[] = [];
+            for (const item of writes) {
+                const target = await this.resolveTargetFile(item.path);
+                let previous: Buffer | undefined;
+                try {
+                    previous = Buffer.from(await vscode.workspace.fs.readFile(target));
+                } catch {
+                    // New file.
+                }
+                if (item.create !== undefined && previous) {
+                    throw new Error(`Refusing to overwrite existing file ${item.path}.`);
+                }
+
+                const source = previous?.toString('utf-8').replace(/^\uFEFF/, '') ?? '';
+                const eol = source.includes('\r\n') ? '\r\n' : '\n';
+                let next: string;
+                if (item.create !== undefined) {
+                    next = item.create.replace(/\n/g, eol);
+                } else {
+                    const header = !source && item.header ? `${item.header}${eol}` : '';
+                    const body = source.replace(/\s+$/, '');
+                    const separator = body ? eol : '';
+                    next = `${header}${body}${separator}${item.append!.replace(/\n/g, eol)}${eol}`;
+                }
+                const includeBom = ('bom' in item && item.bom === true) || previous?.slice(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]));
+                pending.push({ target, previous, next: Buffer.from((includeBom ? '\uFEFF' : '') + next, 'utf-8') });
+            }
+
+            const completed: typeof pending = [];
+            try {
+                for (const write of pending) {
+                    await mkdirs(dirUri(write.target));
+                    await writeFile(write.target, write.next);
+                    completed.push(write);
+                }
+            } catch (e) {
+                for (const write of completed.reverse()) {
+                    try {
+                        if (write.previous) {
+                            await writeFile(write.target, write.previous);
+                        } else {
+                            await vscode.workspace.fs.delete(write.target, { recursive: false, useTrash: false });
+                        }
+                    } catch {
+                        // Preserve original failure.
+                    }
+                }
+                throw e;
+            }
+
+            this.cachedWorldMap = undefined;
+            this.worldMapDependencies = undefined;
+            await this.postMessageToWebview({ command: 'createcountryresult', success: true, tag });
+        } catch (e) {
+            await this.postMessageToWebview({
+                command: 'createcountryresult',
+                success: false,
+                error: e instanceof Error ? e.message : String(e),
+            });
+        }
+    }
+
+    private sanitizeFileName(value: string): string {
+        const result = value.replace(/[<>:"/\\|?*\u0000-\u001f]/g, '').trim().replace(/\s+/g, ' ');
+        return result || 'Country';
+    }
+
+    private escapeLocalisation(value: string): string {
+        return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    }
+
     private async persistVictoryPointLocalisation(msg: PersistVictoryPointLocalisationMessage) {
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) {
@@ -764,13 +1093,53 @@ export class WorldMap {
         return vscode.Uri.joinPath(workspaceFolder.uri, relativePath);
     }
 
-    private applyStateUpdates(sourceText: string, states: PersistedState[], eol: string, relativePath: string): string {
+    private async ensureDescriptorReplacePaths(paths: readonly string[]): Promise<void> {
+        if (paths.length === 0) {
+            return;
+        }
+
+        const descriptor = await getSelectedModFileUri();
+        if (!descriptor) {
+            throw new Error(
+                `Destructive map edits require a selected .mod descriptor so replace_path can be set for: ${paths.join(', ')}.`
+            );
+        }
+
+        const source = Buffer.from(await vscode.workspace.fs.readFile(descriptor)).toString('utf-8');
+        const update = addReplacePathsToDescriptor(source, paths);
+        if (update.added.length === 0) {
+            return;
+        }
+
+        await writeFile(descriptor, Buffer.from(update.text, 'utf-8'));
+        invalidateModDescriptorCaches();
+        debug(`Added descriptor replace_path entries: ${update.added.join(', ')}`);
+    }
+
+    private applyStateUpdates(
+        sourceText: string,
+        states: PersistedState[],
+        eol: string,
+        relativePath: string,
+        deletedStateIds: readonly number[] = []
+    ): string {
         let text = sourceText;
+        const deletionRanges = Array.from(new Set(deletedStateIds))
+            .map(id => this.findStateBlockRangeById(text, id))
+            .filter((range): range is { start: number; end: number } => !!range)
+            .sort((a, b) => b.start - a.start);
+        for (const range of deletionRanges) {
+            text = text.substring(0, range.start) + text.substring(range.end);
+        }
         const replacementStates = states.filter(s => s.tokenStart !== undefined && s.tokenEnd !== undefined);
 
         for (const state of replacementStates) {
             const range = this.findStateBlockRangeById(text, state.id);
             if (!range) {
+                if (!text.trim()) {
+                    text = this.serializeState(state, eol) + eol;
+                    continue;
+                }
                 throw new Error(`Failed to locate existing state block by id ${state.id} in ${relativePath}`);
             }
 
@@ -898,6 +1267,9 @@ export class WorldMap {
         if (state.owner) {
             lines.push(`\t\towner = ${state.owner}`);
         }
+        if (state.controller) {
+            lines.push(`\t\tcontroller = ${state.controller}`);
+        }
         lines.push(...coreLines);
         lines.push(...vpEntries);
         lines.push('\t}');
@@ -906,20 +1278,12 @@ export class WorldMap {
         return lines.join(eol);
     }
 
-    private async persistStrategicRegions(strategicRegions: PersistedStrategicRegion[], deletedFiles: string[]) {
+    private async persistStrategicRegions(
+        strategicRegions: PersistedStrategicRegion[],
+        deletedFiles: string[],
+        deletedRegions: Array<{ id: number; file: string }> = []
+    ) {
         const uniqueDeletedFiles = Array.from(new Set(deletedFiles));
-        for (const relativePath of uniqueDeletedFiles) {
-            const targetFile = await this.resolveTargetFile(relativePath);
-            try {
-                await vscode.workspace.fs.delete(targetFile, { useTrash: false, recursive: false });
-            } catch {
-                // Ignore if file does not exist or cannot be deleted.
-            }
-        }
-
-        if (strategicRegions.length === 0) {
-            return;
-        }
 
         const groupedByFile = new Map<string, PersistedStrategicRegion[]>();
         for (const sr of strategicRegions) {
@@ -930,6 +1294,24 @@ export class WorldMap {
                 groupedByFile.set(sr.file, [sr]);
             }
         }
+        const deletedRegionIdsByFile = new Map<string, number[]>();
+        for (const deleted of deletedRegions) {
+            const ids = deletedRegionIdsByFile.get(deleted.file) ?? [];
+            ids.push(deleted.id);
+            deletedRegionIdsByFile.set(deleted.file, ids);
+            if (!groupedByFile.has(deleted.file)) {
+                groupedByFile.set(deleted.file, []);
+            }
+        }
+
+        const pending: Array<{ target: vscode.Uri; previous?: Buffer; next: Buffer }> = [];
+        const readExistingTarget = async (target: vscode.Uri): Promise<Buffer | undefined> => {
+            try {
+                return Buffer.from(await vscode.workspace.fs.readFile(target));
+            } catch {
+                return undefined;
+            }
+        };
 
         for (const [relativePath, fileSRs] of groupedByFile) {
             const targetFile = await this.resolveTargetFile(relativePath);
@@ -946,15 +1328,68 @@ export class WorldMap {
             }
 
             const eol = sourceText.includes('\r\n') ? '\r\n' : '\n';
-            const newContent = this.applyStrategicRegionUpdates(sourceText, fileSRs, eol, relativePath);
+            const newContent = this.applyStrategicRegionUpdates(
+                sourceText,
+                fileSRs,
+                eol,
+                relativePath,
+                deletedRegionIdsByFile.get(relativePath) ?? []
+            );
+            pending.push({
+                target: targetFile,
+                previous: await readExistingTarget(targetFile),
+                next: Buffer.from(newContent, 'utf-8'),
+            });
+        }
 
-            await mkdirs(dirUri(targetFile));
-            await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
+        for (const relativePath of uniqueDeletedFiles) {
+            const targetFile = await this.resolveTargetFile(relativePath);
+            // Empty overrides suppress inherited strategic-region records.
+            pending.push({
+                target: targetFile,
+                previous: await readExistingTarget(targetFile),
+                next: Buffer.from('', 'utf-8'),
+            });
+        }
+
+        const completed: typeof pending = [];
+        try {
+            for (const write of pending) {
+                await mkdirs(dirUri(write.target));
+                await writeFile(write.target, write.next);
+                completed.push(write);
+            }
+        } catch (e) {
+            for (const write of completed.reverse()) {
+                try {
+                    if (write.previous) {
+                        await writeFile(write.target, write.previous);
+                    } else {
+                        await vscode.workspace.fs.delete(write.target, { recursive: false, useTrash: false });
+                    }
+                } catch {
+                    // Preserve the original write error.
+                }
+            }
+            throw e;
         }
     }
 
-    private applyStrategicRegionUpdates(sourceText: string, srs: PersistedStrategicRegion[], eol: string, relativePath: string): string {
+    private applyStrategicRegionUpdates(
+        sourceText: string,
+        srs: PersistedStrategicRegion[],
+        eol: string,
+        relativePath: string,
+        deletedRegionIds: number[] = []
+    ): string {
         let text = sourceText;
+        const deletedRanges = deletedRegionIds
+            .map(id => this.findStrategicRegionBlockRangeById(text, id))
+            .filter((range): range is { start: number; end: number } => !!range)
+            .sort((a, b) => b.start - a.start);
+        for (const range of deletedRanges) {
+            text = text.slice(0, range.start) + text.slice(range.end);
+        }
         const replacementSRs = srs.filter(s => s.tokenStart !== undefined && s.tokenEnd !== undefined);
 
         for (const sr of replacementSRs) {
@@ -1172,8 +1607,26 @@ export class WorldMap {
         provinces: PersistedProvince[];
         previousProvinces?: PersistedProvince[];
         deletedProvinceIds?: number[];
+        provinceReplacements?: Record<number, number>;
         targetProvinceId: number;
+        targetProvinceIds?: number[];
+        states?: PersistedState[];
+        deletedStateFiles?: string[];
+        deletedStates?: Array<{ id: number; file: string }>;
+        stateReplacements?: Record<number, number>;
+        strategicRegions?: PersistedStrategicRegion[];
+        deletedStrategicRegionFiles?: string[];
+        deletedStrategicRegions?: Array<{ id: number; file: string }>;
+        afterPersist?: () => Promise<void>;
     }) {
+        validateProvinceBmpEdit(
+            msg.provinces,
+            msg.paintedPixels,
+            msg.targetProvinceId,
+            msg.deletedProvinceIds,
+            msg.targetProvinceIds
+        );
+
         const defaultMap = await this.readDefaultMapConfig();
         const bmpRelativePath = 'map/' + (defaultMap?.provinces ?? 'provinces.bmp');
 
@@ -1183,7 +1636,134 @@ export class WorldMap {
             return; // Can't proceed without existing BMP
         }
 
-        // Save undo snapshot
+        // Apply pixel diffs
+        const newBmpBuffer = this.applyPixelDiffsToBmp(
+            oldBmpBuffer,
+            msg.paintedPixels,
+            msg.width,
+            msg.height
+        );
+        const bmpTarget = await this.resolveTargetFile(bmpRelativePath);
+        const definitionsTarget = await this.resolveTargetFile('map/definition.csv');
+        const readExisting = async (target: vscode.Uri): Promise<Buffer | undefined> => {
+            try {
+                return Buffer.from(await vscode.workspace.fs.readFile(target));
+            } catch {
+                return undefined;
+            }
+        };
+        const priorBmpTarget = await readExisting(bmpTarget);
+        const priorDefinitionsTarget = await readExisting(definitionsTarget);
+        const restore = async (target: vscode.Uri, previous: Buffer | undefined): Promise<void> => {
+            if (previous) {
+                await mkdirs(dirUri(target));
+                await writeFile(target, previous);
+            } else {
+                try {
+                    await vscode.workspace.fs.delete(target, { recursive: false, useTrash: false });
+                } catch {
+                    // The target may not have been created.
+                }
+            }
+        };
+        const relatedSnapshots = new Map<string, { target: vscode.Uri; previous?: Buffer }>();
+        const snapshotTarget = async (target: vscode.Uri): Promise<void> => {
+            const key = target.toString();
+            if (!relatedSnapshots.has(key)) {
+                relatedSnapshots.set(key, { target, previous: await readExisting(target) });
+            }
+        };
+        const relatedPaths = new Set<string>([
+            ...(msg.states ?? []).map(state => state.file),
+            ...(msg.deletedStateFiles ?? []),
+            ...(msg.deletedStates ?? []).map(state => state.file),
+            ...(msg.strategicRegions ?? []).map(region => region.file),
+            ...(msg.deletedStrategicRegionFiles ?? []),
+            ...(msg.deletedStrategicRegions ?? []).map(region => region.file),
+        ]);
+        if (msg.provinceReplacements && Object.keys(msg.provinceReplacements).length > 0) {
+            relatedPaths.add(`map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`);
+            relatedPaths.add('map/railways.txt');
+            relatedPaths.add('map/supply_nodes.txt');
+        }
+        for (const relativePath of relatedPaths) {
+            await snapshotTarget(await this.resolveTargetFile(relativePath));
+        }
+        if ((msg.deletedStateFiles?.length ?? 0) > 0) {
+            const effectiveStateFiles = await listFilesFromModOrHOI4(
+                'history/states',
+                { recursively: true }
+            );
+            for (const file of effectiveStateFiles) {
+                await snapshotTarget(await this.resolveTargetFile(
+                    `history/states/${file}`.replace(/\\/g, '/')
+                ));
+            }
+            const descriptor = await getSelectedModFileUri();
+            if (descriptor) {
+                await snapshotTarget(descriptor);
+            }
+        }
+        if (msg.stateReplacements && Object.keys(msg.stateReplacements).length > 0) {
+            for (const folder of ['map/supplyareas', 'history/countries']) {
+                const files = await listFilesFromModOrHOI4(folder, { recursively: true });
+                for (const file of files) {
+                    await snapshotTarget(await this.resolveTargetFile(
+                        `${folder}/${file}`.replace(/\\/g, '/')
+                    ));
+                }
+            }
+        }
+
+        try {
+            await this.writeBmpAtomic(bmpRelativePath, newBmpBuffer);
+            await this.persistProvinces(msg.provinces, (msg.deletedProvinceIds ?? []).map(String));
+
+            if (msg.provinceReplacements && Object.keys(msg.provinceReplacements).length > 0) {
+                const repair = await this.repairProvinceReferenceFiles(msg.provinceReplacements);
+                if (repair.warnings.length > 0) {
+                    vscode.window.showWarningMessage(
+                        `Province references repaired with ${repair.warnings.length} warning(s): ${repair.warnings.join(' ')}`
+                    );
+                }
+            }
+            if ((msg.states?.length ?? 0) > 0 ||
+                (msg.deletedStateFiles?.length ?? 0) > 0 ||
+                (msg.deletedStates?.length ?? 0) > 0) {
+                await this.persistStates(
+                    msg.states ?? [],
+                    msg.deletedStateFiles ?? [],
+                    msg.deletedStates ?? [],
+                    msg.stateReplacements ?? {}
+                );
+            }
+            if ((msg.strategicRegions?.length ?? 0) > 0 ||
+                (msg.deletedStrategicRegionFiles?.length ?? 0) > 0 ||
+                (msg.deletedStrategicRegions?.length ?? 0) > 0) {
+                await this.persistStrategicRegions(
+                    msg.strategicRegions ?? [],
+                    msg.deletedStrategicRegionFiles ?? [],
+                    msg.deletedStrategicRegions ?? []
+                );
+            }
+            await msg.afterPersist?.();
+        } catch (e) {
+            try {
+                for (const snapshot of Array.from(relatedSnapshots.values()).reverse()) {
+                    await restore(snapshot.target, snapshot.previous);
+                }
+                if ((msg.deletedStateFiles?.length ?? 0) > 0) {
+                    invalidateModDescriptorCaches();
+                }
+                await restore(definitionsTarget, priorDefinitionsTarget);
+                await restore(bmpTarget, priorBmpTarget);
+            } catch (rollbackError) {
+                error(rollbackError);
+            }
+            throw e;
+        }
+
+        // Record undo only after the complete transaction succeeds.
         if (msg.previousProvinces) {
             const previousIds = new Set(msg.previousProvinces.map(province => province.id));
             const addedIds = msg.provinces
@@ -1200,15 +1780,848 @@ export class WorldMap {
             }
             this.bmpRedoStack.length = 0;
         }
+    }
 
-        // Apply pixel diffs
-        const newBmpBuffer = this.applyPixelDiffsToBmp(oldBmpBuffer, msg.paintedPixels);
+    private async repairProvinceReferenceFiles(
+        replacements: Record<number, number>,
+        validProvinceIds?: ReadonlySet<number>
+    ): Promise<{ warnings: string[] }> {
+        const defaultMap = await this.readDefaultMapConfig();
+        const targets = [
+            {
+                path: `map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`,
+                transform: repairAdjacencies,
+            },
+            { path: 'map/railways.txt', transform: repairRailways },
+            { path: 'map/supply_nodes.txt', transform: repairSupplyNodes },
+        ];
+        const pending: { target: vscode.Uri; previous?: Buffer; next: Buffer }[] = [];
+        const warnings: string[] = [];
 
-        // Write BMP atomically
-        await this.writeBmpAtomic(bmpRelativePath, newBmpBuffer);
+        for (const item of targets) {
+            try {
+                const sourcePath = await getFilePathFromMod(item.path);
+                const source = sourcePath
+                    ? (await readFileFromPath(sourcePath))[0]
+                    : (await readFileFromModOrHOI4(item.path))[0];
+                const text = source.toString('utf-8').replace(/^\uFEFF/, '');
+                const result = item.transform(text, replacements, validProvinceIds);
+                warnings.push(...result.warnings.map(value => `${item.path}: ${value}`));
+                if (result.text !== text) {
+                    const target = await this.resolveTargetFile(item.path);
+                    let previous: Buffer | undefined;
+                    try {
+                        previous = Buffer.from(await vscode.workspace.fs.readFile(target));
+                    } catch {
+                        // A new mod override will be created.
+                    }
+                    pending.push({ target, previous, next: Buffer.from(result.text, 'utf-8') });
+                }
+            } catch {
+                // Optional files may not exist in small or total-conversion maps.
+            }
+        }
 
-        // Write definition.csv
-        await this.persistProvinces(msg.provinces, (msg.deletedProvinceIds ?? []).map(String));
+        const completed: typeof pending = [];
+        try {
+            for (const write of pending) {
+                await mkdirs(dirUri(write.target));
+                await writeFile(write.target, write.next);
+                completed.push(write);
+            }
+        } catch (e) {
+            for (const write of completed.reverse()) {
+                try {
+                    if (write.previous) {
+                        await writeFile(write.target, write.previous);
+                    } else {
+                        await vscode.workspace.fs.delete(write.target, { recursive: false, useTrash: false });
+                    }
+                } catch {
+                    // Preserve the original write error.
+                }
+            }
+            throw e;
+        }
+
+        return { warnings };
+    }
+
+    private async resolveProvinceWarnings(): Promise<void> {
+        try {
+            const worldMap = await this.worldMapLoader.getWorldMap();
+            const validProvinceIds = new Set<number>();
+            for (let id = 1; id < worldMap.provinces.length; id++) {
+                if (worldMap.provinces[id]) {
+                    validProvinceIds.add(id);
+                }
+            }
+            const result = await this.repairProvinceReferenceFiles({}, validProvinceIds);
+            this.cachedWorldMap = undefined;
+            this.worldMapDependencies = undefined;
+            await this.postMessageToWebview({
+                command: 'resolveprovincewarningsresult',
+                success: true,
+                warnings: result.warnings,
+            });
+        } catch (e) {
+            await this.postMessageToWebview({
+                command: 'resolveprovincewarningsresult',
+                success: false,
+                error: e instanceof Error ? e.message : String(e),
+            });
+        }
+    }
+
+    private async runAreaOperation(msg: RunAreaOperationMessage): Promise<void> {
+        try {
+            const worldMap = await this.worldMapLoader.getWorldMap();
+            const riverIds = new Set(
+                (msg.riverIds ?? []).filter(id =>
+                    Number.isInteger(id) && id >= 0 && id < worldMap.rivers.length
+                )
+            );
+            if (msg.operation === 'convert-to-ocean' && riverIds.size > 0) {
+                const result = await this.convertClippedRiversToOcean(worldMap, riverIds);
+                this.cachedWorldMap = undefined;
+                this.worldMapDependencies = undefined;
+                await this.postMessageToWebview({
+                    command: 'areaoperationresult',
+                    success: true,
+                    operation: msg.operation,
+                    affectedProvinces: result.provinces,
+                    affectedStates: 0,
+                    changedRecords: result.records,
+                });
+                return;
+            }
+            const provinceIds = new Set(msg.provinceIds.filter(id => Number.isInteger(id) && !!worldMap.provinces[id]));
+            for (const stateId of msg.stateIds) {
+                worldMap.states[stateId]?.provinces.forEach(id => provinceIds.add(id));
+            }
+            if (msg.perContinent) {
+                const continents = new Set(Array.from(provinceIds, id => worldMap.provinces[id]?.continent).filter((id): id is number => id !== undefined));
+                worldMap.provinces.forEach(province => {
+                    if (province && continents.has(province.continent)) {provinceIds.add(province.id);}
+                });
+            }
+            if (provinceIds.size === 0) {throw new Error('Select one or more provinces or states first.');}
+
+            const stateIds = new Set<number>();
+            worldMap.states.forEach(state => {
+                if (state?.provinces.some(id => provinceIds.has(id))) {stateIds.add(state.id);}
+            });
+
+            const transforms = new Map<string, (text: string) => { text: string; changed: number }>();
+            const addTransform = (path: string, transform: (text: string) => { text: string; changed: number }) => {
+                const previous = transforms.get(path);
+                transforms.set(path, previous
+                    ? text => {
+                        const first = previous(text);
+                        const second = transform(first.text);
+                        return { text: second.text, changed: first.changed + second.changed };
+                    }
+                    : transform);
+            };
+
+            if (msg.operation === 'clear-railways' || msg.operation === 'convert-to-ocean') {
+                addTransform('map/railways.txt', text => clearRailways(text, provinceIds));
+            }
+            if (msg.operation === 'clear-supply-hubs' || msg.operation === 'convert-to-ocean') {
+                addTransform('map/supply_nodes.txt', text => clearSupplyHubs(text, provinceIds));
+            }
+            if (msg.operation === 'clear-buildings' || msg.operation === 'convert-to-ocean') {
+                addTransform('map/buildings.txt', text => clearMapBuildings(text, provinceIds));
+            }
+            if (msg.operation === 'clear-water-crossings') {
+                const defaultMap = await this.readDefaultMapConfig();
+                addTransform(`map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`, text => clearWaterCrossings(text, provinceIds));
+            }
+            if (msg.operation === 'convert-to-ocean') {
+                addTransform('map/definition.csv', text => convertDefinitionsToOcean(text, provinceIds));
+                const defaultMap = await this.readDefaultMapConfig();
+                addTransform(`map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`, text => {
+                    const result = repairAdjacencies(text, {}, new Set(
+                        worldMap.provinces.filter(p => p && !provinceIds.has(p.id)).map(p => p!.id)
+                    ));
+                    return { text: result.text, changed: result.replacements + result.removals };
+                });
+                for (const state of worldMap.states) {
+                    if (state && stateIds.has(state.id)) {
+                        addTransform(state.file, text => removeProvincesFromRegionBlocks(text, provinceIds, true, 'state'));
+                    }
+                }
+                for (const region of worldMap.strategicRegions) {
+                    if (region?.provinces.some(id => provinceIds.has(id))) {
+                        addTransform(region.file, text => removeProvincesFromRegionBlocks(text, provinceIds, true, 'strategic_region'));
+                    }
+                }
+            } else if (msg.operation === 'clear-buildings' || msg.operation === 'clear-resources' ||
+                msg.operation === 'one-population-per-state' || msg.operation === 'lowest-development') {
+                const stateOperation = msg.operation;
+                const lowestCategory = (worldMap.stateCategories ?? [])
+                    .filter(category => msg.includeWasteland || category.name.toLowerCase() !== 'wasteland')
+                    .sort((a, b) => a.localBuildingSlots - b.localBuildingSlots || a.name.localeCompare(b.name))[0]?.name;
+                if (stateOperation === 'lowest-development' && !lowestCategory) {
+                    throw new Error('No eligible state development category is available.');
+                }
+                for (const state of worldMap.states) {
+                    if (!state || !stateIds.has(state.id)) {continue;}
+                    addTransform(state.file, text => transformSelectedStates(
+                        text,
+                        stateIds,
+                        stateOperation,
+                        lowestCategory ?? 'pastoral'
+                    ));
+                }
+            }
+
+            const pending: { target: vscode.Uri; previous?: Buffer; next: Buffer }[] = [];
+            let changedRecords = 0;
+            for (const [path, transform] of transforms) {
+                try {
+                    const sourcePath = await getFilePathFromMod(path);
+                    const source = sourcePath
+                        ? (await readFileFromPath(sourcePath))[0]
+                        : (await readFileFromModOrHOI4(path))[0];
+                    const result = transform(source.toString('utf-8').replace(/^\uFEFF/, ''));
+                    changedRecords += result.changed;
+                    if (result.text === source.toString('utf-8').replace(/^\uFEFF/, '')) {continue;}
+                    const target = await this.resolveTargetFile(path);
+                    let previous: Buffer | undefined;
+                    try { previous = Buffer.from(await vscode.workspace.fs.readFile(target)); } catch { /* New override. */ }
+                    pending.push({ target, previous, next: Buffer.from(result.text, 'utf-8') });
+                } catch (e) {
+                    if (path === 'map/definition.csv' || !path.startsWith('map/')) {
+                        throw e;
+                    }
+                    // Railways, supply nodes, generated buildings, and
+                    // adjacencies are validly absent in some total conversions.
+                }
+            }
+            if (pending.length === 0) {throw new Error('The selected operation found no matching records to change.');}
+
+            const completed: typeof pending = [];
+            try {
+                for (const write of pending) {
+                    await mkdirs(dirUri(write.target));
+                    await writeFile(write.target, write.next);
+                    completed.push(write);
+                }
+            } catch (e) {
+                for (const write of completed.reverse()) {
+                    try {
+                        if (write.previous) {await writeFile(write.target, write.previous);}
+                        else {await vscode.workspace.fs.delete(write.target, { recursive: false, useTrash: false });}
+                    } catch { /* Preserve the original error. */ }
+                }
+                throw e;
+            }
+
+            if (msg.reindexAfter) {
+                changedRecords += await this.reindexMapSequentially();
+            }
+            this.cachedWorldMap = undefined;
+            this.worldMapDependencies = undefined;
+            await this.postMessageToWebview({
+                command: 'areaoperationresult',
+                success: true,
+                operation: msg.operation,
+                affectedProvinces: provinceIds.size,
+                affectedStates: stateIds.size,
+                changedRecords,
+            });
+        } catch (e) {
+            await this.postMessageToWebview({
+                command: 'areaoperationresult',
+                success: false,
+                operation: msg.operation,
+                error: e instanceof Error ? e.message : String(e),
+            });
+        }
+    }
+
+    private async convertClippedRiversToOcean(
+        worldMap: WorldMapData,
+        riverIds: ReadonlySet<number>
+    ): Promise<{ provinces: number; records: number }> {
+        const strategicRegionByProvinceId: Record<number, number | undefined> = {};
+        for (const region of worldMap.strategicRegions) {
+            if (!region) {
+                continue;
+            }
+            for (const provinceId of region.provinces) {
+                strategicRegionByProvinceId[provinceId] = region.id;
+            }
+        }
+        const edit = buildClippedRiverOceanEdit(
+            worldMap.width,
+            worldMap.height,
+            worldMap.colorByPosition,
+            worldMap.provinces,
+            worldMap.rivers,
+            riverIds,
+            strategicRegionByProvinceId
+        );
+        if (edit.provinces.length === 0 || edit.paintedPixels.length === 0) {
+            throw new Error('The selected river components contain no land pixels to convert.');
+        }
+
+        const additionsByRegion = new Map<number, number[]>();
+        for (const province of edit.provinces) {
+            if (province.strategicRegionId === undefined) {
+                continue;
+            }
+            const additions = additionsByRegion.get(province.strategicRegionId) ?? [];
+            additions.push(province.id);
+            additionsByRegion.set(province.strategicRegionId, additions);
+        }
+        const updatedRegions: PersistedStrategicRegion[] = [];
+        for (const [regionId, additions] of additionsByRegion) {
+            const region = worldMap.strategicRegions.find(candidate => candidate?.id === regionId);
+            if (!region) {
+                continue;
+            }
+            updatedRegions.push({
+                id: region.id,
+                name: region.name,
+                provinces: Array.from(new Set([...region.provinces, ...additions])).sort((a, b) => a - b),
+                navalTerrain: region.navalTerrain,
+                file: region.file,
+                tokenStart: region.token?.start,
+                tokenEnd: region.token?.end,
+            });
+        }
+
+        await this.persistProvinceBmp({
+            paintedPixels: edit.paintedPixels,
+            width: worldMap.width,
+            height: worldMap.height,
+            provinces: edit.provinces,
+            targetProvinceId: edit.provinces[0].id,
+            targetProvinceIds: edit.provinces.map(province => province.id),
+            afterPersist: updatedRegions.length > 0
+                ? () => this.persistStrategicRegions(updatedRegions, [])
+                : undefined,
+        });
+
+        return {
+            provinces: edit.provinces.length,
+            records: edit.provinces.length + updatedRegions.length,
+        };
+    }
+
+    private async runReindexMap(): Promise<void> {
+        try {
+            const changedRecords = await this.reindexMapSequentially();
+            await this.postMessageToWebview({
+                command: 'reindexmapresult',
+                success: true,
+                changedRecords,
+            });
+        } catch (e) {
+            await this.postMessageToWebview({
+                command: 'reindexmapresult',
+                success: false,
+                error: e instanceof Error ? e.message : String(e),
+            });
+        }
+    }
+
+    private async reindexMapSequentially(): Promise<number> {
+        const worldMap = await this.worldMapLoader.getWorldMap(true);
+        const provinceIds = worldMap.provinces
+            .filter((province): province is NonNullable<typeof province> => !!province)
+            .map(province => province.id);
+        const stateIds = worldMap.states
+            .filter((state): state is NonNullable<typeof state> => !!state)
+            .map(state => state.id);
+        const provinceMap = createSequentialIdMap(provinceIds);
+        const stateMap = createSequentialIdMap(stateIds);
+        const validProvinceIds = new Set(Object.values(provinceMap));
+        const validSourceProvinceIds = new Set(Object.keys(provinceMap).map(Number));
+        const pending = new Map<string, { target: vscode.Uri; previous?: Buffer; next: Buffer; changed: number }>();
+        const provinceIdsChanged = Object.entries(provinceMap).some(([from, to]) => Number(from) !== to);
+        const stateIdsChanged = Object.entries(stateMap).some(([from, to]) => Number(from) !== to);
+        const replacementFolders: string[] = [];
+
+        const queue = async (
+            path: string,
+            transform: (text: string) => { text: string; changed: number },
+            optional = false,
+            materialize = false
+        ) => {
+            if (pending.has(path)) {return;}
+            try {
+                const sourcePath = await getFilePathFromMod(path);
+                const source = sourcePath
+                    ? (await readFileFromPath(sourcePath))[0]
+                    : (await readFileFromModOrHOI4(path))[0];
+                const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
+                const result = transform(sourceText);
+                if (result.text === sourceText && !materialize) {return;}
+                const target = await this.resolveTargetFile(path);
+                let previous: Buffer | undefined;
+                try {previous = Buffer.from(await vscode.workspace.fs.readFile(target));} catch { /* New override. */ }
+                pending.set(path, { target, previous, next: Buffer.from(result.text, 'utf-8'), changed: result.changed });
+            } catch (e) {
+                if (!optional) {throw e;}
+            }
+        };
+
+        const materializeFolder = async (folder: string) => {
+            const files = await listFilesFromModOrHOI4(folder, { recursively: true });
+            if (files.length === 0) {
+                return;
+            }
+            for (const file of files) {
+                await queue(
+                    `${folder}/${file}`.replace(/\\/g, '/'),
+                    text => ({ text, changed: 0 }),
+                    false,
+                    true
+                );
+            }
+            replacementFolders.push(folder);
+        };
+
+        await queue('map/definition.csv', text => reindexDefinitions(text, provinceMap));
+        for (const file of new Set(worldMap.states.filter(Boolean).map(state => state!.file))) {
+            await queue(file, text => reindexStateFile(text, provinceMap, stateMap));
+        }
+        for (const file of new Set(worldMap.strategicRegions.filter(Boolean).map(region => region!.file))) {
+            await queue(file, text => reindexStrategicRegionFile(text, provinceMap));
+        }
+        for (const file of new Set(worldMap.supplyAreas.filter(Boolean).map(area => area!.file))) {
+            await queue(file, text => reindexSupplyAreaFile(text, stateMap), true);
+        }
+        for (const file of new Set(Object.values(worldMap.countryHistoryFiles).filter(Boolean))) {
+            await queue(file, text => reindexCountryHistoryFile(text, stateMap), true);
+        }
+
+        const defaultMap = await this.readDefaultMapConfig();
+        await queue(`map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`, text => {
+            const result = repairAdjacencies(text, provinceMap, validProvinceIds, validSourceProvinceIds);
+            return { text: result.text, changed: result.replacements + result.removals };
+        }, true);
+        await queue('map/railways.txt', text => {
+            const result = repairRailways(text, provinceMap, validProvinceIds, validSourceProvinceIds);
+            return { text: result.text, changed: result.replacements + result.removals };
+        }, true);
+        await queue('map/supply_nodes.txt', text => {
+            const result = repairSupplyNodes(text, provinceMap, validProvinceIds, validSourceProvinceIds);
+            return { text: result.text, changed: result.replacements + result.removals };
+        }, true);
+        await queue('map/buildings.txt', text => reindexMapBuildings(text, provinceMap), true);
+
+        // A changed ID space invalidates inherited database folders. Copy the
+        // complete effective contents before enabling replace_path so files
+        // which did not need textual changes are not accidentally hidden.
+        if (provinceIdsChanged || stateIdsChanged) {
+            await materializeFolder('history/states');
+        }
+        if (provinceIdsChanged) {
+            await materializeFolder('map/strategicregions');
+        }
+        if (stateIdsChanged) {
+            await materializeFolder('map/supplyareas');
+            await materializeFolder('history/countries');
+        }
+
+        const completed: Array<{ target: vscode.Uri; previous?: Buffer }> = [];
+        try {
+            for (const write of pending.values()) {
+                await mkdirs(dirUri(write.target));
+                await writeFile(write.target, write.next);
+                completed.push(write);
+            }
+            await this.ensureDescriptorReplacePaths(replacementFolders);
+        } catch (e) {
+            for (const write of completed.reverse()) {
+                try {
+                    if (write.previous) {await writeFile(write.target, write.previous);}
+                    else {await vscode.workspace.fs.delete(write.target, { recursive: false, useTrash: false });}
+                } catch { /* Preserve original failure. */ }
+            }
+            throw e;
+        }
+
+        this.cachedWorldMap = undefined;
+        this.worldMapDependencies = undefined;
+        return Array.from(pending.values()).reduce((total, write) => total + write.changed, 0);
+    }
+
+    private async removeAllCores(): Promise<void> {
+        try {
+            const worldMap = await this.worldMapLoader.getWorldMap(true);
+            const stateFiles = Array.from(new Set(
+                worldMap.states
+                    .filter((state): state is NonNullable<typeof state> => !!state && !!state.file)
+                    .map(state => state.file)
+            ));
+            let changedRecords = 0;
+            for (const file of stateFiles) {
+                const sourcePath = await getFilePathFromMod(file);
+                const source = sourcePath
+                    ? (await readFileFromPath(sourcePath))[0]
+                    : (await readFileFromModOrHOI4(file))[0];
+                const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
+                const result = removeAllCores(sourceText);
+                if (result.changed === 0) {
+                    continue;
+                }
+                const target = await this.resolveTargetFile(file);
+                await mkdirs(dirUri(target));
+                await writeFile(target, Buffer.from(result.text, 'utf-8'));
+                changedRecords += result.changed;
+            }
+            changedRecords += await this.reindexMapSequentially();
+            this.cachedWorldMap = undefined;
+            this.worldMapDependencies = undefined;
+            await this.postMessageToWebview({
+                command: 'removeallcoresresult',
+                success: true,
+                affectedStates: worldMap.states.filter(Boolean).length,
+                changedRecords,
+            });
+        } catch (e) {
+            await this.postMessageToWebview({
+                command: 'removeallcoresresult',
+                success: false,
+                error: e instanceof Error ? e.message : String(e),
+            });
+        }
+    }
+
+    private async runContinentPipeline(msg: RunContinentPipelineMessage): Promise<void> {
+        const targetCountryTag = msg.targetCountryTag.trim().toUpperCase();
+        const continentId = msg.continentId;
+        let continentName: string | undefined;
+        try {
+            if (!/^[A-Z0-9]{3}$/.test(targetCountryTag)) {
+                throw new Error('Target country tag must contain exactly three letters or digits.');
+            }
+            const worldMap = await this.worldMapLoader.getWorldMap(true);
+            if (!worldMap.countries.some(country => country.tag.toUpperCase() === targetCountryTag)) {
+                throw new Error(`Country ${targetCountryTag} is not present on the loaded map.`);
+            }
+            continentName = worldMap.continents[continentId];
+            if (!Number.isInteger(continentId) || continentId <= 0 || !continentName) {
+                throw new Error(`Continent ID ${continentId} is not present on the loaded map. Loaded values: ${worldMap.continents.filter(Boolean).join(', ') || '(none)'}.`);
+            }
+
+            const continentProvinces = worldMap.provinces
+                .filter((province): province is NonNullable<typeof province> => !!province && province.continent === continentId)
+                .sort((a, b) => a.id - b.id);
+            if (continentProvinces.length < 2) {
+                throw new Error(`${continentName} must contain at least two loaded provinces to consolidate.`);
+            }
+            const landProvinces = continentProvinces.filter(province => province.type === 'land');
+            const mergePlan = planProvinceMergesByType(continentProvinces);
+            const survivorIdSet = new Set(mergePlan.survivorIds);
+            const survivors = continentProvinces.filter(province => survivorIdSet.has(province.id));
+            const landSurvivor = survivors.find(province => province.type === 'land');
+            const waterSurvivor = survivors.find(province => province.type === 'sea') ??
+                survivors.find(province => province.type !== 'land');
+            const primarySurvivor = landSurvivor ?? waterSurvivor;
+            if (!primarySurvivor) {
+                throw new Error(`${continentName} contains no usable land or water provinces.`);
+            }
+            const provinceIds = new Set(continentProvinces.map(province => province.id));
+            const replacements = mergePlan.replacements;
+            const deletedProvinceIds = Object.keys(replacements).map(Number);
+            const replacementColorByColor = new Map<number, number>();
+            for (const province of continentProvinces) {
+                const survivorId = replacements[province.id] ?? province.id;
+                const survivor = survivors.find(candidate => candidate.id === survivorId);
+                if (survivor && survivor.color !== province.color) {
+                    replacementColorByColor.set(province.color, survivor.color);
+                }
+            }
+            const colorByPosition = ((worldMap as any).colorByPosition ?? []) as number[];
+            if (colorByPosition.length !== worldMap.width * worldMap.height) {
+                throw new Error('Province pixel data is unavailable for the consolidation pipeline.');
+            }
+            const paintedPixels: number[][] = [];
+            for (let index = 0; index < colorByPosition.length; index++) {
+                const replacementColor = replacementColorByColor.get(colorByPosition[index]);
+                if (replacementColor === undefined) {continue;}
+                paintedPixels.push([index % worldMap.width, Math.floor(index / worldMap.width), replacementColor]);
+            }
+            if (paintedPixels.length === 0) {
+                throw new Error(`${continentName} provinces were found, but no non-surviving province pixels were available to merge.`);
+            }
+
+            const touchedStates = worldMap.states
+                .filter((state): state is NonNullable<typeof state> => !!state && state.provinces.some(id => provinceIds.has(id)))
+                .sort((a, b) => a.id - b.id);
+            const targetState = touchedStates.find(state => state.provinces.includes(primarySurvivor.id)) ?? touchedStates[0];
+            if (!targetState) {
+                throw new Error(`No state contains a ${continentName} province.`);
+            }
+            const touchedStateIds = new Set(touchedStates.map(state => state.id));
+            const combinedStateProvinces = new Set<number>();
+            const combinedCores = new Set<string>([targetCountryTag]);
+            const combinedVictoryPoints: Record<number, number | undefined> = {};
+            const combinedResources: Record<string, number | undefined> = {};
+            let manpower = 0;
+            for (const state of touchedStates) {
+                manpower += state.manpower;
+                state.provinces.forEach(id => combinedStateProvinces.add(replacements[id] ?? id));
+                state.cores.forEach(core => {
+                    if (core.condition === true && core.value) {
+                        combinedCores.add(core.value);
+                    }
+                });
+                for (const [provinceIdText, value] of Object.entries(state.victoryPoints)) {
+                    if (value === undefined) {
+                        continue;
+                    }
+                    const provinceId = replacements[Number(provinceIdText)] ?? Number(provinceIdText);
+                    combinedVictoryPoints[provinceId] = (combinedVictoryPoints[provinceId] ?? 0) + value;
+                }
+                for (const [resource, value] of Object.entries(state.resources)) {
+                    if (value !== undefined) {
+                        combinedResources[resource] = (combinedResources[resource] ?? 0) + value;
+                    }
+                }
+            }
+            const persistedState: PersistedState = {
+                id: targetState.id,
+                name: targetState.name,
+                manpower,
+                category: targetState.category,
+                owner: targetCountryTag,
+                controller: targetCountryTag,
+                provinces: Array.from(combinedStateProvinces).sort((a, b) => a - b),
+                cores: Array.from(combinedCores).sort(),
+                impassable: targetState.impassable,
+                victoryPoints: combinedVictoryPoints,
+                resources: combinedResources,
+                file: targetState.file,
+                tokenStart: targetState.token?.start,
+                tokenEnd: targetState.token?.end,
+            };
+            const deletedStateRecords = touchedStates
+                .filter(state => state.id !== targetState.id)
+                .map(state => ({ id: state.id, file: state.file }));
+            const deletedStateFiles = Array.from(new Set(deletedStateRecords
+                .map(state => state.file)
+                .filter(file => !worldMap.states.some(state =>
+                    !!state && !touchedStateIds.has(state.id) && state.file === file
+                ))));
+            const sharedStateRecords = deletedStateRecords.filter(
+                state => !deletedStateFiles.includes(state.file)
+            );
+
+            const touchedRegions = worldMap.strategicRegions
+                .filter((region): region is NonNullable<typeof region> => !!region && region.provinces.some(id => provinceIds.has(id)))
+                .sort((a, b) => a.id - b.id);
+            if (touchedRegions.length === 0) {
+                throw new Error(`No strategic region contains a ${continentName} province.`);
+            }
+            const provinceTypes = Object.fromEntries(
+                worldMap.provinces
+                    .filter((province): province is NonNullable<typeof province> => !!province)
+                    .map(province => [province.id, province.type])
+            );
+            const regionPartition = partitionLandAndWaterProvinces(
+                touchedRegions.flatMap(region => region.provinces),
+                replacements,
+                provinceTypes
+            );
+            const landRegionProvinces = new Set(regionPartition.land);
+            const waterRegionProvinces = new Set(regionPartition.water);
+            const usedRegionIds = new Set<number>();
+            const chooseRegion = (survivorId: number | undefined) => {
+                const region = touchedRegions.find(candidate =>
+                    !usedRegionIds.has(candidate.id) && survivorId !== undefined && candidate.provinces.includes(survivorId)
+                ) ?? touchedRegions.find(candidate => !usedRegionIds.has(candidate.id));
+                if (region) {usedRegionIds.add(region.id);}
+                return region;
+            };
+            const landTargetRegion = landRegionProvinces.size > 0 ? chooseRegion(landSurvivor?.id) : undefined;
+            let waterTargetRegion = waterRegionProvinces.size > 0 ? chooseRegion(waterSurvivor?.id) : undefined;
+            const persistedRegions: PersistedStrategicRegion[] = [];
+            if (landTargetRegion) {
+                persistedRegions.push({
+                    id: landTargetRegion.id,
+                    name: `${continentName} Land`,
+                    provinces: Array.from(landRegionProvinces).sort((a, b) => a - b),
+                    navalTerrain: null,
+                    file: landTargetRegion.file,
+                    tokenStart: landTargetRegion.token?.start,
+                    tokenEnd: landTargetRegion.token?.end,
+                });
+            }
+            if (waterRegionProvinces.size > 0) {
+                if (!waterTargetRegion) {
+                    const id = Math.max(0, ...worldMap.strategicRegions.filter(Boolean).map(region => region!.id)) + 1;
+                    waterTargetRegion = {
+                        ...touchedRegions[0],
+                        id,
+                        name: `${continentName} Water`,
+                        provinces: [],
+                        file: `map/strategicregions/${id}-${continentName.replace(/[^A-Za-z0-9]+/g, '_')}_WATER.txt`,
+                        token: null,
+                    };
+                }
+                persistedRegions.push({
+                    id: waterTargetRegion.id,
+                    name: `${continentName} Water`,
+                    provinces: Array.from(waterRegionProvinces).sort((a, b) => a - b),
+                    navalTerrain: waterTargetRegion.navalTerrain ?? touchedRegions.find(region => !!region.navalTerrain)?.navalTerrain ?? null,
+                    file: waterTargetRegion.file,
+                    tokenStart: waterTargetRegion.token?.start,
+                    tokenEnd: waterTargetRegion.token?.end,
+                });
+            }
+            const touchedRegionIds = new Set(touchedRegions.map(region => region.id));
+            const targetRegionIds = new Set(persistedRegions.map(region => region.id));
+            const deletedRegionRecords = touchedRegions
+                .filter(region => !targetRegionIds.has(region.id))
+                .map(region => ({ id: region.id, file: region.file }));
+            const deletedRegionFiles = Array.from(new Set(deletedRegionRecords
+                .map(region => region.file)
+                .filter(file => !worldMap.strategicRegions.some(region =>
+                    !!region && !touchedRegionIds.has(region.id) && region.file === file
+                ))));
+            const sharedRegionRecords = deletedRegionRecords.filter(
+                region => !deletedRegionFiles.includes(region.file)
+            );
+
+            const previousProvinces: PersistedProvince[] = worldMap.provinces
+                .filter((province): province is NonNullable<typeof province> => !!province)
+                .map(province => ({
+                    id: province.id,
+                    color: province.color,
+                    type: province.type,
+                    coastal: province.coastal,
+                    terrain: province.terrain,
+                    continent: province.continent,
+                }));
+            await this.persistProvinceBmp({
+                paintedPixels,
+                width: worldMap.width,
+                height: worldMap.height,
+                provinces: survivors.map(survivor => ({
+                    id: survivor.id,
+                    color: survivor.color,
+                    type: survivor.type,
+                    coastal: survivor.type === 'land' && landProvinces.some(province => province.coastal),
+                    terrain: survivor.terrain,
+                    continent: survivor.continent,
+                })),
+                previousProvinces,
+                deletedProvinceIds,
+                provinceReplacements: replacements,
+                targetProvinceId: primarySurvivor.id,
+                targetProvinceIds: survivors.map(survivor => survivor.id),
+                states: [persistedState],
+                deletedStateFiles,
+                deletedStates: sharedStateRecords,
+                stateReplacements: Object.fromEntries(
+                    deletedStateRecords.map(state => [state.id, targetState.id])
+                ),
+                strategicRegions: persistedRegions,
+                deletedStrategicRegionFiles: deletedRegionFiles,
+                deletedStrategicRegions: sharedRegionRecords,
+            });
+
+            let changedRecords = 0;
+            const defaultMap = await this.readDefaultMapConfig();
+            const optionalTransforms: Array<[string, (text: string) => { text: string; changed: number }]> = [
+                ['map/railways.txt', text => clearRailways(text, provinceIds)],
+                ['map/supply_nodes.txt', text => clearSupplyHubs(text, provinceIds)],
+                ['map/buildings.txt', text => clearMapBuildings(text, provinceIds)],
+                [`map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`, text => clearWaterCrossings(text, provinceIds)],
+            ];
+            for (const [path, transform] of optionalTransforms) {
+                try {
+                    const sourcePath = await getFilePathFromMod(path);
+                    const source = sourcePath
+                        ? (await readFileFromPath(sourcePath))[0]
+                        : (await readFileFromModOrHOI4(path))[0];
+                    const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
+                    const result = transform(sourceText);
+                    changedRecords += result.changed;
+                    if (result.text === sourceText) {
+                        continue;
+                    }
+                    const target = await this.resolveTargetFile(path);
+                    await mkdirs(dirUri(target));
+                    await writeFile(target, Buffer.from(result.text, 'utf-8'));
+                } catch {
+                    // Optional in small and total-conversion maps.
+                }
+            }
+
+            // Remove obsolete state IDs from supply-area membership and retain
+            // the consolidated state wherever any touched state appeared.
+            const touchedSupplyAreas = worldMap.supplyAreas
+                .filter((supplyArea): supplyArea is NonNullable<typeof supplyArea> =>
+                    !!supplyArea && supplyArea.states.some(id => touchedStateIds.has(id))
+                );
+            const targetSupplyArea = touchedSupplyAreas.find(supplyArea => supplyArea.states.includes(targetState.id)) ??
+                touchedSupplyAreas[0];
+            for (const supplyArea of touchedSupplyAreas) {
+                if (!supplyArea || !supplyArea.states.some(id => touchedStateIds.has(id))) {
+                    continue;
+                }
+                try {
+                    const sourcePath = await getFilePathFromMod(supplyArea.file);
+                    const source = sourcePath
+                        ? (await readFileFromPath(sourcePath))[0]
+                        : (await readFileFromModOrHOI4(supplyArea.file))[0];
+                    const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
+                    let changed = 0;
+                    const next = sourceText.replace(/\bstates\s*=\s*\{([^}]*)\}/g, (whole, body: string) => {
+                        const ids = body.trim().split(/\s+/).map(Number).filter(Number.isInteger);
+                        if (!ids.some(id => touchedStateIds.has(id))) {
+                            return whole;
+                        }
+                        const kept = ids.filter(id => !touchedStateIds.has(id));
+                        if (supplyArea.id === targetSupplyArea?.id) {
+                            kept.push(targetState.id);
+                        }
+                        changed += 1;
+                        return `states = { ${Array.from(new Set(kept)).sort((a, b) => a - b).join(' ')} }`;
+                    });
+                    if (next !== sourceText) {
+                        const target = await this.resolveTargetFile(supplyArea.file);
+                        await mkdirs(dirUri(target));
+                        await writeFile(target, Buffer.from(next, 'utf-8'));
+                        changedRecords += changed;
+                    }
+                } catch {
+                    // Supply areas may be disabled or absent.
+                }
+            }
+
+            changedRecords += await this.reindexMapSequentially();
+            this.cachedWorldMap = undefined;
+            this.worldMapDependencies = undefined;
+            await this.postMessageToWebview({
+                command: 'continentpipelineresult',
+                success: true,
+                continentId,
+                continentName,
+                targetCountryTag,
+                mergedProvinces: deletedProvinceIds.length,
+                mergedStates: Math.max(0, touchedStates.length - 1),
+                mergedStrategicRegions: Math.max(0, touchedRegions.length - persistedRegions.length),
+                changedRecords,
+            });
+        } catch (e) {
+            await this.postMessageToWebview({
+                command: 'continentpipelineresult',
+                success: false,
+                continentId,
+                continentName,
+                targetCountryTag,
+                error: e instanceof Error ? e.message : String(e),
+            });
+        }
     }
 
     /**
@@ -1406,33 +2819,44 @@ export class WorldMap {
      * Apply painted pixel diffs to a raw BMP file buffer in-place.
      * Supports 24-bit and 32-bit BMPs.
      */
-    private applyPixelDiffsToBmp(bmpBuffer: Buffer, paintedPixels: number[][]): Buffer {
+    private applyPixelDiffsToBmp(
+        bmpBuffer: Buffer,
+        paintedPixels: number[][],
+        expectedWidth?: number,
+        expectedHeight?: number
+    ): Buffer {
         const result = Buffer.from(bmpBuffer);
 
         if (result[0] !== 0x42 || result[1] !== 0x4D) {
-            debug('applyPixelDiffsToBmp: not a valid BMP file (missing BM header)');
-            return result;
+            throw new Error('Refusing to edit an invalid provinces BMP (missing BM header).');
         }
 
         const dataOffset = result.readUInt32LE(10);
         const width = result.readInt32LE(18);
         const height = result.readInt32LE(22);
         const bitsPerPixel = result.readUInt16LE(28);
+        const absoluteWidth = Math.abs(width);
+        const absoluteHeight = Math.abs(height);
         const bytesPerPixel = bitsPerPixel / 8;
-        const rowSize = ((width * bitsPerPixel + 7 >> 3) + 3) & 0xFFFFFFFC;
+        const rowSize = ((absoluteWidth * bitsPerPixel + 7 >> 3) + 3) & 0xFFFFFFFC;
 
         if (bitsPerPixel !== 24 && bitsPerPixel !== 32) {
-            debug(`applyPixelDiffsToBmp: unsupported BMP bit depth ${bitsPerPixel} (only 24-bit and 32-bit are supported)`);
-            return result;
+            throw new Error(`Unsupported provinces BMP bit depth ${bitsPerPixel}; expected 24-bit or 32-bit.`);
+        }
+        if ((expectedWidth !== undefined && expectedWidth !== absoluteWidth) ||
+            (expectedHeight !== undefined && expectedHeight !== absoluteHeight)) {
+            throw new Error(
+                `Province edit dimensions ${expectedWidth}x${expectedHeight} do not match BMP dimensions ${absoluteWidth}x${absoluteHeight}.`
+            );
         }
 
         for (const [x, y, newColor] of paintedPixels) {
-            if (x < 0 || x >= width || y < 0 || y >= height) {
-                continue;
+            if (!Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(newColor) ||
+                x < 0 || x >= absoluteWidth || y < 0 || y >= absoluteHeight) {
+                throw new Error(`Province pixel edit (${x}, ${y}) is outside the BMP.`);
             }
 
-            // BMP is bottom-up: row (height - 1 - y)
-            const row = height - 1 - y;
+            const row = height > 0 ? absoluteHeight - 1 - y : y;
             const pixelOffset = dataOffset + row * rowSize + x * bytesPerPixel;
 
             if (pixelOffset + bytesPerPixel - 1 < result.length) {
@@ -1449,13 +2873,14 @@ export class WorldMap {
     /**
      * Read the default.map configuration to get the provinces BMP filename.
      */
-    private async readDefaultMapConfig(): Promise<{ provinces: string } | undefined> {
+    private async readDefaultMapConfig(): Promise<{ provinces: string; adjacencies?: string } | undefined> {
         try {
             const [buffer] = await readFileFromModOrHOI4('map/default.map');
             const text = buffer.toString('utf-8');
-            const match = text.match(/provinces\s*=\s*"([^"]+)"/);
-            if (match) {
-                return { provinces: match[1] };
+            const provinces = text.match(/provinces\s*=\s*"([^"]+)"/);
+            const adjacencies = text.match(/adjacencies\s*=\s*"([^"]+)"/);
+            if (provinces) {
+                return { provinces: provinces[1], adjacencies: adjacencies?.[1] };
             }
         } catch { /* ignore */ }
         return undefined;

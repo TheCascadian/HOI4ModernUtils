@@ -23,6 +23,16 @@ fromEvent(window, 'load').subscribe(function() {
             topBar.showToolsContextMenu(event.clientX, event.clientY);
         }
     });
+    fromEvent<KeyboardEvent>(mainCanvas, 'keydown').subscribe(event => {
+        if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+            event.preventDefault();
+            const canvasBounds = mainCanvas.getBoundingClientRect();
+            topBar.showToolsContextMenu(
+                Math.max(8, canvasBounds.left + 32),
+                Math.max(topBarHeight + 8, canvasBounds.top + 32)
+            );
+        }
+    });
 
     viewPoint.observable$.subscribe(setStateForKey('viewPoint'));
     topBar.viewMode$.subscribe(setStateForKey('viewMode'));

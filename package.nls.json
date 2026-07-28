@@ -47,5 +47,7 @@
     "hoi4modernutils.worldMapAssignSelectionToStrategicRegionKeybind.title": "World Map Assign To Strategic Region Keybind",
     "hoi4modernutils.worldMapAssignSelectionToStrategicRegionKeybind.desc": "Keybind used in world map preview to assign selected states to the selected strategic region. Example: Ctrl+Shift+G.",
     "hoi4modernutils.worldMapConfirmNewProvinceCreation.title": "World Map Confirm New Province Creation",
-    "hoi4modernutils.worldMapConfirmNewProvinceCreation.desc": "Show a confirmation dialog before creating a new province in the world map preview's paintbrush tool. Disabling this (e.g. via the dialog's \"Don't ask again\" checkbox) skips the confirmation; re-enable it here."
+    "hoi4modernutils.worldMapConfirmNewProvinceCreation.desc": "Show a confirmation dialog before creating a new province in the world map preview's paintbrush tool. Disabling this (e.g. via the dialog's \"Don't ask again\" checkbox) skips the confirmation; re-enable it here.",
+    "hoi4modernutils.worldMapAutoCoreTransfers.title": "Auto-Core All Transferred States",
+    "hoi4modernutils.worldMapAutoCoreTransfers.desc": "Automatically add the destination country as a core when transferring or annexing states."
 }

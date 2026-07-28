@@ -11,6 +11,8 @@ import { combineLatest, fromEvent } from 'rxjs';
 import { distinctUntilChanged } from 'rxjs/operators';
 import { applyCondition, ConditionItem } from "../../src/hoiformat/condition";
 import { getBrushBounds } from "./brush";
+import { formatTooltipWarnings, placeTooltip } from "./tooltip";
+import { forEachRiverPixel } from "./selection";
 
 const landWarning = 0xE02020;
 const landNoWarning = 0x7FFF7F;
@@ -66,6 +68,8 @@ export class Renderer extends Subscriber {
     
     private cursorX = 0;
     private cursorY = 0;
+    private tooltipRendered = false;
+    private accessibleTooltipText = '';
 
     private static resourceImages: Record<string, HTMLImageElement | undefined> = {};
 
@@ -92,6 +96,7 @@ export class Renderer extends Subscriber {
                 topBar.colorSet$,
                 topBar.hoverProvinceId$,
                 topBar.selectedProvinceIds$,
+                topBar.selectedRiverIds$,
                 topBar.selectedStateIds$,
                 topBar.hoverStateId$,
                 topBar.selectedStateId$,
@@ -133,6 +138,7 @@ export class Renderer extends Subscriber {
         }
 
         const backCanvasContext = this.backCanvasContext;
+        this.tooltipRendered = false;
     
         backCanvasContext.fillStyle = 'black';
         backCanvasContext.fillRect(0, 0, this.canvasWidth, this.canvasHeight);
@@ -172,6 +178,10 @@ export class Renderer extends Subscriber {
         } else if (this.loader.loading$.value) {
             this.renderLoadingText(feLocalize('worldmap.progress.visualizing', 'Visualizing map data: {0}', Math.round(this.loader.progress * 100) + '%'));
         }
+
+        if (!this.tooltipRendered) {
+            this.updateAccessibleTooltip('');
+        }
     
         this.mainCanvasContext.drawImage(this.backCanvas, 0, 0);
     };
@@ -209,11 +219,28 @@ export class Renderer extends Subscriber {
             return;
         }
         this.oldMapState = newMapState;
-        const optimizations = this.topBar.renderOptimizations$.value;
         Renderer.renderMapImpl(this.mapCanvas, this.topBar, this.viewPoint, worldMap,
-            newMapState.fastRendering
-                ? { optimizations }
-                : { preciseEdge: true, overwriteRenderPrecision: 1, optimizations });
+            Renderer.resolveRenderOptions(
+                newMapState.fastRendering,
+                this.topBar.renderOptimizations$.value
+            ));
+    }
+
+    public static resolveRenderOptions(
+        fastRendering: boolean,
+        optimizations: ReadonlySet<WorldMapRuntimeTestOptimization>
+    ): Partial<RenderContext> {
+        return {
+            optimizations,
+            preciseEdge: optimizations.has('edge-decimation')
+                ? false
+                : fastRendering ? undefined : true,
+            edgeSampleBase: optimizations.has('edge-decimation') ? 20 : undefined,
+            overwriteRenderPrecision: optimizations.has('coarse-provinces') || fastRendering
+                ? undefined
+                : 1,
+            renderPrecisionBase: optimizations.has('coarse-provinces') ? 4 : undefined,
+        };
     }
 
     public static renderMapImpl(canvas: HTMLCanvasElement, topBar: TopBar, viewPoint: ViewPoint, worldMap: FEWorldMap, otherRenderContext?: Partial<RenderContext>) {
@@ -996,6 +1023,9 @@ export class Renderer extends Subscriber {
         const vp = stateObject?.victoryPoints[province.id];
         const owner = solveWithCondition(stateObject?.owner, selectedConditions);
         const controller = solveWithCondition(stateObject?.controller, selectedConditions);
+        const compact = this.isCompactTooltipEnabled();
+        const cores = solveWithConditionAsSet(stateObject?.cores, selectedConditions);
+        const adjacencies = province.edges.filter(e => e.type !== 'impassable' && e.to !== -1).map(e => e.to);
 
         this.renderTooltip(`
 ${stateObject?.impassable ? '|r|' + feLocalize('worldmap.tooltip.impassable', 'Impassable') : ''}
@@ -1020,7 +1050,7 @@ ${feLocalize('worldmap.tooltip.strategicregion', 'Strategic region')}=${strategi
 ${stateObject ? `
 ${feLocalize('worldmap.tooltip.owner', 'Owner')}=${owner}
 ${controller && owner !== controller ? `${feLocalize('worldmap.tooltip.controller', 'Controller')}=${controller}` : ''}
-${feLocalize('worldmap.tooltip.coreof', 'Core of')}=${solveWithConditionAsSet(stateObject.cores, selectedConditions).join(',')}
+${feLocalize('worldmap.tooltip.coreof', 'Core of')}=${compact ? `${cores.length} countr${cores.length === 1 ? 'y' : 'ies'}` : cores.join(',')}
 ${feLocalize('worldmap.tooltip.manpower', 'Manpower')}=${toCommaDivideNumber(stateObject.manpower)}` : ''
 }
 ${supplyArea ? `
@@ -1033,9 +1063,12 @@ ${feLocalize('worldmap.tooltip.navalterrain', 'Naval terrain')}=${strategicRegio
 `: ''
 }
 ${feLocalize('worldmap.tooltip.coastal', 'Coastal')}=${province.coastal}
-${feLocalize('worldmap.tooltip.continent', 'Continent')}=${province.continent !== 0 ? `${worldMap.continents[province.continent]}(${province.continent})` : '0'}
-${feLocalize('worldmap.tooltip.adjacencies', 'Adjecencies')}=${province.edges.filter(e => e.type !== 'impassable' && e.to !== -1).map(e => e.to).join(',')}
-${worldMap.getProvinceWarnings(province, stateObject, strategicRegion, supplyArea).map(v => '|r|' + v).join('\n')}`
+${feLocalize('worldmap.tooltip.continent', 'Continent')}=${province.continent !== 0 ? `${worldMap.continents[province.continent]}${compact ? '' : `(${province.continent})`}` : '0'}
+${feLocalize('worldmap.tooltip.adjacencies', 'Adjacencies')}=${compact ? adjacencies.length : adjacencies.join(',')}
+${formatTooltipWarnings(
+    worldMap.getProvinceWarnings(province, stateObject, strategicRegion, supplyArea),
+    compact
+)}`
         );
     }
 
@@ -1053,10 +1086,15 @@ ${worldMap.getProvinceWarnings(province, stateObject, strategicRegion, supplyAre
 
     private renderProvinceHoverSelection(worldMap: FEWorldMap) {
         const selectedIds = this.topBar.selectedProvinceIds$.value;
-        for (const id of selectedIds) {
-            const sel = worldMap.getProvinceById(id);
-            if (sel) {
-                this.renderSelectedProvince(sel, worldMap);
+        const selectedRiverIds = this.topBar.selectedRiverIds$.value;
+        if (selectedRiverIds.size > 0) {
+            this.renderSelectedRivers(worldMap, selectedRiverIds);
+        } else {
+            for (const id of selectedIds) {
+                const sel = worldMap.getProvinceById(id);
+                if (sel) {
+                    this.renderSelectedProvince(sel, worldMap);
+                }
             }
         }
         const province = worldMap.getProvinceById(this.topBar.hoverProvinceId$.value);
@@ -1145,6 +1183,40 @@ ${worldMap.getProvinceWarnings(province, stateObject, strategicRegion, supplyAre
         }
     }
 
+    /**
+     * Draw the selection from the actual rivers.bmp component pixels. The
+     * underlying province selection remains available to area operations, but
+     * the visible lasso no longer expands to whole touched provinces.
+     */
+    private renderSelectedRivers(worldMap: FEWorldMap, selectedRiverIds: ReadonlySet<number>) {
+        const context = this.backCanvasContext;
+        const viewPoint = this.viewPoint;
+        const pixelSize = Math.max(1, viewPoint.scale);
+        context.fillStyle = 'rgba(128, 255, 128, 0.9)';
+
+        for (const riverId of selectedRiverIds) {
+            const river = worldMap.rivers[riverId];
+            if (!river) {
+                continue;
+            }
+            for (const xOffset of [-worldMap.width, 0, worldMap.width]) {
+                if (!viewPoint.bboxInView(river.boundingBox, xOffset)) {
+                    continue;
+                }
+                forEachRiverPixel(river, (x, mapY) => {
+                    const mapX = x + xOffset;
+                    const canvasX = viewPoint.convertX(mapX);
+                    const canvasY = viewPoint.convertY(mapY);
+                    if (canvasX + pixelSize <= 0 || canvasX >= context.canvas.width ||
+                        canvasY + pixelSize <= 0 || canvasY >= context.canvas.height) {
+                        return;
+                    }
+                    context.fillRect(canvasX, canvasY, pixelSize, pixelSize);
+                });
+            }
+        }
+    }
+
     private renderCountryTooltip(tag: string, worldMap: FEWorldMap) {
         const selectedConditions = this.topBar.selectedConditions$.value;
         const ownedStates: State[] = [];
@@ -1223,6 +1295,8 @@ ${feLocalize('worldmap.tooltip.victorypoints', 'Victory points')}=${toCommaDivid
         const supplyArea = worldMap.getSupplyAreaByStateId(state.id);
         const owner = solveWithCondition(state.owner, selectedConditions);
         const controller = solveWithCondition(state.controller, selectedConditions);
+        const compact = this.isCompactTooltipEnabled();
+        const cores = solveWithConditionAsSet(state.cores, selectedConditions);
         this.renderTooltip(`
 ${state.impassable ? '|r|' + feLocalize('worldmap.tooltip.impassable', 'Impassable') : ''}
 ${feLocalize('worldmap.tooltip.state', 'State')}=${state.localisedName ? `${state.localisedName} (${state.id})` : state.id}
@@ -1231,14 +1305,14 @@ ${feLocalize('worldmap.tooltip.supplyarea', 'Supply area')}=${supplyArea.id}
 ` : ''}
 ${feLocalize('worldmap.tooltip.owner', 'Owner')}=${owner}
 ${controller && owner !== controller ? `${feLocalize('worldmap.tooltip.controller', 'Controller')}=${controller}` : ''}
-${feLocalize('worldmap.tooltip.coreof', 'Core of')}=${solveWithConditionAsSet(state.cores, selectedConditions).join(',')}
+${feLocalize('worldmap.tooltip.coreof', 'Core of')}=${compact ? `${cores.length} countr${cores.length === 1 ? 'y' : 'ies'}` : cores.join(',')}
 ${feLocalize('worldmap.tooltip.manpower', 'Manpower')}=${toCommaDivideNumber(state.manpower)}
 ${feLocalize('worldmap.tooltip.category', 'Category')}=${state.category}
 ${supplyArea ? `
 ${feLocalize('worldmap.tooltip.supplyvalue', 'Supply value')}=${supplyArea.value}
 ` : ''}
-${feLocalize('worldmap.tooltip.provinces', 'Provinces')}=${state.provinces.join(',')}
-${worldMap.getStateWarnings(state, supplyArea).map(v => '|r|' + v).join('\n')}`,
+${feLocalize('worldmap.tooltip.provinces', 'Provinces')}=${compact ? state.provinces.length : state.provinces.join(',')}
+${formatTooltipWarnings(worldMap.getStateWarnings(state, supplyArea), compact)}`,
             (width, height) => {
                 const { width: w, height: h } = Renderer.getResourcesSize(state);
                 return { width: Math.max(width, w), height: height + h };
@@ -1249,28 +1323,39 @@ ${worldMap.getStateWarnings(state, supplyArea).map(v => '|r|' + v).join('\n')}`,
     }
 
     private renderStrategicRegionTooltip(strategicRegion: StrategicRegion, worldMap: FEWorldMap) {
+        const compact = this.isCompactTooltipEnabled();
         this.renderTooltip(`
 ${feLocalize('worldmap.tooltip.strategicregion', 'Strategic region')}=${strategicRegion.id}
 ${strategicRegion.navalTerrain ? `
 ${feLocalize('worldmap.tooltip.navalterrain', 'Naval terrain')}=${strategicRegion.navalTerrain}
 `: ''
 }
-${feLocalize('worldmap.tooltip.provinces', 'Provinces')}=${strategicRegion.provinces.join(',')}
-${worldMap.getStrategicRegionWarnings(strategicRegion).map(v => '|r|' + v).join('\n')}`);
+${feLocalize('worldmap.tooltip.provinces', 'Provinces')}=${compact ? strategicRegion.provinces.length : strategicRegion.provinces.join(',')}
+${formatTooltipWarnings(worldMap.getStrategicRegionWarnings(strategicRegion), compact)}`);
     }
 
     private renderSupplyAreaTooltip(supplyArea: SupplyArea, worldMap: FEWorldMap) {
+        const compact = this.isCompactTooltipEnabled();
         this.renderTooltip(`
 ${feLocalize('worldmap.tooltip.supplyarea', 'Supply area')}=${supplyArea.id}
 ${feLocalize('worldmap.tooltip.supplyvalue', 'Supply value')}=${supplyArea.value}
-${feLocalize('worldmap.tooltip.states', 'States')}=${supplyArea.states.join(',')}
-${worldMap.getSupplyAreaWarnings(supplyArea).map(v => '|r|' + v).join('\n')}`);
+${feLocalize('worldmap.tooltip.states', 'States')}=${compact ? supplyArea.states.length : supplyArea.states.join(',')}
+${formatTooltipWarnings(worldMap.getSupplyAreaWarnings(supplyArea), compact)}`);
     }
 
     private renderTooltip(tooltip: string, sizeCallback?: (width: number, height: number) => {width: number, height: number}, renderCallback?: (x: number, y: number) => void) {
         const backCanvasContext = this.backCanvasContext;
         const cursorX = this.cursorX;
         const cursorY = this.cursorY;
+        this.tooltipRendered = true;
+        this.updateAccessibleTooltip(
+            tooltip
+                .replace(/\|r\|/g, `${feLocalize('worldmap.warning', 'Warning')}: `)
+                .split('\n')
+                .map(line => line.trim().replace('=', ': '))
+                .filter(Boolean)
+                .join('. ')
+        );
 
         let mapX = this.viewPoint.convertBackX(cursorX);
         if (this.loader.worldMap.width > 0 && mapX >= this.loader.worldMap.width) {
@@ -1278,7 +1363,9 @@ ${worldMap.getSupplyAreaWarnings(supplyArea).map(v => '|r|' + v).join('\n')}`);
         }
         const mapY = this.viewPoint.convertBackY(cursorY);
 
-        tooltip = `(${mapX}, ${mapY})\nX=${mapX}, Z=${this.loader.worldMap.height - 1 - mapY}\n` + tooltip;
+        tooltip = this.isCompactTooltipEnabled()
+            ? `X=${mapX}, Z=${this.loader.worldMap.height - 1 - mapY}\n${tooltip}`
+            : `(${mapX}, ${mapY})\nX=${mapX}, Z=${this.loader.worldMap.height - 1 - mapY}\n${tooltip}`;
 
         const colorPrefix = /^\|r\|/;
         const regex = /(\n)|((?:\|r\|)?(?:.{40,59}[, ]|.{60}))/g;
@@ -1301,9 +1388,7 @@ ${worldMap.getSupplyAreaWarnings(supplyArea).map(v => '|r|' + v).join('\n')}`);
             })
             .filter(v => v?.trim());
 
-        const fontSize = 14;
-        let toolTipOffsetX = 10;
-        let toolTipOffsetY = 10;
+        const fontSize = document.body.dataset.largeText === 'true' ? 17 : 14;
         const marginX = 10;
         const marginY = 10;
         const linePadding = 3;
@@ -1313,25 +1398,25 @@ ${worldMap.getSupplyAreaWarnings(supplyArea).map(v => '|r|' + v).join('\n')}`);
         let width = max(text.map(t => backCanvasContext.measureText(t).width)) ?? 0;
         let height = fontSize * text.length + linePadding * (text.length - 1);
 
-        if (cursorX + toolTipOffsetX + width + 2 * marginX > this.canvasWidth) {
-            toolTipOffsetX = -10 - (width + 2 * marginX);
-        }
-        
-        if (cursorY + toolTipOffsetY + height + 2 * marginY > this.canvasHeight) {
-            toolTipOffsetY = -10 - (height + 2 * marginY);
-        }
-        backCanvasContext.strokeStyle = '#7F7F7F';
-        backCanvasContext.fillStyle = 'white';
-        backCanvasContext.textBaseline = 'top';
-
         if (sizeCallback) {
             const result = sizeCallback(width, height);
             width = result.width;
             height = result.height;
         }
 
-        backCanvasContext.fillRect(cursorX + toolTipOffsetX, cursorY + toolTipOffsetY, width + 2 * marginX, height + 2 * marginY);
-        backCanvasContext.strokeRect(cursorX + toolTipOffsetX, cursorY + toolTipOffsetY, width + 2 * marginX, height + 2 * marginY);
+        const position = placeTooltip(
+            cursorX,
+            cursorY,
+            width + 2 * marginX,
+            height + 2 * marginY,
+            this.canvasWidth,
+            this.canvasHeight
+        );
+        backCanvasContext.strokeStyle = '#7F7F7F';
+        backCanvasContext.fillStyle = 'white';
+        backCanvasContext.textBaseline = 'top';
+        backCanvasContext.fillRect(position.x, position.y, width + 2 * marginX, height + 2 * marginY);
+        backCanvasContext.strokeRect(position.x, position.y, width + 2 * marginX, height + 2 * marginY);
 
         text.forEach((t, i) => {
             backCanvasContext.fillStyle = 'black';
@@ -1340,13 +1425,28 @@ ${worldMap.getSupplyAreaWarnings(supplyArea).map(v => '|r|' + v).join('\n')}`);
                 t = t.substring(3);
             }
             t = t.trim();
-            backCanvasContext.fillText(t, cursorX + toolTipOffsetX + marginX, cursorY + toolTipOffsetY + marginY + i * (fontSize + linePadding));
+            backCanvasContext.fillText(t, position.x + marginX, position.y + marginY + i * (fontSize + linePadding));
         });
 
         backCanvasContext.fillStyle = 'black';
         if (renderCallback) {
-            renderCallback(cursorX + toolTipOffsetX + marginX, cursorY + toolTipOffsetY + marginY + text.length * (fontSize + linePadding));
+            renderCallback(position.x + marginX, position.y + marginY + text.length * (fontSize + linePadding));
         }
+    }
+
+    private updateAccessibleTooltip(text: string): void {
+        if (text === this.accessibleTooltipText) {
+            return;
+        }
+        this.accessibleTooltipText = text;
+        const status = document.getElementById('map-accessible-status');
+        if (status) {
+            status.textContent = text;
+        }
+    }
+
+    private isCompactTooltipEnabled(): boolean {
+        return this.topBar.display.selectedValues$.value.includes('compacttooltip');
     }
 
     private static renderAllOffsets(viewPoint: ViewPoint, boundingBox: Zone, step: number, callback: (xOffset: number) => void, minimalRenderCount: number = 1) {

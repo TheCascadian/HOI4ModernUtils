@@ -12,6 +12,7 @@ import type { Province } from '../../src/previewdef/worldmap/definitions';
 };
 
 const { Renderer } = require('../../webviewsrc/worldmap/renderer') as typeof import('../../webviewsrc/worldmap/renderer');
+const { calculateWheelZoom } = require('../../webviewsrc/worldmap/viewpoint') as typeof import('../../webviewsrc/worldmap/viewpoint');
 
 type RendererInternals = {
     renderRivers(renderContext: any, worldMap: any, context: CanvasRenderingContext2D, xOffset: number): void;
@@ -140,6 +141,42 @@ function renderFallbackEdge(from: Province, renderedProvincesById: Record<number
 }
 
 describe('World-map renderer regressions', () => {
+    describe('wheel zoom', () => {
+        it('allows continuous zoom between the former clamped levels', () => {
+            assert.strictEqual(calculateWheelZoom(1, -100, 0, false), 1.1);
+            assert.ok(Math.abs(calculateWheelZoom(1.3, -100, 0, false) - 1.43) < 1e-12);
+        });
+
+        it('supports Shift for fine adjustment and retains the zoom bounds', () => {
+            assert.strictEqual(calculateWheelZoom(1, -100, 0, true), 1.025);
+            assert.strictEqual(calculateWheelZoom(64, -100, 0, false), 64);
+            assert.strictEqual(calculateWheelZoom(0.25, 100, 0, false), 0.25);
+        });
+    });
+
+    describe('live Performance toggle mapping', () => {
+        it('maps every sampling toggle into the live render context', () => {
+            const normal = Renderer.resolveRenderOptions(false, new Set());
+            assert.strictEqual(normal.preciseEdge, true);
+            assert.strictEqual(normal.overwriteRenderPrecision, 1);
+
+            const optimized = Renderer.resolveRenderOptions(
+                false,
+                new Set(['edge-decimation', 'coarse-provinces'] as const)
+            );
+            assert.strictEqual(optimized.preciseEdge, false);
+            assert.strictEqual(optimized.edgeSampleBase, 20);
+            assert.strictEqual(optimized.overwriteRenderPrecision, undefined);
+            assert.strictEqual(optimized.renderPrecisionBase, 4);
+        });
+
+        it('passes fidelity-preserving and pixel-collapse switches through unchanged', () => {
+            const selected = new Set(['warning-index', 'river-device-pixel-collapse', 'label-grid-dedupe'] as const);
+            const options = Renderer.resolveRenderOptions(false, selected);
+            assert.strictEqual(options.optimizations, selected);
+        });
+    });
+
     describe('river viewport clipping', () => {
         it('does not draw pixels fully outside any of the four canvas boundaries', () => {
             assert.deepStrictEqual(renderRiverPixel(-1, 2), []);

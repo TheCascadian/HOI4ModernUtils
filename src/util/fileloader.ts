@@ -504,6 +504,11 @@ async function getReplacePaths(): Promise<string[] | undefined> {
     return undefined;
 }
 
+export function invalidateModDescriptorCaches(): void {
+    replacePathsCache.clear();
+    modPathCache.clear();
+}
+
 async function getReplacePathsFromModFile(absolutePath: string): Promise<string[]> {
     const content = (await readFile(vscode.Uri.parse(absolutePath))).toString();
     const node = parseHoi4File(content, localize('infile', 'In file {0}:\n', absolutePath));

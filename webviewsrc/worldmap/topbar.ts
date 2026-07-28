@@ -9,10 +9,11 @@ import { ContextMenu, ContextMenuItem } from "../util/contextmenu";
 import { BehaviorSubject, combineLatest, fromEvent } from 'rxjs';
 import { Renderer, solveWithCondition, solveWithConditionAsSet } from './renderer';
 import { sendEvent } from '../util/telemetry';
-import { getState } from "../util/common";
+import { getState, setState } from "../util/common";
 import { ConditionItem, conditionItemToStringValue, conditionToString, stringValueToConditionItem } from "../../src/hoiformat/condition";
 import { Zone } from "../../src/previewdef/worldmap/definitions";
 import { getBrushBounds } from "./brush";
+import { selectProvinceIds, selectRiverProvinceIds } from "./selection";
 
 export type ViewMode = 'province' | 'state' | 'strategicregion' | 'supplyarea' | 'warnings' | 'country';
 export type ColorSet = 'provinceid' | 'provincetype' | 'terrain' | 'owner' | 'controller' | 'stateid' | 'manpower' |
@@ -134,6 +135,10 @@ function getConfirmNewProvinceCreation(): boolean {
     return value !== false;
 }
 
+function getAutoCoreTransfers(): boolean {
+    return (window as any)['__autoCoreTransfers'] === true;
+}
+
 export class TopBar extends Subscriber {
     public viewMode$: BehaviorSubject<ViewMode>;
     public colorSet$: BehaviorSubject<ColorSet>;
@@ -141,6 +146,8 @@ export class TopBar extends Subscriber {
     // Backward-compat alias for older callers/tools expecting a single selected province stream
     public selectedProvinceId$: BehaviorSubject<number | undefined>;
     public selectedProvinceIds$: BehaviorSubject<Set<number>>;
+    /** River components whose exact rivers.bmp pixels form the active selection overlay. */
+    public selectedRiverIds$: BehaviorSubject<Set<number>>;
     public selectedStateIds$: BehaviorSubject<Set<number>>;
     public hoverStateId$: BehaviorSubject<number | undefined>;
     public selectedStateId$: BehaviorSubject<number | undefined>;
@@ -186,8 +193,17 @@ export class TopBar extends Subscriber {
     public paintbrushCanUndo$: BehaviorSubject<boolean>;
     /** Whether a paintbrush save is pending backend acknowledgment */
     private paintbrushSavePending = false;
+    private pendingProvinceMerge: { targetId: number; sourceCount: number } | undefined;
     /** Whether to refresh after the pending paintbrush save completes */
     private refreshAfterPaintbrushSave = false;
+    private mergeRequestSequence = 0;
+    private pendingStateMerge: {
+        requestId: string;
+        targetId: number;
+        sourceCount: number;
+        before: StateSnapshot[];
+        after: StateSnapshot[];
+    } | undefined;
     /** Can redo a paintbrush operation */
     public paintbrushCanRedo$: BehaviorSubject<boolean>;
 
@@ -199,6 +215,31 @@ export class TopBar extends Subscriber {
     private contextMenu: ContextMenu = new ContextMenu();
     private pendingPuppetWrite = false;
     private countryActionMode: 'puppet' | 'annex' | 'transfer' = 'puppet';
+    private autoCoreTransfers = getAutoCoreTransfers();
+    private pendingCreatedCountryStateIds: number[] = [];
+    private areaPerContinent = getState().areaPerContinent === true;
+    private areaIncludeWasteland = getState().areaIncludeWasteland === true;
+    private areaOperationPending = false;
+    private continentPipelinePending = false;
+    private selectedContinentPipelineId: number | undefined;
+    private continentPipelineQueue: Array<{ continentId: number; targetCountryTag: string }> = [];
+    private continentPipelineTotals = { provinces: 0, states: 0, regions: 0, records: 0, completed: 0 };
+    private removeAllCoresPending = false;
+    private reindexPending = false;
+    private pendingConfirmedAreaOperation: {
+        operation: import('../../src/previewdef/worldmap/definitions').AreaOperation;
+        provinceIds: number[];
+        stateIds: number[];
+        perContinent: boolean;
+        reindexAfter: boolean;
+        riverIds: number[];
+    } | undefined;
+    private paintTool: 'brush' | 'fill' = 'brush';
+    private paintAllowedProvinceIds: Set<number> | undefined;
+    private transferWandActive = false;
+    private transferWandTargetStateId: number | undefined;
+    private transferWandOwner: string | undefined;
+    private transferWandController: string | undefined;
 
     /** Whether to show the confirmation dialog before creating a new province (mirrors the `worldMapConfirmNewProvinceCreation` setting). */
     private confirmNewProvinceCreation: boolean = getConfirmNewProvinceCreation();
@@ -282,6 +323,7 @@ export class TopBar extends Subscriber {
         this.colorSet$ = toBehaviorSubject(document.getElementById('colorset') as HTMLSelectElement, state.colorSet ?? 'provinceid');
         this.hoverProvinceId$ = new BehaviorSubject<number | undefined>(undefined);
         this.selectedProvinceIds$ = new BehaviorSubject<Set<number>>(new Set<number>(state.selectedProvinceIds ?? []));
+        this.selectedRiverIds$ = new BehaviorSubject<Set<number>>(new Set<number>());
         this.selectedProvinceId$ = new BehaviorSubject<number | undefined>(state.selectedProvinceId ?? state.selectedProvinceIds?.[0] ?? undefined);
         this.selectedStateIds$ = new BehaviorSubject<Set<number>>(new Set<number>(state.selectedStateIds ?? []));
         this.hoverStateId$ = new BehaviorSubject<number | undefined>(undefined);
@@ -339,11 +381,16 @@ export class TopBar extends Subscriber {
         } else {
             this.display.selectAll();
             this.display.selectedValues$.next(
-                this.display.selectedValues$.value.filter(value => value !== 'oceanstateboundary')
+                this.display.selectedValues$.value.filter(
+                    value => value !== 'oceanstateboundary' && value !== 'compacttooltip'
+                )
             );
         }
 
         this.addSubscription(this.selectedProvinceIds$.subscribe(set => {
+            if (this.selectedRiverIds$.value.size > 0) {
+                this.selectedRiverIds$.next(new Set<number>());
+            }
             this.selectedProvinceId$.next(set.values().next().value);
         }));
 
@@ -367,11 +414,16 @@ export class TopBar extends Subscriber {
 
                 if (data.success === false) {
                     this.paintbrushSavePending = false;
+                    this.pendingProvinceMerge = undefined;
                     this.refreshAfterPaintbrushSave = false;
 
                     console.error(
                         'Province BMP persistence failed:',
                         data.error
+                    );
+                    this.showActionStatus(
+                        data.error ?? feLocalize('worldmap.action.mergeprovinces.savefailed', 'Province changes could not be saved. The map was reloaded without the merge.'),
+                        'warn'
                     );
 
                     // Restore authoritative geometry after any optimistic
@@ -392,15 +444,26 @@ export class TopBar extends Subscriber {
                 const shouldRefresh =
                     this.refreshAfterPaintbrushSave ||
                     data.forceReload === true;
-
                 this.refreshAfterPaintbrushSave = false;
 
                 if (this.paintbrushSavePending) {
                     this.finishPaintbrushSession();
                 }
+                const completedProvinceMerge = this.pendingProvinceMerge;
+                this.pendingProvinceMerge = undefined;
 
                 if (shouldRefresh) {
                     this.loader.refresh();
+                }
+                if (completedProvinceMerge) {
+                    this.showActionStatus(
+                        feLocalize(
+                            'worldmap.action.mergeprovinces.done',
+                            'Merged {0} provinces into province {1} and updated state/strategic-region membership.',
+                            completedProvinceMerge.sourceCount,
+                            completedProvinceMerge.targetId
+                        )
+                    );
                 }
 
                 return;
@@ -477,7 +540,7 @@ export class TopBar extends Subscriber {
         });
 
         document.querySelectorAll('.group[viewmode~="' + this.viewMode$.value + '"]').forEach(v => {
-            (v as HTMLDivElement).style.display = 'inline-block';
+            (v as HTMLDivElement).style.display = 'inline-flex';
         });
     
         if (colorSetHidden) {
@@ -495,11 +558,160 @@ export class TopBar extends Subscriber {
         this.loadStrategicRegionEditButtons();
         this.loadNewProvinceButton();
         this.loadPaintbrushToggleButton();
+        this.loadFillBucketButton();
+        this.loadTransferWandButton();
         this.loadPaintbrushPanel();
         this.loadNewProvinceConfirmModal();
+        this.loadAccessibilityControls();
         this.loadRenderOptimizationControls();
         this.loadCountryPuppetModal();
+        this.loadCreateCountryModal();
+        this.loadMergeStatesModal();
+        this.loadResolveProvinceWarnings();
+        this.loadAreaOperationResults();
+        this.loadNorthAmericaPipelineModal();
         this.initExportMapMessageListener();
+    }
+
+    private loadAccessibilityControls() {
+        const button = document.getElementById('accessibility-options-button') as HTMLButtonElement | null;
+        const menu = document.getElementById('accessibility-options-menu') as HTMLDivElement | null;
+        const resetButton = document.getElementById('accessibility-options-reset') as HTMLButtonElement | null;
+        if (!button || !menu) {
+            return;
+        }
+        // Keep the button aligned with the other topbar controls, but portal
+        // the popup out of the toolbar stacking/clipping context.
+        document.body.appendChild(menu);
+
+        type AccessibilityOption = 'reducedMotion' | 'highContrast' | 'largeText' | 'largeTargets';
+        const defaults: Record<AccessibilityOption, boolean> = {
+            reducedMotion: false,
+            highContrast: false,
+            largeText: false,
+            largeTargets: false,
+        };
+        const saved = getState().accessibilityOptions ?? {};
+        const values: Record<AccessibilityOption, boolean> = {
+            reducedMotion: saved.reducedMotion === true,
+            highContrast: saved.highContrast === true,
+            largeText: saved.largeText === true,
+            largeTargets: saved.largeTargets === true,
+        };
+        const checkboxes = Array.from(
+            menu.querySelectorAll<HTMLInputElement>('input[data-accessibility-option]')
+        );
+
+        const apply = () => {
+            document.body.dataset.reducedMotion = String(values.reducedMotion);
+            document.body.dataset.highContrast = String(values.highContrast);
+            document.body.dataset.largeText = String(values.largeText);
+            document.body.dataset.largeTargets = String(values.largeTargets);
+            const enabled = Object.values(values).filter(Boolean).length;
+            button.classList.toggle('active', enabled > 0);
+            button.setAttribute('aria-pressed', String(enabled > 0));
+            button.setAttribute('aria-label', enabled > 0
+                ? `Accessibility options, ${enabled} enabled`
+                : 'Accessibility options');
+            for (const checkbox of checkboxes) {
+                const option = checkbox.dataset.accessibilityOption as AccessibilityOption;
+                checkbox.checked = values[option] ?? defaults[option];
+            }
+        };
+        const close = () => {
+            menu.hidden = true;
+            button.setAttribute('aria-expanded', 'false');
+        };
+        const positionMenu = () => {
+            if (menu.hidden) {
+                return;
+            }
+            const buttonBounds = button.getBoundingClientRect();
+            const menuBounds = menu.getBoundingClientRect();
+            const gap = 8;
+            const left = Math.max(
+                gap,
+                Math.min(buttonBounds.right - menuBounds.width, window.innerWidth - menuBounds.width - gap)
+            );
+            const top = Math.max(8, Math.min(buttonBounds.bottom + 8, window.innerHeight - 80));
+            menu.style.left = `${left}px`;
+            menu.style.right = 'auto';
+            menu.style.top = `${top}px`;
+            menu.style.maxHeight = `${Math.max(72, window.innerHeight - top - 8)}px`;
+        };
+        const toggleMenu = () => {
+            const opening = menu.hidden;
+            menu.hidden = !opening;
+            button.setAttribute('aria-expanded', String(opening));
+            if (opening) {
+                positionMenu();
+                checkboxes[0]?.focus();
+            }
+        };
+
+        apply();
+        this.addSubscription(fromEvent<MouseEvent>(button, 'click').subscribe(event => {
+            event.preventDefault();
+            event.stopPropagation();
+            toggleMenu();
+        }));
+        for (const checkbox of checkboxes) {
+            this.addSubscription(fromEvent<Event>(checkbox, 'change').subscribe(() => {
+                const option = checkbox.dataset.accessibilityOption as AccessibilityOption;
+                values[option] = checkbox.checked;
+                setState({ accessibilityOptions: { ...values } });
+                apply();
+            }));
+        }
+        if (resetButton) {
+            this.addSubscription(fromEvent<MouseEvent>(resetButton, 'click').subscribe(event => {
+                event.preventDefault();
+                for (const option of Object.keys(values) as AccessibilityOption[]) {
+                    values[option] = false;
+                }
+                setState({ accessibilityOptions: { ...values } });
+                apply();
+                checkboxes[0]?.focus();
+            }));
+        }
+        this.addSubscription(fromEvent(window, 'resize').subscribe(positionMenu));
+        const toolbarOuter = document.querySelector('.toolbar-outer');
+        if (toolbarOuter) {
+            this.addSubscription(fromEvent(toolbarOuter, 'scroll').subscribe(positionMenu));
+        }
+        this.addSubscription(fromEvent<KeyboardEvent>(menu, 'keydown').subscribe(event => {
+            if (event.key !== 'Tab') {
+                return;
+            }
+            const focusable = [...checkboxes, ...(resetButton ? [resetButton] : [])];
+            if (focusable.length === 0) {
+                return;
+            }
+            const activeIndex = focusable.indexOf(document.activeElement as HTMLInputElement | HTMLButtonElement);
+            if (event.shiftKey && activeIndex <= 0) {
+                event.preventDefault();
+                focusable[focusable.length - 1].focus();
+            } else if (!event.shiftKey && activeIndex === focusable.length - 1) {
+                event.preventDefault();
+                focusable[0].focus();
+            }
+        }));
+        this.addSubscription(fromEvent<PointerEvent>(document, 'pointerdown').subscribe(event => {
+            const target = event.target as Node;
+            if (!menu.hidden && !menu.contains(target) && !button.contains(target)) {
+                close();
+            }
+        }));
+        this.addSubscription(fromEvent<KeyboardEvent>(document, 'keydown').subscribe(event => {
+            if (event.ctrlKey && event.altKey && event.key.toLowerCase() === 'a') {
+                event.preventDefault();
+                toggleMenu();
+            } else if (event.key === 'Escape' && !menu.hidden) {
+                event.preventDefault();
+                close();
+                button.focus();
+            }
+        }));
     }
 
     private loadRenderOptimizationControls() {
@@ -516,6 +728,10 @@ export class TopBar extends Subscriber {
         if (!button || !menu || !modal || !cancel || !confirm) {
             return;
         }
+        // The toolbar is a horizontally scrolling, backdrop-filtered stacking
+        // context. Keep the popup at the webview root so it overlays the map
+        // instead of being clipped or painted underneath it.
+        document.body.appendChild(menu);
 
         const checkboxes = Array.from(
             menu.querySelectorAll<HTMLInputElement>('input[data-render-optimization]')
@@ -545,6 +761,23 @@ export class TopBar extends Subscriber {
             menu.hidden = true;
             button.setAttribute('aria-expanded', 'false');
         };
+        const positionMenu = () => {
+            if (menu.hidden) {
+                return;
+            }
+            const buttonBounds = button.getBoundingClientRect();
+            const menuBounds = menu.getBoundingClientRect();
+            const gap = 8;
+            const left = Math.max(
+                gap,
+                Math.min(buttonBounds.right - menuBounds.width, window.innerWidth - menuBounds.width - gap)
+            );
+            const top = Math.max(gap, Math.min(buttonBounds.bottom + gap, window.innerHeight - 80));
+            menu.style.left = `${left}px`;
+            menu.style.right = 'auto';
+            menu.style.top = `${top}px`;
+            menu.style.maxHeight = `${Math.max(72, window.innerHeight - top - gap)}px`;
+        };
 
         const closeModal = () => {
             pending = undefined;
@@ -566,6 +799,7 @@ export class TopBar extends Subscriber {
         };
 
         const showConfirmation = (checkbox: HTMLInputElement, optimization: WorldMapRuntimeTestOptimization) => {
+            closeMenu();
             pending = optimization;
             const name = checkbox.dataset.optimizationName ?? optimization;
             const impact = checkbox.dataset.optimizationImpact ?? '';
@@ -588,7 +822,16 @@ export class TopBar extends Subscriber {
             const opening = menu.hidden;
             menu.hidden = !opening;
             button.setAttribute('aria-expanded', String(opening));
+            if (opening) {
+                positionMenu();
+                checkboxes[0]?.focus();
+            }
         }));
+        this.addSubscription(fromEvent(window, 'resize').subscribe(positionMenu));
+        const toolbarOuter = document.querySelector('.toolbar-outer');
+        if (toolbarOuter) {
+            this.addSubscription(fromEvent(toolbarOuter, 'scroll').subscribe(positionMenu));
+        }
 
         for (const checkbox of checkboxes) {
             this.addSubscription(fromEvent<Event>(checkbox, 'change').subscribe(() => {
@@ -731,7 +974,7 @@ export class TopBar extends Subscriber {
 
         // Apply button: confirm (if creating a new province) then commit and exit
         if (applyBtn) {
-            this.addSubscription(fromEvent<PointerEvent>(applyBtn, 'pointerdown').subscribe(e => {
+            this.addSubscription(fromEvent<MouseEvent>(applyBtn, 'click').subscribe(e => {
                 e.preventDefault();
                 e.stopPropagation();
 
@@ -746,7 +989,7 @@ export class TopBar extends Subscriber {
 
         // Cancel button: discard and exit
         if (cancelBtn) {
-            this.addSubscription(fromEvent<PointerEvent>(cancelBtn, 'pointerdown').subscribe(e => {
+            this.addSubscription(fromEvent<MouseEvent>(cancelBtn, 'click').subscribe(e => {
                 e.preventDefault();
                 e.stopPropagation();
                 this.cancelPaintbrushMode();
@@ -777,7 +1020,7 @@ export class TopBar extends Subscriber {
         const dontAskCheckbox = document.getElementById('new-province-confirm-dontask') as HTMLInputElement | null;
 
         if (confirmBtn) {
-            this.addSubscription(fromEvent<PointerEvent>(confirmBtn, 'pointerdown').subscribe(e => {
+            this.addSubscription(fromEvent<MouseEvent>(confirmBtn, 'click').subscribe(e => {
                 e.preventDefault();
                 e.stopPropagation();
 
@@ -792,7 +1035,7 @@ export class TopBar extends Subscriber {
         }
 
         if (cancelBtn) {
-            this.addSubscription(fromEvent<PointerEvent>(cancelBtn, 'pointerdown').subscribe(e => {
+            this.addSubscription(fromEvent<MouseEvent>(cancelBtn, 'click').subscribe(e => {
                 e.preventDefault();
                 e.stopPropagation();
                 this.hideNewProvinceConfirmModal();
@@ -863,7 +1106,7 @@ export class TopBar extends Subscriber {
         this.addSubscription(fromEvent(apply, 'click').subscribe(e => {
             e.preventDefault();
             if (this.countryActionMode === 'annex') {
-                this.annexCountry(target.value);
+                this.annexCountries(Array.from(target.selectedOptions).map(option => option.value));
             } else if (this.countryActionMode === 'transfer') {
                 this.transferSelectedStatesToCountry(target.value);
             } else {
@@ -916,6 +1159,7 @@ export class TopBar extends Subscriber {
         }
 
         this.countryActionMode = mode;
+        target.multiple = mode === 'annex';
         const isPuppet = mode === 'puppet';
         if (autonomy) autonomy.style.display = isPuppet ? 'block' : 'none';
         if (autonomyLabel) autonomyLabel.style.display = isPuppet ? 'block' : 'none';
@@ -1048,21 +1292,22 @@ export class TopBar extends Subscriber {
             : undefined;
     }
 
-    private annexCountry(targetTag: string) {
+    private annexCountries(targetTags: string[]) {
         const annexingTag = this.selectedCountryTag$.value;
-        if (!annexingTag || !targetTag || annexingTag === targetTag) {
-            this.setCountryPuppetError(feLocalize('worldmap.country.annex.missingtarget', 'Choose a different country to annex.'));
+        const normalizedTargets = Array.from(new Set(targetTags.filter(tag => tag && tag !== annexingTag)));
+        if (!annexingTag || normalizedTargets.length === 0) {
+            this.setCountryPuppetError(feLocalize('worldmap.country.annex.missingtarget', 'Choose one or more different countries to annex.'));
             return;
         }
 
         const affectedStates: number[] = [];
         this.loader.worldMap.forEachState(state => {
-            if (solveWithCondition(state.owner, this.selectedConditions$.value) === targetTag) {
+            if (normalizedTargets.includes(solveWithCondition(state.owner, this.selectedConditions$.value) ?? '')) {
                 affectedStates.push(state.id);
             }
         });
         if (affectedStates.length === 0) {
-            this.setCountryPuppetError(feLocalize('worldmap.country.annex.nostates', '{0} owns no states under the selected conditions.', targetTag));
+            this.setCountryPuppetError(feLocalize('worldmap.country.annex.nostates', 'The selected countries own no states under the selected conditions.'));
             return;
         }
 
@@ -1070,7 +1315,7 @@ export class TopBar extends Subscriber {
         for (const stateId of affectedStates) {
             const state = this.loader.worldMap.getStateById(stateId);
             if (state) {
-                state.owner = [{ condition: true, value: annexingTag }];
+                this.transferStateOwnership(state, annexingTag);
             }
         }
         const after = this.loader.worldMap.snapshotStates(affectedStates);
@@ -1078,7 +1323,7 @@ export class TopBar extends Subscriber {
         this.persistStates(affectedStates);
         this.mapMutation$.next(this.mapMutation$.value + 1);
         this.hideCountryPuppetModal();
-        this.showActionStatus(feLocalize('worldmap.country.annex.done', 'Transferred {0} states from {1} to {2}.', affectedStates.length, targetTag, annexingTag));
+        this.showActionStatus(feLocalize('worldmap.country.annex.done', 'Transferred {0} states from {1} countries to {2}.', affectedStates.length, normalizedTargets.length, annexingTag));
     }
 
     private transferSelectedStatesToCountry(targetTag: string) {
@@ -1092,7 +1337,7 @@ export class TopBar extends Subscriber {
         for (const stateId of stateIds) {
             const state = this.loader.worldMap.getStateById(stateId);
             if (state) {
-                state.owner = [{ condition: true, value: targetTag }];
+                this.transferStateOwnership(state, targetTag);
             }
         }
         const after = this.loader.worldMap.snapshotStates(stateIds);
@@ -1103,6 +1348,14 @@ export class TopBar extends Subscriber {
         this.showActionStatus(feLocalize('worldmap.country.transfer.done', 'Transferred {0} states to {1}.', stateIds.length, targetTag));
     }
 
+    private transferStateOwnership(state: any, targetTag: string) {
+        state.owner = [{ condition: true, value: targetTag }];
+        state.controller = [{ condition: true, value: targetTag }];
+        if (this.autoCoreTransfers && !state.cores.some((core: any) => core.value === targetTag && core.condition === true)) {
+            state.cores.push({ condition: true, value: targetTag });
+        }
+    }
+
     private setCountryPuppetError(message: string) {
         const errorElement = document.getElementById('country-puppet-error');
         if (errorElement) {
@@ -1110,10 +1363,729 @@ export class TopBar extends Subscriber {
         }
     }
 
+    private loadCreateCountryModal() {
+        const modal = document.getElementById('create-country-modal') as HTMLDivElement | null;
+        const tag = document.getElementById('create-country-tag') as HTMLInputElement | null;
+        const name = document.getElementById('create-country-name') as HTMLInputElement | null;
+        const apply = document.getElementById('create-country-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('create-country-cancel') as HTMLButtonElement | null;
+        if (!modal || !tag || !name || !apply || !cancel) return;
+
+        this.addSubscription(fromEvent(tag, 'input').subscribe(() => {
+            tag.value = tag.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3);
+        }));
+        this.addSubscription(fromEvent(cancel, 'click').subscribe(() => this.hideCreateCountryModal()));
+        this.addSubscription(fromEvent(apply, 'click').subscribe(() => {
+            const selected = Array.from(this.selectedStateIds$.value);
+            if (selected.length === 0 || !/^[A-Z0-9]{3}$/.test(tag.value) || !name.value.trim()) {
+                this.setCreateCountryError(feLocalize('worldmap.country.create.invalid', 'Enter a unique three-character TAG and localized name.'));
+                return;
+            }
+            this.pendingCreatedCountryStateIds = selected;
+            apply.disabled = true;
+            cancel.disabled = true;
+            vscode.postMessage<WorldMapMessage>({
+                command: 'createcountry',
+                tag: tag.value,
+                localizedName: name.value.trim(),
+                capitalStateId: selected[0],
+            });
+        }));
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'createcountryresult') return;
+            apply.disabled = false;
+            cancel.disabled = false;
+            if (!message.success || !message.tag) {
+                this.setCreateCountryError(message.error ?? feLocalize('worldmap.country.create.failed', 'Country creation failed.'));
+                return;
+            }
+
+            const ids = [...this.pendingCreatedCountryStateIds];
+            const before = this.loader.worldMap.snapshotStates(ids);
+            for (const id of ids) {
+                const state = this.loader.worldMap.getStateById(id);
+                if (state) this.transferStateOwnership(state, message.tag);
+            }
+            const after = this.loader.worldMap.snapshotStates(ids);
+            this.recordMapEdit(before, after);
+            this.persistStates(ids);
+            this.selectedCountryTag$.next(message.tag);
+            this.hideCreateCountryModal();
+            this.showActionStatus(feLocalize('worldmap.country.create.done', 'Created {0} and transferred {1} states.', message.tag, ids.length));
+            this.loader.refresh();
+        }));
+    }
+
+    private showCreateCountryModal() {
+        const modal = document.getElementById('create-country-modal') as HTMLDivElement | null;
+        const tag = document.getElementById('create-country-tag') as HTMLInputElement | null;
+        const name = document.getElementById('create-country-name') as HTMLInputElement | null;
+        const summary = document.getElementById('create-country-summary');
+        if (!modal || !tag || !name || this.selectedStateIds$.value.size === 0) return;
+        if (summary) summary.textContent = feLocalize('worldmap.country.create.summary', 'Selected states: {0}. Auto-core: {1}.', this.selectedStateIds$.value.size, this.autoCoreTransfers ? 'on' : 'off');
+        tag.value = '';
+        name.value = '';
+        this.setCreateCountryError('');
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        tag.focus();
+    }
+
+    private hideCreateCountryModal() {
+        const modal = document.getElementById('create-country-modal');
+        if (modal) {
+            modal.hidden = true;
+            modal.style.display = 'none';
+        }
+        this.setCreateCountryError('');
+    }
+
+    private setCreateCountryError(message: string) {
+        const error = document.getElementById('create-country-error');
+        if (error) error.textContent = message;
+    }
+
+    private loadMergeStatesModal() {
+        const modal = document.getElementById('merge-states-modal') as HTMLDivElement | null;
+        const target = document.getElementById('merge-states-target') as HTMLSelectElement | null;
+        const apply = document.getElementById('merge-states-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('merge-states-cancel') as HTMLButtonElement | null;
+        if (!modal || !target || !apply || !cancel) return;
+        this.addSubscription(fromEvent(cancel, 'click').subscribe(() => this.hideMergeStatesModal()));
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'persiststatesresult' ||
+                !this.pendingStateMerge ||
+                message.requestId !== this.pendingStateMerge.requestId) {
+                return;
+            }
+            const pending = this.pendingStateMerge;
+            this.pendingStateMerge = undefined;
+            apply.disabled = false;
+            cancel.disabled = false;
+            if (!message.success) {
+                this.loader.worldMap.restoreStates(pending.before);
+                this.mapMutation$.next(this.mapMutation$.value + 1);
+                this.showActionStatus(
+                    message.error ?? feLocalize('worldmap.state.merge.failed', 'State merge could not be saved. No states were merged.'),
+                    'warn'
+                );
+                return;
+            }
+            this.recordMapEdit(pending.before, pending.after);
+            this.selectedStateIds$.next(new Set([pending.targetId]));
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.loader.refresh();
+            this.hideMergeStatesModal();
+            this.showActionStatus(feLocalize(
+                'worldmap.state.merge.done',
+                'Merged {0} states into state {1}.',
+                pending.sourceCount,
+                pending.targetId
+            ));
+        }));
+        this.addSubscription(fromEvent(apply, 'click').subscribe(() => {
+            if (this.pendingStateMerge) return;
+            const ids = Array.from(this.selectedStateIds$.value);
+            const targetId = Number.parseInt(target.value, 10);
+            const states = ids.map(id => this.loader.worldMap.getStateById(id)).filter((state): state is NonNullable<typeof state> => !!state);
+            const owners = new Set(states.map(state => solveWithCondition(state.owner, this.selectedConditions$.value) ?? ''));
+            if (!Number.isInteger(targetId) || states.length !== ids.length) {
+                const error = document.getElementById('merge-states-error');
+                if (error) error.textContent = feLocalize('worldmap.state.merge.invalid', 'One or more selected states no longer exist.');
+                return;
+            }
+            if (owners.size > 1) {
+                const error = document.getElementById('merge-states-error');
+                if (error) error.textContent = feLocalize('worldmap.state.merge.ownerconflict', 'Selected states must have the same active owner.');
+                return;
+            }
+            const before = this.loader.worldMap.snapshotStates(ids);
+            const result = this.loader.worldMap.mergeStates(targetId, ids.filter(id => id !== targetId));
+            if (!result) return;
+            const after = this.loader.worldMap.snapshotStates(ids);
+            const requestId = `state-merge-${++this.mergeRequestSequence}`;
+            this.pendingStateMerge = {
+                requestId,
+                targetId,
+                sourceCount: ids.length - 1,
+                before,
+                after,
+            };
+            apply.disabled = true;
+            cancel.disabled = true;
+            this.persistStates(
+                [targetId],
+                result.deletedFiles,
+                result.deletedStates,
+                requestId,
+                Object.fromEntries(ids.filter(id => id !== targetId).map(id => [id, targetId]))
+            );
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize('worldmap.state.merge.pending', 'Saving state merge...'));
+        }));
+    }
+
+    private showMergeStatesModal() {
+        const modal = document.getElementById('merge-states-modal') as HTMLDivElement | null;
+        const target = document.getElementById('merge-states-target') as HTMLSelectElement | null;
+        const summary = document.getElementById('merge-states-summary');
+        const ids = Array.from(this.selectedStateIds$.value);
+        if (!modal || !target || ids.length < 2) return;
+        target.replaceChildren();
+        for (const id of ids) {
+            const state = this.loader.worldMap.getStateById(id);
+            if (!state) continue;
+            const option = document.createElement('option');
+            option.value = String(id);
+            option.textContent = state.localisedName ? `${state.localisedName} (${id})` : `${state.name} (${id})`;
+            target.appendChild(option);
+        }
+        if (summary) summary.textContent = feLocalize('worldmap.state.merge.summary', '{0} states selected. Manpower, resources, cores, provinces, and victory points will be combined.', ids.length);
+        const error = document.getElementById('merge-states-error');
+        if (error) error.textContent = '';
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        target.focus();
+    }
+
+    private hideMergeStatesModal() {
+        const modal = document.getElementById('merge-states-modal');
+        if (modal) {
+            modal.hidden = true;
+            modal.style.display = 'none';
+        }
+    }
+
+    private toggleAutoCoreTransfers() {
+        this.autoCoreTransfers = !this.autoCoreTransfers;
+        vscode.postMessage<WorldMapMessage>({ command: 'setautocoretransfers', value: this.autoCoreTransfers });
+        this.showActionStatus(feLocalize('worldmap.autocore.status', 'Auto-core transferred states: {0}.', this.autoCoreTransfers ? 'on' : 'off'));
+    }
+
+    private resolveProvinceWarnings() {
+        if (!window.confirm(feLocalize(
+            'worldmap.province.resolve.confirm',
+            'Remove invalid province references from adjacencies, railways, and supply nodes, then reload the map?'
+        ))) return;
+        vscode.postMessage<WorldMapMessage>({ command: 'resolveprovincewarnings' });
+        this.showActionStatus(feLocalize('worldmap.province.resolve.pending', 'Resolving province warnings...'));
+    }
+
+    private loadResolveProvinceWarnings() {
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'resolveprovincewarningsresult') return;
+            if (!message.success) {
+                this.showActionStatus(message.error ?? feLocalize('worldmap.province.resolve.failed', 'Province warning repair failed.'), 'warn');
+                return;
+            }
+            const warningCount = message.warnings?.length ?? 0;
+            this.showActionStatus(feLocalize('worldmap.province.resolve.done', 'Province references repaired. Remaining repair warnings: {0}.', warningCount));
+            this.loader.refresh();
+        }));
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'reindexmapresult') return;
+            this.reindexPending = false;
+            if (!message.success) {
+                this.showActionStatus(message.error ?? feLocalize('worldmap.reindex.failed', 'Sequential reindexing failed.'), 'warn');
+                return;
+            }
+            this.showActionStatus(feLocalize(
+                'worldmap.reindex.done',
+                'Sequential province/state reindex complete: {0} references changed.',
+                message.changedRecords ?? 0
+            ));
+            this.loader.refresh();
+        }));
+    }
+
+    private runAreaOperation(operation: import('../../src/previewdef/worldmap/definitions').AreaOperation) {
+        if (this.areaOperationPending) return;
+        const currentViewMode = this.viewMode$.value;
+        const provinceIds = currentViewMode === 'province'
+            ? Array.from(this.selectedProvinceIds$.value)
+            : [];
+        const stateIds = currentViewMode === 'state'
+            ? Array.from(this.selectedStateIds$.value)
+            : currentViewMode === 'supplyarea'
+                ? [...(this.loader.worldMap.getSupplyAreaById(this.selectedSupplyAreaId$.value)?.states ?? [])]
+                : [];
+        const riverIds = operation === 'convert-to-ocean'
+            ? Array.from(this.selectedRiverIds$.value)
+            : [];
+        if (provinceIds.length === 0 && stateIds.length === 0) {
+            this.showActionStatus(feLocalize('worldmap.area.noselection', 'Select one or more provinces or states first.'), 'warn');
+            return;
+        }
+        const labels: Record<typeof operation, string> = {
+            'clear-railways': 'clear every railway touching the area',
+            'clear-buildings': 'remove all state and map buildings in the area',
+            'one-population-per-state': 'set every affected state to 1 population',
+            'clear-supply-hubs': 'remove every supply hub in the area',
+            'clear-water-crossings': 'remove every strait, canal, and other water-based crossing touching the area',
+            'clear-resources': 'remove all resource blocks from affected states',
+            'lowest-development': `set every affected state to ${this.areaIncludeWasteland ? 'wasteland' : 'the lowest non-wasteland level'}`,
+            'convert-to-ocean': riverIds.length > 0
+                ? 'extract the exact selected rivers.bmp pixels into new ocean provinces without converting the land provinces underneath'
+                : 'convert the area to ocean and rebuild dependent state, strategic-region, adjacency, railway, supply-hub, and building data',
+        };
+        const scope = riverIds.length > 0
+            ? `${riverIds.length} selected river component(s)`
+            : this.areaPerContinent ? 'the entire touched continent or continents' : 'the selected area';
+        this.showAreaOperationConfirmation(
+            operation,
+            provinceIds,
+            stateIds,
+            riverIds.length === 0 && this.areaPerContinent,
+            false,
+            labels[operation],
+            scope,
+            riverIds
+        );
+    }
+
+    private runGlobalAreaOperation(operation: 'clear-water-crossings' | 'clear-resources') {
+        const worldMap = this.loader.worldMap;
+        const provinceIds: number[] = [];
+        worldMap.forEachProvince(province => {provinceIds.push(province.id);});
+        const stateIds: number[] = [];
+        worldMap.forEachState(state => {stateIds.push(state.id);});
+        const description = operation === 'clear-water-crossings'
+            ? 'remove every strait, canal, and water-based crossing from the loaded map'
+            : 'remove every resource block from every loaded state';
+        this.showAreaOperationConfirmation(operation, provinceIds, stateIds, false, true, description, 'the entire loaded map');
+    }
+
+    private showAreaOperationConfirmation(
+        operation: import('../../src/previewdef/worldmap/definitions').AreaOperation,
+        provinceIds: number[],
+        stateIds: number[],
+        perContinent: boolean,
+        reindexAfter: boolean,
+        description: string,
+        scope: string,
+        riverIds: number[] = []
+    ) {
+        const modal = document.getElementById('north-america-pipeline-modal') as HTMLDivElement | null;
+        const target = document.getElementById('north-america-pipeline-target') as HTMLSelectElement | null;
+        const targetLabel = document.getElementById('north-america-pipeline-target-label') as HTMLLabelElement | null;
+        const title = document.getElementById('north-america-pipeline-title');
+        const summary = document.getElementById('north-america-pipeline-summary');
+        const apply = document.getElementById('north-america-pipeline-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('north-america-pipeline-cancel') as HTMLButtonElement | null;
+        if (!modal || !target || !targetLabel || !title || !summary || !apply || !cancel) return;
+        this.pendingConfirmedAreaOperation = {
+            operation,
+            provinceIds,
+            stateIds,
+            perContinent,
+            reindexAfter: reindexAfter || (operation === 'convert-to-ocean' && riverIds.length === 0),
+            riverIds,
+        };
+        modal.dataset.mode = 'area-operation';
+        title.textContent = feLocalize('worldmap.area.destructive.title', 'Confirm Destructive Action');
+        summary.textContent = feLocalize(
+            'worldmap.area.confirm',
+            'This will {0} for {1}. Files are changed on disk and this action is not covered by map undo. Continue?',
+            description,
+            scope
+        );
+        target.hidden = true;
+        targetLabel.hidden = true;
+        apply.disabled = false;
+        cancel.disabled = false;
+        this.setNorthAmericaPipelineError('');
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        apply.focus();
+    }
+
+    private submitPendingAreaOperation() {
+        if (!this.pendingConfirmedAreaOperation || this.areaOperationPending) return;
+        const pending = this.pendingConfirmedAreaOperation;
+        this.pendingConfirmedAreaOperation = undefined;
+        this.areaOperationPending = true;
+        vscode.postMessage<WorldMapMessage>({
+            command: 'runareaoperation',
+            operation: pending.operation,
+            provinceIds: pending.provinceIds,
+            stateIds: pending.stateIds,
+            perContinent: pending.perContinent,
+            includeWasteland: this.areaIncludeWasteland,
+            reindexAfter: pending.reindexAfter,
+            riverIds: pending.riverIds,
+        });
+        this.hideNorthAmericaPipelineModal();
+        this.showActionStatus(feLocalize('worldmap.area.pending', 'Applying area operation...'));
+    }
+
+    private loadAreaOperationResults() {
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'areaoperationresult') return;
+            this.areaOperationPending = false;
+            if (!message.success) {
+                this.showActionStatus(message.error ?? feLocalize('worldmap.area.failed', 'Area operation failed.'), 'warn');
+                return;
+            }
+            this.showActionStatus(feLocalize(
+                'worldmap.area.done',
+                'Area operation complete: {0} provinces, {1} states, {2} records changed.',
+                message.affectedProvinces ?? 0,
+                message.affectedStates ?? 0,
+                message.changedRecords ?? 0
+            ));
+            this.loader.refresh();
+        }));
+    }
+
+    private loadNorthAmericaPipelineModal() {
+        const modal = document.getElementById('north-america-pipeline-modal') as HTMLDivElement | null;
+        const target = document.getElementById('north-america-pipeline-target') as HTMLSelectElement | null;
+        const apply = document.getElementById('north-america-pipeline-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('north-america-pipeline-cancel') as HTMLButtonElement | null;
+        if (!modal || !target || !apply || !cancel) return;
+        this.addSubscription(fromEvent(cancel, 'click').subscribe(event => {
+            event.preventDefault();
+            if (!this.continentPipelinePending) {
+                this.pendingConfirmedAreaOperation = undefined;
+                this.hideNorthAmericaPipelineModal();
+            }
+        }));
+        this.addSubscription(fromEvent(apply, 'click').subscribe(event => {
+            event.preventDefault();
+            if (modal.dataset.mode === 'reindex-map') {
+                this.requestDestructiveReindex();
+                this.hideNorthAmericaPipelineModal();
+            } else if (modal.dataset.mode === 'area-operation') {
+                this.submitPendingAreaOperation();
+            } else if (modal.dataset.mode === 'remove-all-cores') {
+                this.submitRemoveAllCores();
+            } else if (modal.dataset.mode === 'all') {
+                this.submitAllContinentPipelines();
+            } else {
+                this.submitContinentPipeline(target.value);
+            }
+        }));
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'continentpipelineresult') return;
+            if (!message.success) {
+                this.continentPipelinePending = false;
+                this.continentPipelineQueue = [];
+                apply.disabled = false;
+                cancel.disabled = false;
+                const failure = message.error ?? feLocalize('worldmap.continent.failed', 'Continental consolidation failed.');
+                this.setNorthAmericaPipelineError(failure);
+                this.showActionStatus(failure, 'warn');
+                return;
+            }
+            this.continentPipelineTotals.provinces += message.mergedProvinces ?? 0;
+            this.continentPipelineTotals.states += message.mergedStates ?? 0;
+            this.continentPipelineTotals.regions += message.mergedStrategicRegions ?? 0;
+            this.continentPipelineTotals.records += message.changedRecords ?? 0;
+            this.continentPipelineTotals.completed++;
+            if (this.continentPipelineQueue.length > 0) {
+                this.sendNextContinentPipeline();
+                return;
+            }
+            this.continentPipelinePending = false;
+            apply.disabled = false;
+            cancel.disabled = false;
+            this.hideNorthAmericaPipelineModal();
+            this.showActionStatus(feLocalize(
+                'worldmap.continent.done',
+                'Continental workflow complete: {0} continent(s), {1} provinces, {2} states, {3} strategic regions, {4} dependent records changed.',
+                this.continentPipelineTotals.completed,
+                this.continentPipelineTotals.provinces,
+                this.continentPipelineTotals.states,
+                this.continentPipelineTotals.regions,
+                this.continentPipelineTotals.records
+            ));
+            this.loader.refresh();
+        }));
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'removeallcoresresult') return;
+            this.removeAllCoresPending = false;
+            apply.disabled = false;
+            cancel.disabled = false;
+            if (!message.success) {
+                this.setNorthAmericaPipelineError(message.error ?? feLocalize('worldmap.cores.failed', 'Removing cores failed.'));
+                this.showActionStatus(message.error ?? feLocalize('worldmap.cores.failed', 'Removing cores failed.'), 'warn');
+                return;
+            }
+            this.hideNorthAmericaPipelineModal();
+            this.showActionStatus(feLocalize(
+                'worldmap.cores.done',
+                'Removed {0} core records across {1} loaded states.',
+                message.changedRecords ?? 0,
+                message.affectedStates ?? 0
+            ));
+            this.loader.refresh();
+        }));
+    }
+
+    private showNorthAmericaPipelineModal(continentId?: number) {
+        const modal = document.getElementById('north-america-pipeline-modal') as HTMLDivElement | null;
+        const target = document.getElementById('north-america-pipeline-target') as HTMLSelectElement | null;
+        const targetLabel = document.getElementById('north-america-pipeline-target-label') as HTMLLabelElement | null;
+        const title = document.getElementById('north-america-pipeline-title');
+        const summary = document.getElementById('north-america-pipeline-summary');
+        const apply = document.getElementById('north-america-pipeline-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('north-america-pipeline-cancel') as HTMLButtonElement | null;
+        if (!modal || !target || !summary || !apply || !cancel || !targetLabel || !title) {
+            this.showActionStatus(feLocalize('worldmap.continent.modal.missing', 'The continental pipeline dialog is unavailable. Reload the extension window.'), 'warn');
+            return;
+        }
+        const worldMap = this.loader.worldMap;
+        const allMode = continentId === undefined;
+        modal.dataset.mode = allMode ? 'all' : 'single';
+        this.selectedContinentPipelineId = continentId;
+        title.textContent = allMode
+            ? feLocalize('worldmap.continent.modal.alltitle', 'Run All Continental Workflows')
+            : feLocalize('worldmap.continent.modal.singletitle', '{0} Consolidation Pipeline', worldMap.continents[continentId]);
+        const provinceIds = new Set<number>();
+        worldMap.forEachProvince(province => {
+            if (allMode ? province.continent > 0 : province.continent === continentId) provinceIds.add(province.id);
+        });
+        const stateCount = new Set(
+            Array.from(provinceIds)
+                .map(id => worldMap.getStateByProvinceId(id)?.id)
+                .filter((id): id is number => id !== undefined)
+        ).size;
+        const strategicRegionCount = new Set(
+            Array.from(provinceIds)
+                .map(id => worldMap.getStrategicRegionByProvinceId(id)?.id)
+                .filter((id): id is number => id !== undefined)
+        ).size;
+
+        target.replaceChildren();
+        const tags = worldMap.countries.map(country => country.tag).sort((a, b) => a.localeCompare(b));
+        for (const tag of tags) {
+            const option = document.createElement('option');
+            option.value = tag;
+            option.textContent = tag;
+            target.appendChild(option);
+        }
+        const selectedOwner = this.selectedCountryTag$.value ??
+            (() => {
+                const state = worldMap.getStateById(this.selectedStateId$.value);
+                return state ? solveWithCondition(state.owner, this.selectedConditions$.value) : undefined;
+            })();
+        const preferred = selectedOwner && tags.includes(selectedOwner)
+            ? selectedOwner
+            : tags.includes('USA') ? 'USA' : tags[0];
+        if (preferred) target.value = preferred;
+
+        target.hidden = allMode;
+        targetLabel.hidden = allMode;
+        const validContinents = this.getRunnableContinents();
+        const preflightValid = allMode
+            ? validContinents.length > 0
+            : !!continentId && provinceIds.size >= 2 && stateCount > 0 && strategicRegionCount > 0 && tags.length > 0;
+        summary.textContent = allMode && preflightValid
+            ? feLocalize(
+                'worldmap.continent.modal.allsummary',
+                '{0} continental workflows will run sequentially. Each continent uses its most common current owner as the resulting owner and controller.',
+                validContinents.length
+            )
+            : preflightValid
+            ? feLocalize(
+                'worldmap.continent.modal.summary',
+                'Detected continent {0}: {1} provinces, {2} states, and {3} strategic regions will be consolidated.',
+                continentId === undefined ? '' : worldMap.continents[continentId],
+                provinceIds.size,
+                stateCount,
+                strategicRegionCount
+            )
+            : feLocalize(
+                'worldmap.continent.modal.preflightfailed',
+                'Preflight failed. Detected continent ID: {0}; provinces: {1}; states: {2}; strategic regions: {3}; countries: {4}.',
+                continentId ?? 0,
+                provinceIds.size,
+                stateCount,
+                strategicRegionCount,
+                tags.length
+            );
+        this.setNorthAmericaPipelineError(preflightValid ? '' : summary.textContent);
+        apply.disabled = !preflightValid;
+        cancel.disabled = false;
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        (preflightValid && !allMode ? target : allMode && preflightValid ? apply : cancel).focus();
+    }
+
+    private submitContinentPipeline(targetCountryTag: string) {
+        if (this.continentPipelinePending || this.selectedContinentPipelineId === undefined) return;
+        const normalizedTag = targetCountryTag.trim().toUpperCase();
+        if (!/^[A-Z0-9]{3}$/.test(normalizedTag) ||
+            !this.loader.worldMap.countries.some(country => country.tag.toUpperCase() === normalizedTag)) {
+            this.setNorthAmericaPipelineError(feLocalize('worldmap.continent.unknowncountry', 'Choose a valid loaded country.'));
+            return;
+        }
+        this.startContinentPipelineQueue([{
+            continentId: this.selectedContinentPipelineId,
+            targetCountryTag: normalizedTag,
+        }]);
+    }
+
+    private submitAllContinentPipelines() {
+        if (this.continentPipelinePending) return;
+        const queue = this.getRunnableContinents()
+            .map(continentId => ({
+                continentId,
+                targetCountryTag: this.getDominantOwnerForContinent(continentId),
+            }))
+            .filter((item): item is { continentId: number; targetCountryTag: string } => !!item.targetCountryTag);
+        if (queue.length === 0) {
+            this.setNorthAmericaPipelineError(feLocalize('worldmap.continent.noowners', 'No runnable continent has a loaded owner country.'));
+            return;
+        }
+        this.startContinentPipelineQueue(queue);
+    }
+
+    private startContinentPipelineQueue(queue: Array<{ continentId: number; targetCountryTag: string }>) {
+        const apply = document.getElementById('north-america-pipeline-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('north-america-pipeline-cancel') as HTMLButtonElement | null;
+        this.continentPipelinePending = true;
+        this.continentPipelineQueue = queue.slice();
+        this.continentPipelineTotals = { provinces: 0, states: 0, regions: 0, records: 0, completed: 0 };
+        if (apply) apply.disabled = true;
+        if (cancel) cancel.disabled = true;
+        this.sendNextContinentPipeline();
+    }
+
+    private sendNextContinentPipeline() {
+        const next = this.continentPipelineQueue.shift();
+        if (!next) return;
+        const name = this.loader.worldMap.continents[next.continentId] ?? String(next.continentId);
+        this.setNorthAmericaPipelineError(feLocalize('worldmap.continent.pending', 'Running {0} consolidation for {1}...', name, next.targetCountryTag));
+        vscode.postMessage<WorldMapMessage>({
+            command: 'runcontinentpipeline',
+            continentId: next.continentId,
+            targetCountryTag: next.targetCountryTag,
+        });
+        this.showActionStatus(feLocalize('worldmap.continent.pending', 'Running {0} consolidation for {1}...', name, next.targetCountryTag));
+    }
+
+    private getRunnableContinents(): number[] {
+        const counts = new Map<number, number>();
+        this.loader.worldMap.forEachProvince(province => {
+            if (province.continent > 0) counts.set(province.continent, (counts.get(province.continent) ?? 0) + 1);
+        });
+        return Array.from(counts)
+            .filter(([, count]) => count >= 2)
+            .map(([id]) => id)
+            .filter(id => !!this.loader.worldMap.continents[id])
+            .sort((a, b) => this.loader.worldMap.continents[a].localeCompare(this.loader.worldMap.continents[b]));
+    }
+
+    private getDominantOwnerForContinent(continentId: number): string | undefined {
+        const counts = new Map<string, number>();
+        this.loader.worldMap.forEachProvince(province => {
+            if (province.continent !== continentId) return;
+            const state = this.loader.worldMap.getStateByProvinceId(province.id);
+            const owner = solveWithCondition(state?.owner, this.selectedConditions$.value);
+            if (owner && this.loader.worldMap.countries.some(country => country.tag === owner)) {
+                counts.set(owner, (counts.get(owner) ?? 0) + 1);
+            }
+        });
+        return Array.from(counts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0];
+    }
+
+    private confirmRemoveAllCores() {
+        const modal = document.getElementById('north-america-pipeline-modal') as HTMLDivElement | null;
+        const target = document.getElementById('north-america-pipeline-target') as HTMLSelectElement | null;
+        const targetLabel = document.getElementById('north-america-pipeline-target-label') as HTMLLabelElement | null;
+        const title = document.getElementById('north-america-pipeline-title');
+        const summary = document.getElementById('north-america-pipeline-summary');
+        const apply = document.getElementById('north-america-pipeline-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('north-america-pipeline-cancel') as HTMLButtonElement | null;
+        if (!modal || !target || !targetLabel || !title || !summary || !apply || !cancel) return;
+        modal.dataset.mode = 'remove-all-cores';
+        title.textContent = feLocalize('worldmap.cores.title', 'REMOVE ALL CORES');
+        summary.textContent = feLocalize(
+            'worldmap.cores.warning',
+            'This permanently removes every core assignment from all loaded state history files. Owners and controllers remain unchanged. This action cannot be undone in the map editor.'
+        );
+        target.hidden = true;
+        targetLabel.hidden = true;
+        apply.disabled = false;
+        cancel.disabled = false;
+        this.setNorthAmericaPipelineError('');
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        apply.focus();
+    }
+
+    private submitRemoveAllCores() {
+        if (this.removeAllCoresPending) return;
+        const apply = document.getElementById('north-america-pipeline-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('north-america-pipeline-cancel') as HTMLButtonElement | null;
+        this.removeAllCoresPending = true;
+        if (apply) apply.disabled = true;
+        if (cancel) cancel.disabled = true;
+        this.setNorthAmericaPipelineError(feLocalize('worldmap.cores.pending', 'Removing all core records...'));
+        vscode.postMessage<WorldMapMessage>({ command: 'removeallcores' });
+    }
+
+    private confirmSequentialReindex() {
+        const modal = document.getElementById('north-america-pipeline-modal') as HTMLDivElement | null;
+        const target = document.getElementById('north-america-pipeline-target') as HTMLSelectElement | null;
+        const targetLabel = document.getElementById('north-america-pipeline-target-label') as HTMLLabelElement | null;
+        const title = document.getElementById('north-america-pipeline-title');
+        const summary = document.getElementById('north-america-pipeline-summary');
+        const apply = document.getElementById('north-america-pipeline-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('north-america-pipeline-cancel') as HTMLButtonElement | null;
+        if (!modal || !target || !targetLabel || !title || !summary || !apply || !cancel) return;
+        modal.dataset.mode = 'reindex-map';
+        title.textContent = feLocalize('worldmap.reindex.title', 'REINDEX ALL PROVINCES AND STATES');
+        summary.textContent = feLocalize(
+            'worldmap.reindex.warning',
+            'This renumbers all loaded provinces and states sequentially from 1 and rewrites dependent map references. External scripts outside the loaded map may still require manual updates. This cannot be undone in the map editor.'
+        );
+        target.hidden = true;
+        targetLabel.hidden = true;
+        apply.disabled = false;
+        cancel.disabled = false;
+        this.setNorthAmericaPipelineError('');
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        apply.focus();
+    }
+
+    private hideNorthAmericaPipelineModal() {
+        const modal = document.getElementById('north-america-pipeline-modal');
+        if (modal) {
+            modal.hidden = true;
+            modal.style.display = 'none';
+        }
+        this.setNorthAmericaPipelineError('');
+    }
+
+    private setNorthAmericaPipelineError(message: string) {
+        const error = document.getElementById('north-america-pipeline-error');
+        if (error) error.textContent = message;
+    }
+
+    private toggleAreaPerContinent() {
+        this.areaPerContinent = !this.areaPerContinent;
+        setState({ areaPerContinent: this.areaPerContinent });
+    }
+
+    private toggleAreaIncludeWasteland() {
+        this.areaIncludeWasteland = !this.areaIncludeWasteland;
+        setState({ areaIncludeWasteland: this.areaIncludeWasteland });
+    }
+
     private loadStrategicRegionEditButtons() {
         const assignToSRButton = document.getElementById('assign-to-strategicregion') as HTMLButtonElement;
 
-        this.addSubscription(fromEvent<PointerEvent>(assignToSRButton, 'pointerdown').subscribe(e => {
+        this.addSubscription(fromEvent<MouseEvent>(assignToSRButton, 'click').subscribe(e => {
             e.preventDefault();
             e.stopPropagation();
             this.assignSelectionToStrategicRegion();
@@ -1127,7 +2099,7 @@ export class TopBar extends Subscriber {
     private loadNewProvinceButton() {
         const newProvinceButton = document.getElementById('new-province') as HTMLButtonElement;
 
-        this.addSubscription(fromEvent<PointerEvent>(newProvinceButton, 'pointerdown').subscribe(e => {
+        this.addSubscription(fromEvent<MouseEvent>(newProvinceButton, 'click').subscribe(e => {
             e.preventDefault();
             e.stopPropagation();
             this.createNewProvince();
@@ -1146,20 +2118,21 @@ export class TopBar extends Subscriber {
             return;
         }
 
-        this.addSubscription(fromEvent<PointerEvent>(toggleButton, 'pointerdown').subscribe(e => {
+        this.addSubscription(fromEvent<MouseEvent>(toggleButton, 'click').subscribe(e => {
             e.preventDefault();
             e.stopPropagation();
+            this.paintTool = 'brush';
             this.togglePaintbrushMode();
         }));
 
         // Update button visual state when paintbrush mode changes
         this.addSubscription(this.paintbrushActive$.subscribe(active => {
-            if (active) {
+            const brushActive = active && this.paintTool === 'brush';
+            toggleButton.setAttribute('aria-pressed', String(brushActive));
+            if (brushActive) {
                 toggleButton.classList.add('active');
-                toggleButton.style.backgroundColor = 'rgba(0,120,212,0.7)';
             } else {
                 toggleButton.classList.remove('active');
-                toggleButton.style.backgroundColor = '';
             }
         }));
 
@@ -1342,6 +2315,118 @@ export class TopBar extends Subscriber {
         this.contextMenu.show(x, y, this.buildToolsMenuItems());
     }
 
+    private selectAllProvinces(
+        label: string,
+        selector: () => Set<number>,
+        selectedRiverIds: Set<number> = new Set<number>()
+    ) {
+        const selection = selector();
+        this.viewMode$.next('province');
+        this.setSelectedProvinceIds(selection, true);
+        this.selectedRiverIds$.next(new Set(selectedRiverIds));
+        this.showActionStatus(
+            feLocalize(
+                'worldmap.action.selectall.done',
+                'Selected {0} {1} province(s).',
+                selection.size,
+                label
+            )
+        );
+    }
+
+    private buildSelectAllMenuItems(): ContextMenuItem[] {
+        const worldMap = this.loader.worldMap;
+        const byType = (type: string) => selectProvinceIds(
+            worldMap,
+            province => province.type.toLowerCase() === type
+        );
+        const terrainNames = new Set<string>();
+        const extraTypes = new Set<string>();
+        worldMap.forEachProvince(province => {
+            if (province.terrain) terrainNames.add(province.terrain);
+            const type = province.type.toLowerCase();
+            if (type !== 'land' && type !== 'sea' && type !== 'lake') {
+                extraTypes.add(province.type);
+            }
+        });
+
+        const items: ContextMenuItem[] = [
+            {
+                label: feLocalize('worldmap.contextmenu.selectall.provinces', 'Select All Provinces'),
+                action: () => this.selectAllProvinces(
+                    'map',
+                    () => selectProvinceIds(worldMap, () => true)
+                ),
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.selectall.land', 'Select All Land'),
+                action: () => this.selectAllProvinces('land', () => byType('land')),
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.selectall.oceans', 'Select All Ocean(s)'),
+                action: () => this.selectAllProvinces('ocean', () => byType('sea')),
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.selectall.rivers', 'Select All River(s)'),
+                tooltip: feLocalize(
+                    'worldmap.contextmenu.selectall.rivers.tooltip',
+                    'Select exact rivers.bmp component pixels for clipped river-to-ocean conversion. Other area tools still use the touched provinces.'
+                ),
+                disabled: worldMap.rivers.length === 0,
+                action: () => this.selectAllProvinces(
+                    'river-touched',
+                    () => selectRiverProvinceIds(worldMap),
+                    new Set(worldMap.rivers.map((_, index) => index))
+                ),
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.selectall.lakes', 'Select All Lakes'),
+                action: () => this.selectAllProvinces('lake', () => byType('lake')),
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.selectall.coastal', 'Select All Coastal Provinces'),
+                action: () => this.selectAllProvinces(
+                    'coastal',
+                    () => selectProvinceIds(worldMap, province => province.coastal)
+                ),
+            },
+        ];
+
+        if (extraTypes.size > 0) {
+            items.push({
+                label: feLocalize('worldmap.contextmenu.selectall.types', 'Other Province Types'),
+                submenu: Array.from(extraTypes).sort().map(type => ({
+                    label: feLocalize(
+                        'worldmap.contextmenu.selectall.type',
+                        'Select All {0}',
+                        type
+                    ),
+                    action: () => this.selectAllProvinces(
+                        type,
+                        () => byType(type.toLowerCase())
+                    ),
+                })),
+            });
+        }
+
+        items.push({
+            label: feLocalize('worldmap.contextmenu.selectall.terrain', 'Select All by Terrain'),
+            submenu: Array.from(terrainNames).sort().map(terrain => ({
+                label: feLocalize(
+                    'worldmap.contextmenu.selectall.terrainitem',
+                    'Select All {0}',
+                    terrain
+                ),
+                action: () => this.selectAllProvinces(
+                    terrain,
+                    () => selectProvinceIds(worldMap, province => province.terrain === terrain)
+                ),
+            })),
+        });
+
+        return items;
+    }
+
     private buildToolsMenuItems(): ContextMenuItem[] {
         const selectedProvinceIds = this.selectedProvinceIds$.value;
         const selectedStateIds = this.selectedStateIds$.value;
@@ -1349,8 +2434,20 @@ export class TopBar extends Subscriber {
         const selectedStrategicRegionId = this.selectedStrategicRegionId$.value;
         const hasRegion = this.getSelectedRegionBoundingBox() !== undefined;
         const selectedCountryTag = this.selectedCountryTag$.value;
+        const currentViewMode = this.viewMode$.value;
+        const provinceAreaMode = currentViewMode === 'province';
+        const stateAreaMode = currentViewMode === 'state';
+        const supplyAreaMode = currentViewMode === 'province' || currentViewMode === 'supplyarea';
+        const hasAreaSelection =
+            (provinceAreaMode && selectedProvinceIds.size > 0) ||
+            (stateAreaMode && selectedStateIds.size > 0) ||
+            (currentViewMode === 'supplyarea' && this.selectedSupplyAreaId$.value !== undefined);
 
-        return [
+        const items: ContextMenuItem[] = [
+            {
+                label: feLocalize('worldmap.contextmenu.selectall', 'Select All'),
+                submenu: this.buildSelectAllMenuItems(),
+            },
             {
                 label: feLocalize('worldmap.contextmenu.export', 'Export as Image (Selected Region)'),
                 disabled: !hasRegion,
@@ -1387,8 +2484,125 @@ export class TopBar extends Subscriber {
                 ],
             },
             {
+                label: feLocalize('worldmap.contextmenu.areatools', 'Selected Area Tools'),
+                disabled: !hasAreaSelection || this.areaOperationPending,
+                submenu: [
+                    {
+                        label: feLocalize('worldmap.contextmenu.areatools.continent', 'Apply Per Continent'),
+                        checked: this.areaPerContinent,
+                        action: () => this.toggleAreaPerContinent(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.areatools.railways', 'Clear Railways'),
+                        disabled: !supplyAreaMode,
+                        action: () => this.runAreaOperation('clear-railways'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.areatools.buildings', 'Clear Buildings'),
+                        disabled: !stateAreaMode,
+                        action: () => this.runAreaOperation('clear-buildings'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.areatools.population', 'Set 1 Population Per State'),
+                        disabled: !stateAreaMode,
+                        action: () => this.runAreaOperation('one-population-per-state'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.areatools.supply', 'Clear Supply Hubs'),
+                        disabled: !supplyAreaMode,
+                        action: () => this.runAreaOperation('clear-supply-hubs'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.areatools.crossings', 'Clear Water Crossings'),
+                        disabled: !provinceAreaMode,
+                        action: () => this.runAreaOperation('clear-water-crossings'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.areatools.resources', 'Clear Resources'),
+                        disabled: !stateAreaMode,
+                        action: () => this.runAreaOperation('clear-resources'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.areatools.development', 'Development to Lowest Available'),
+                        disabled: !stateAreaMode,
+                        action: () => this.runAreaOperation('lowest-development'),
+                        submenu: [
+                            {
+                                label: feLocalize('worldmap.contextmenu.areatools.wasteland', 'Include Wasteland'),
+                                checked: this.areaIncludeWasteland,
+                                action: () => this.toggleAreaIncludeWasteland(),
+                            },
+                        ],
+                    },
+                    {
+                        label: this.selectedRiverIds$.value.size > 0
+                            ? feLocalize('TODO', 'Convert River Pixels to Ocean (Clipped)')
+                            : feLocalize('worldmap.contextmenu.areatools.ocean', 'Convert Selection to Ocean (Auto-Rebuild)'),
+                        disabled: !provinceAreaMode,
+                        action: () => this.runAreaOperation('convert-to-ocean'),
+                    },
+                ],
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.continents', 'Continental Consolidation'),
+                tooltip: feLocalize('worldmap.contextmenu.continents.tooltip', 'Consolidate each continent while preserving separate land and water provinces/strategic regions, clear infrastructure and water crossings, then sequentially reindex provinces and states.'),
+                disabled: this.continentPipelinePending,
+                submenu: [
+                    ...this.getRunnableContinents().map(continentId => ({
+                        label: this.loader.worldMap.continents[continentId],
+                        tooltip: feLocalize(
+                            'worldmap.contextmenu.continent.tooltip',
+                            'Consolidate {0} with separate land/water survivors, clear infrastructure and water crossings, sequentially reindex, and choose the resulting owner/controller.',
+                            this.loader.worldMap.continents[continentId]
+                        ),
+                        disabled: this.continentPipelinePending,
+                        action: () => this.showNorthAmericaPipelineModal(continentId),
+                    })),
+                    {
+                        label: feLocalize('worldmap.contextmenu.continents.all', 'Run All Continental Workflows Automatically'),
+                        tooltip: feLocalize('worldmap.contextmenu.continents.all.tooltip', 'Run every available continent sequentially; each uses its most common current owner as the resulting owner and controller.'),
+                        disabled: this.continentPipelinePending,
+                        action: () => this.showNorthAmericaPipelineModal(),
+                    },
+                ],
+            },
+            {
+                label: feLocalize('worldmap.contextmenu.destructive', 'Destructive Actions'),
+                tooltip: feLocalize('worldmap.contextmenu.destructive.tooltip', 'Global operations that rewrite loaded mod files and cannot be undone from the map editor.'),
+                submenu: [
+                    {
+                        label: feLocalize('worldmap.contextmenu.removeallcrossings', 'REMOVE ALL WATER CROSSINGS'),
+                        tooltip: feLocalize('worldmap.contextmenu.removeallcrossings.tooltip', 'Remove every strait, canal, and water-based adjacency record, then sequentially reindex provinces and states.'),
+                        disabled: this.areaOperationPending,
+                        action: () => this.runGlobalAreaOperation('clear-water-crossings'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.clearallresources', 'CLEAR ALL RESOURCES'),
+                        tooltip: feLocalize('worldmap.contextmenu.clearallresources.tooltip', 'Remove resource blocks from every loaded state, then sequentially reindex provinces and states.'),
+                        disabled: this.areaOperationPending,
+                        action: () => this.runGlobalAreaOperation('clear-resources'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.reindexall', 'REINDEX ALL PROVINCES AND STATES'),
+                        tooltip: feLocalize('worldmap.contextmenu.reindexall.tooltip', 'Renumber all loaded provinces and states sequentially from 1 and rewrite map, state, strategic-region, supply-area, capital, railway, supply-node, adjacency, and building references.'),
+                        disabled: this.areaOperationPending || this.continentPipelinePending || this.reindexPending,
+                        action: () => this.confirmSequentialReindex(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.removeallcores', 'REMOVE ALL CORES'),
+                        tooltip: feLocalize('worldmap.contextmenu.removeallcores.tooltip', 'Remove every add_core_of and remove_core_of record from all loaded state history files. Owners and controllers are unchanged.'),
+                        disabled: this.removeAllCoresPending,
+                        action: () => this.confirmRemoveAllCores(),
+                    },
+                ],
+            },
+            {
                 label: feLocalize('worldmap.contextmenu.provincetools', 'Province Tools'),
                 submenu: [
+                    {
+                        label: feLocalize('worldmap.contextmenu.provincetools.resolvewarnings', 'Resolve Province Warnings Automatically'),
+                        action: () => this.resolveProvinceWarnings(),
+                    },
                     {
                         label: selectedProvinceIds.size >= 2
                             ? feLocalize(
@@ -1419,6 +2633,16 @@ export class TopBar extends Subscriber {
                 label: feLocalize('worldmap.contextmenu.statetools', 'State Tools'),
                 submenu: [
                     {
+                        label: feLocalize('worldmap.contextmenu.statetools.createtag', 'Create New TAG from Selected States'),
+                        disabled: selectedStateIds.size === 0,
+                        action: () => this.showCreateCountryModal(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.statetools.mergestates', 'Merge Selected States'),
+                        disabled: selectedStateIds.size < 2,
+                        action: () => this.showMergeStatesModal(),
+                    },
+                    {
                         label: feLocalize('worldmap.contextmenu.statetools.createstrategic', 'Create Strat Region from Selected States'),
                         disabled: selectedProvinceIds.size === 0 && selectedStateIds.size === 0,
                         action: () => this.createStrategicRegionFromSelection(),
@@ -1432,6 +2656,11 @@ export class TopBar extends Subscriber {
                         label: feLocalize('worldmap.contextmenu.statetools.transfercountry', 'Transfer Selected State(s) to Country'),
                         disabled: selectedStateIds.size === 0,
                         action: () => this.showCountryPuppetModal('transfer'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.statetools.autocore', 'Auto-Core All Transferred States'),
+                        checked: this.autoCoreTransfers,
+                        action: () => this.toggleAutoCoreTransfers(),
                     },
                 ],
             },
@@ -1458,6 +2687,46 @@ export class TopBar extends Subscriber {
                 ],
             },
         ];
+        const describeAction = (label: string): string => {
+            const value = label.toLowerCase();
+            if (value.includes('export')) return 'Save the selected map rectangle as an image; use the submenu to include or omit its outline.';
+            if (value.includes('warning')) return 'Show, hide, filter, or automatically repair map validation warnings.';
+            if (value.includes('apply per continent')) return 'Split the selected-area operation by continent instead of treating the selection as one group.';
+            if (value.includes('railway')) return 'Remove railway routes that touch the current selected area.';
+            if (value.includes('building')) return 'Remove state and map building records in the current selected area.';
+            if (value.includes('population')) return 'Set each selected state manpower value to 1.';
+            if (value.includes('supply hub')) return 'Remove supply-node records in the current selected area.';
+            if (value.includes('water crossing')) return 'Remove strait, canal, and water-based adjacency records touching the current selected area.';
+            if (value.includes('resource')) return 'Remove state resource blocks in the current selected area.';
+            if (value.includes('development')) return 'Set selected states to the lowest available state category.';
+            if (value.includes('wasteland')) return 'Allow the lowest-development action to use the wasteland category.';
+            if (value.includes('ocean')) return 'Convert selected provinces to ocean and rebuild affected map memberships.';
+            if (value.includes('merge selected provinces')) return 'Transfer every selected province pixel into the first selected province and repair references.';
+            if (value.includes('state from selected')) return 'Create a new state containing the selected provinces.';
+            if (value.includes('assign selected provinces')) return 'Move selected provinces into the currently selected existing state.';
+            if (value.includes('create new tag')) return 'Create a country tag from the selected states.';
+            if (value.includes('merge selected states')) return 'Combine selected states into a chosen surviving state.';
+            if (value.includes('create strat')) return 'Create a strategic region from the current state or province selection.';
+            if (value.includes('assign selected state')) return 'Move selected states into the currently selected strategic region.';
+            if (value.includes('transfer selected')) return 'Change owner and controller for the selected states.';
+            if (value.includes('auto-core')) return 'Automatically add the new owner as a core when transferring states.';
+            if (value.includes('force puppet')) return 'Create or replace the selected country subject relationship.';
+            if (value.includes('release puppet')) return 'Remove the selected country subject relationship.';
+            if (value.includes('annex country')) return 'Transfer every state owned by the selected country to another country.';
+            if (value.includes('province tools')) return 'Create, merge, assign, and repair province records.';
+            if (value.includes('state tools')) return 'Create, merge, transfer, and assign state records.';
+            if (value.includes('country tools')) return 'Change ownership and subject relationships for the selected country.';
+            if (value.includes('selected area')) return 'Run bulk map and history operations inside the current selection.';
+            return feLocalize('worldmap.contextmenu.action.tooltip', 'Run or configure: {0}', label);
+        };
+        const addFallbackTooltips = (menuItems: ContextMenuItem[]) => {
+            for (const item of menuItems) {
+                item.tooltip ??= describeAction(item.label);
+                if (item.submenu) addFallbackTooltips(item.submenu);
+            }
+        };
+        addFallbackTooltips(items);
+        return items;
     }
 
     private loadSearchBox() {
@@ -1647,11 +2916,17 @@ export class TopBar extends Subscriber {
                         position.y >= 0 &&
                         position.y < this.loader.worldMap!.height
                     ) {
-                        this.isPainting = true;
-                        this.lastPaintMapPosition = { x: position.x, y: position.y };
                         this.hoverMapX$.next(position.x);
                         this.hoverMapY$.next(position.y);
-                        this.paintAtPosition(position.x, position.y);
+                        if (this.paintTool === 'fill') {
+                            this.isPainting = false;
+                            this.lastPaintMapPosition = undefined;
+                            this.fillAtPosition(position.x, position.y);
+                        } else {
+                            this.isPainting = true;
+                            this.lastPaintMapPosition = { x: position.x, y: position.y };
+                            this.paintAtPosition(position.x, position.y);
+                        }
                     }
 
                     e.preventDefault();
@@ -1753,9 +3028,17 @@ export class TopBar extends Subscriber {
         }));
 
         this.addSubscription(fromEvent<MouseEvent>(canvas, 'click').subscribe((e) => {
+            if (this.paintbrushActive$.value) {
+                return;
+            }
             if (dragMoved) {
                 dragMoved = false;
                 return; // already handled by drag
+            }
+            if (this.transferWandActive && (this.viewMode$.value === 'province' || this.viewMode$.value === 'state')) {
+                e.preventDefault();
+                this.applyTransferWand(e.shiftKey);
+                return;
             }
             switch (this.viewMode$.value) {
                 case 'province':
@@ -1821,7 +3104,10 @@ export class TopBar extends Subscriber {
             }
         }));
 
-        this.addSubscription(this.viewMode$.subscribe(() => this.onViewModeChange()));
+        this.addSubscription(this.viewMode$.subscribe(() => {
+            this.resetTransferWandTarget();
+            this.onViewModeChange();
+        }));
 
         this.addSubscription(this.loader.worldMap$.subscribe(wm => {
             this.refreshWarningsDisplay();
@@ -1901,7 +3187,20 @@ export class TopBar extends Subscriber {
             // P toggles paintbrush mode (when not in an input)
             if (key === 'p' && !e.ctrlKey && !e.altKey && !e.metaKey) {
                 e.preventDefault();
+                this.paintTool = 'brush';
                 this.togglePaintbrushMode();
+                return;
+            }
+
+            if (key === 'f' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                e.preventDefault();
+                this.toggleFillBucketMode();
+                return;
+            }
+
+            if (key === 'w' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                e.preventDefault();
+                this.toggleTransferWand();
                 return;
             }
 
@@ -1949,6 +3248,9 @@ export class TopBar extends Subscriber {
     }
 
     private setSelectedProvinceIds(nextSelection: Set<number>, recordHistory: boolean) {
+        if (this.selectedRiverIds$.value.size > 0) {
+            this.selectedRiverIds$.next(new Set<number>());
+        }
         const current = this.selectedProvinceIds$.value;
         if (this.isSameSelection(current, nextSelection)) {
             return;
@@ -2085,6 +3387,107 @@ export class TopBar extends Subscriber {
 
         const tag = target.tagName;
         return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
+    }
+
+    private applyTransferWand(forceRetarget: boolean) {
+        const worldMap = this.loader.worldMap;
+        if (this.viewMode$.value === 'province') {
+            const provinceId = this.hoverProvinceId$.value;
+            if (provinceId === undefined) return;
+            const hoveredState = worldMap.getStateByProvinceId(provinceId);
+            if (forceRetarget || this.transferWandTargetStateId === undefined) {
+                if (!hoveredState) {
+                    this.showActionStatus(
+                        feLocalize('worldmap.wand.unassigned', 'That province is not assigned to a state. Choose an assigned target province first.'),
+                        'warn'
+                    );
+                    return;
+                }
+                this.transferWandTargetStateId = hoveredState.id;
+                this.showActionStatus(feLocalize(
+                    'worldmap.wand.targetstate',
+                    'Transfer Wand target is state {0}. Click any land, lake, or ocean province to move it. Shift+click to retarget.',
+                    hoveredState.id
+                ));
+                return;
+            }
+            if (hoveredState?.id === this.transferWandTargetStateId) {
+                this.showActionStatus(feLocalize('worldmap.wand.alreadyassigned', 'Province {0} is already in target state {1}.', provinceId, hoveredState.id));
+                return;
+            }
+            if (hoveredState && hoveredState.provinces.length <= 1) {
+                this.showActionStatus(feLocalize(
+                    'worldmap.wand.wouldemptystate',
+                    'Moving province {0} would leave state {1} empty. Merge the state or move another province into it first.',
+                    provinceId,
+                    hoveredState.id
+                ), 'warn');
+                return;
+            }
+            const affected = [
+                ...(hoveredState ? [hoveredState.id] : []),
+                this.transferWandTargetStateId,
+            ];
+            const before = worldMap.snapshotStates(affected);
+            const changed = worldMap.assignProvincesToState([provinceId], this.transferWandTargetStateId);
+            if (!changed?.length) {
+                this.showActionStatus(feLocalize('worldmap.wand.nochange', 'The province could not be reassigned.'), 'warn');
+                return;
+            }
+            const after = worldMap.snapshotStates(changed);
+            this.recordMapEdit(before, after);
+            this.persistStates(changed);
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize(
+                'worldmap.wand.provincemoved',
+                'Moved province {0} from state {1} to state {2}.',
+                provinceId,
+                hoveredState?.id ?? 'unassigned',
+                this.transferWandTargetStateId
+            ));
+            return;
+        }
+
+        const stateId = this.hoverStateId$.value;
+        const state = worldMap.getStateById(stateId);
+        if (!state) return;
+        if (forceRetarget || (this.transferWandOwner === undefined && this.transferWandController === undefined)) {
+            this.transferWandOwner = solveWithCondition(state.owner, this.selectedConditions$.value);
+            this.transferWandController = solveWithCondition(state.controller, this.selectedConditions$.value);
+            if (!this.transferWandOwner && !this.transferWandController) {
+                this.showActionStatus(feLocalize('worldmap.wand.noownership', 'That state has no active owner or controller to copy.'), 'warn');
+                return;
+            }
+            this.showActionStatus(feLocalize(
+                'worldmap.wand.targetownership',
+                'Transfer Wand copied owner {0} and controller {1} from state {2}. Click states to apply both. Shift+click to copy a new source.',
+                this.transferWandOwner ?? 'none',
+                this.transferWandController ?? this.transferWandOwner ?? 'none',
+                state.id
+            ));
+            return;
+        }
+
+        const before = worldMap.snapshotStates([state.id]);
+        if (this.transferWandOwner) {
+            state.owner = [{ condition: true, value: this.transferWandOwner }];
+            if (this.autoCoreTransfers && !state.cores.some(core => core.value === this.transferWandOwner && core.condition === true)) {
+                state.cores.push({ condition: true, value: this.transferWandOwner });
+            }
+        }
+        const controller = this.transferWandController ?? this.transferWandOwner;
+        state.controller = controller ? [{ condition: true, value: controller }] : [];
+        const after = worldMap.snapshotStates([state.id]);
+        this.recordMapEdit(before, after);
+        this.persistStates([state.id]);
+        this.mapMutation$.next(this.mapMutation$.value + 1);
+        this.showActionStatus(feLocalize(
+            'worldmap.wand.ownershipapplied',
+            'Applied owner {0} and controller {1} to state {2}.',
+            this.transferWandOwner ?? 'none',
+            controller ?? 'none',
+            state.id
+        ));
     }
 
     private assignSelectionToState() {
@@ -2254,9 +3657,84 @@ export class TopBar extends Subscriber {
         this.enterPaintbrushMode(targetProvince, /* useExistingColor */ false);
     }
 
+    private loadFillBucketButton() {
+        const button = document.getElementById('toggle-fillbucket') as HTMLButtonElement | null;
+        if (!button) return;
+        this.addSubscription(fromEvent<MouseEvent>(button, 'click').subscribe(event => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.toggleFillBucketMode();
+        }));
+        this.addSubscription(combineLatest([
+            this.selectedProvinceIds$,
+            this.paintbrushActive$,
+            this.loader.loading$,
+        ]).subscribe(([selected, active, loading]) => {
+            button.disabled = loading || this.paintbrushSavePending || (!active && selected.size !== 1);
+            button.classList.toggle('active', active && this.paintTool === 'fill');
+            button.setAttribute('aria-pressed', String(active && this.paintTool === 'fill'));
+        }));
+    }
+
+    private toggleFillBucketMode() {
+        if (this.paintbrushActive$.value) {
+            this.paintTool = this.paintTool === 'fill' ? 'brush' : 'fill';
+            this.paintbrushActive$.next(true);
+            this.showActionStatus(this.paintTool === 'fill'
+                ? feLocalize('worldmap.fillbucket.active', 'Fill bucket active. Click a connected donor province area, then Apply.')
+                : feLocalize('worldmap.paintbrush.active', 'Paintbrush active. Drag to transfer pixels, then Apply.'));
+            return;
+        }
+        const selected = Array.from(this.selectedProvinceIds$.value);
+        const target = selected.length === 1
+            ? this.loader.worldMap.getProvinceById(selected[0])
+            : undefined;
+        if (!target) {
+            this.showActionStatus(feLocalize('worldmap.fillbucket.target', 'Select exactly one existing target province before using Fill Bucket.'), 'warn');
+            return;
+        }
+        this.paintTool = 'fill';
+        this.enterPaintbrushMode(target, true);
+        this.showActionStatus(feLocalize('worldmap.fillbucket.active', 'Fill bucket active. Click a connected donor province area, then Apply.'));
+    }
+
+    private loadTransferWandButton() {
+        const button = document.getElementById('toggle-transfer-wand') as HTMLButtonElement | null;
+        if (!button) return;
+        this.addSubscription(fromEvent<MouseEvent>(button, 'click').subscribe(event => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.toggleTransferWand();
+        }));
+        this.addSubscription(combineLatest([this.viewMode$, this.loader.loading$]).subscribe(([mode, loading]) => {
+            button.disabled = loading || (mode !== 'province' && mode !== 'state');
+            button.classList.toggle('active', this.transferWandActive);
+            button.setAttribute('aria-pressed', String(this.transferWandActive));
+        }));
+    }
+
+    private toggleTransferWand() {
+        this.transferWandActive = !this.transferWandActive;
+        this.resetTransferWandTarget();
+        const button = document.getElementById('toggle-transfer-wand') as HTMLButtonElement | null;
+        button?.classList.toggle('active', this.transferWandActive);
+        if (button) {
+            button.setAttribute('aria-pressed', String(this.transferWandActive));
+        }
+        this.showActionStatus(this.transferWandActive
+            ? feLocalize('worldmap.wand.picktarget', 'Transfer Wand active. Click a target state or ownership source first. Shift+click later to retarget.')
+            : feLocalize('worldmap.wand.off', 'Transfer Wand disabled.'));
+    }
+
+    private resetTransferWandTarget() {
+        this.transferWandTargetStateId = undefined;
+        this.transferWandOwner = undefined;
+        this.transferWandController = undefined;
+    }
+
     private mergeSelectedProvinces() {
         const selectedIds = Array.from(this.selectedProvinceIds$.value);
-        if (selectedIds.length < 2 || this.paintbrushSavePending) {
+        if (selectedIds.length < 2 || this.paintbrushSavePending || this.pendingProvinceMerge) {
             return;
         }
 
@@ -2265,7 +3743,9 @@ export class TopBar extends Subscriber {
         const sources = selectedIds.slice(1)
             .map(id => this.loader.worldMap.getProvinceById(id))
             .filter((province): province is NonNullable<typeof province> => !!province);
-        if (!target || sources.length !== selectedIds.length - 1) {
+        if (!target || target.id <= 0 || target.color === 0 ||
+            sources.length !== selectedIds.length - 1 ||
+            sources.some(source => source.id <= 0 || source.color === 0)) {
             this.showActionStatus(feLocalize('worldmap.action.mergeprovinces.invalid', 'One or more selected provinces no longer exist.'), 'warn');
             return;
         }
@@ -2300,11 +3780,13 @@ export class TopBar extends Subscriber {
             return;
         }
 
-        this.persistStates(result.changedStateIds);
-        this.persistStrategicRegions(result.changedStrategicRegionIds);
         this.setSelectedProvinceIds(new Set([targetId]), true);
         this.mapMutation$.next(this.mapMutation$.value + 1);
         this.refreshAfterPaintbrushSave = true;
+        this.pendingProvinceMerge = {
+            targetId,
+            sourceCount: selectedIds.length - 1,
+        };
 
         vscode.postMessage<WorldMapMessage>({
             command: 'persistprovincebmp',
@@ -2317,17 +3799,19 @@ export class TopBar extends Subscriber {
             provinces: this.collectCurrentProvinceDefs(),
             previousProvinces,
             deletedProvinceIds: result.deletedProvinceIds,
+            provinceReplacements: Object.fromEntries(result.deletedProvinceIds.map(id => [id, targetId])),
             targetProvinceId: targetId,
+            states: this.collectPersistedStates(result.changedStateIds),
+            strategicRegions: this.collectPersistedStrategicRegions(result.changedStrategicRegionIds),
         });
 
-        this.showActionStatus(
-            feLocalize(
-                'worldmap.action.mergeprovinces.done',
-                'Merged {0} provinces into province {1} and updated state/strategic-region membership.',
-                selectedIds.length - 1,
-                targetId
-            )
-        );
+        this.showActionStatus(feLocalize('worldmap.action.mergeprovinces.pending', 'Saving province merge...'));
+    }
+
+    private requestDestructiveReindex() {
+        if (this.reindexPending) return;
+        this.reindexPending = true;
+        vscode.postMessage<WorldMapMessage>({ command: 'reindexmap' });
     }
 
     /**
@@ -2354,6 +3838,15 @@ export class TopBar extends Subscriber {
 
         // Capture the full multi-selection for clamping.
         const clampedIds = new Set(this.selectedProvinceIds$.value);
+        if (targetProvince && useExistingColor) {
+            clampedIds.delete(targetProvince.id);
+            // With one selected target, allow transfer from any same-type
+            // existing province. With multiple selections, the remaining
+            // selected provinces are an explicit donor clamp.
+            this.paintAllowedProvinceIds = clampedIds.size > 0 ? clampedIds : undefined;
+        } else {
+            this.paintAllowedProvinceIds = clampedIds.size > 0 ? clampedIds : undefined;
+        }
 
         // Create a draft that accumulates painted pixels without mutating
         // the live map.  The live map is only touched on Apply.
@@ -2510,6 +4003,8 @@ export class TopBar extends Subscriber {
 
         this.paintbrushPreviousProvinces = null;
         this.sourceProvinceType = 'land';
+        this.paintAllowedProvinceIds = undefined;
+        this.paintTool = 'brush';
         this.paintbrushSavePending = false;
         this.refreshAfterPaintbrushSave = false;
         this.isPainting = false;
@@ -2541,6 +4036,8 @@ export class TopBar extends Subscriber {
         this.brushSize$.next(1);
         this.paintbrushPreviousProvinces = null;
         this.sourceProvinceType = 'land';
+        this.paintAllowedProvinceIds = undefined;
+        this.paintTool = 'brush';
         this.paintbrushSavePending = false;
         this.refreshAfterPaintbrushSave = false;
         this.isPainting = false;
@@ -2626,8 +4123,8 @@ export class TopBar extends Subscriber {
         // Uses the full multi-selection when multiple provinces are selected,
         // otherwise clamps to the single source province.  If nothing is
         // selected, painting is unrestricted.
-        const allowedProvinceIds = new Set(this.selectedProvinceIds$.value);
-        const hasClamp = allowedProvinceIds.size > 0;
+        const allowedProvinceIds = this.paintAllowedProvinceIds;
+        const hasClamp = !!allowedProvinceIds && allowedProvinceIds.size > 0;
 
         let anyPainted = false;
 
@@ -2660,7 +4157,7 @@ export class TopBar extends Subscriber {
                 // Province clamping: only paint within the selected province(s).
                 if (hasClamp) {
                     const provinceAtPixel = worldMap.getProvinceByPosition(px, py);
-                    if (!provinceAtPixel || !allowedProvinceIds.has(provinceAtPixel.id)) {
+                    if (!provinceAtPixel || !allowedProvinceIds!.has(provinceAtPixel.id)) {
                         continue;
                     }
                 }
@@ -2686,6 +4183,87 @@ export class TopBar extends Subscriber {
             this.paintedPixels$.next(newOverlayPixels);
             this.mapMutation$.next(this.mapMutation$.value + 1);
         }
+    }
+
+    /**
+     * Flood-fill one connected component of an existing donor province into
+     * the selected existing target province. This never allocates a new color
+     * or province record.
+     */
+    private fillAtPosition(mapX: number, mapY: number) {
+        const draft = this.provinceDraft$.value;
+        const worldMap = this.loader.worldMap;
+        if (!this.paintbrushActive$.value || !draft || draft.isNewProvince) {
+            this.showActionStatus(feLocalize('worldmap.fillbucket.existingonly', 'Fill Bucket requires an existing target province.'), 'warn');
+            return;
+        }
+        const startColor = worldMap.getColorAt(mapX, mapY);
+        const targetColor = this.paintbrushColor$.value;
+        if (startColor === undefined || startColor === 0 || startColor === targetColor) {
+            this.showActionStatus(feLocalize('worldmap.fillbucket.invalidstart', 'Click pixels belonging to a different existing province.'), 'warn');
+            return;
+        }
+        const donor = worldMap.getProvinceByPosition(mapX, mapY);
+        if (!donor || donor.type !== this.sourceProvinceType) {
+            this.showActionStatus(feLocalize('worldmap.fillbucket.mixedtypes', 'Fill Bucket cannot transfer pixels between land, sea, and lake province types.'), 'warn');
+            return;
+        }
+        if (this.paintAllowedProvinceIds && !this.paintAllowedProvinceIds.has(donor.id)) {
+            this.showActionStatus(feLocalize('worldmap.fillbucket.outsideclamp', 'That province is outside the selected donor set.'), 'warn');
+            return;
+        }
+
+        const width = worldMap.width;
+        const height = worldMap.height;
+        const pending: number[] = [mapY * width + mapX];
+        const visited = new Set<number>();
+        const newDraftPixels = new Map(draft.pixels);
+        const newOverlayPixels = new Map(this.paintedPixels$.value);
+        let changed = 0;
+        while (pending.length > 0) {
+            const index = pending.pop()!;
+            if (visited.has(index)) continue;
+            visited.add(index);
+            const x = index % width;
+            const y = Math.floor(index / width);
+            const key = `${x},${y}`;
+            const effectiveColor = draft.pixels.get(key) ?? worldMap.getColorAt(x, y);
+            if (effectiveColor !== startColor) continue;
+            newDraftPixels.set(key, targetColor);
+            newOverlayPixels.set(key, targetColor);
+            changed++;
+
+            const left = y * width + ((x - 1 + width) % width);
+            const right = y * width + ((x + 1) % width);
+            pending.push(left, right);
+            if (y > 0) pending.push(index - width);
+            if (y + 1 < height) pending.push(index + width);
+        }
+        if (changed === 0) return;
+        let previouslyTransferred = 0;
+        for (const key of draft.pixels.keys()) {
+            const [x, y] = key.split(',').map(Number);
+            if (worldMap.getColorAt(x, y) === startColor) previouslyTransferred++;
+        }
+        if (donor.mass - previouslyTransferred - changed <= 0) {
+            this.showActionStatus(feLocalize(
+                'worldmap.fillbucket.woulddelete',
+                'Fill would remove every pixel of province {0}. Use Merge Provinces for a whole-province transfer.',
+                donor.id
+            ), 'warn');
+            return;
+        }
+        draft.pixels = newDraftPixels;
+        this.provinceDraft$.next({ ...draft });
+        this.paintedPixels$.next(newOverlayPixels);
+        this.mapMutation$.next(this.mapMutation$.value + 1);
+        this.showActionStatus(feLocalize(
+            'worldmap.fillbucket.done',
+            'Filled {0} connected pixels from province {1} into province {2}. Review the preview, then Apply.',
+            changed,
+            donor.id,
+            draft.sourceProvinceId
+        ));
     }
 
     /**
@@ -2748,7 +4326,19 @@ export class TopBar extends Subscriber {
     }
 
     private persistStrategicRegions(srIds: number[], deletedFiles: string[] = []) {
-        const payload = Array.from(new Set(srIds))
+        const payload = this.collectPersistedStrategicRegions(srIds);
+
+        if (payload.length > 0 || deletedFiles.length > 0) {
+            vscode.postMessage<WorldMapMessage>({
+                command: 'persiststrategicregions',
+                strategicRegions: payload,
+                deletedFiles: Array.from(new Set(deletedFiles)),
+            } as any);
+        }
+    }
+
+    private collectPersistedStrategicRegions(srIds: number[]) {
+        return Array.from(new Set(srIds))
             .map(id => this.loader.worldMap.getStrategicRegionById(id))
             .filter((sr): sr is NonNullable<typeof sr> => !!sr)
             .map(sr => ({
@@ -2760,14 +4350,6 @@ export class TopBar extends Subscriber {
                 tokenStart: sr.token?.start,
                 tokenEnd: sr.token?.end,
             }));
-
-        if (payload.length > 0 || deletedFiles.length > 0) {
-            vscode.postMessage<WorldMapMessage>({
-                command: 'persiststrategicregions',
-                strategicRegions: payload,
-                deletedFiles: Array.from(new Set(deletedFiles)),
-            } as any);
-        }
     }
 
     private persistProvinces(provinceIds: number[], deletedFiles: string[] = []) {
@@ -2836,8 +4418,29 @@ export class TopBar extends Subscriber {
         }
     }
 
-    private persistStates(stateIds: number[], deletedFiles: string[] = []) {
-        const payload: PersistedState[] = Array.from(new Set(stateIds))
+    private persistStates(
+        stateIds: number[],
+        deletedFiles: string[] = [],
+        deletedStates: Array<{ id: number; file: string }> = [],
+        requestId?: string,
+        stateReplacements?: Record<number, number>
+    ) {
+        const payload = this.collectPersistedStates(stateIds);
+
+        if (payload.length > 0 || deletedFiles.length > 0 || deletedStates.length > 0) {
+            vscode.postMessage<WorldMapMessage>({
+                command: 'persiststates',
+                states: payload,
+                deletedFiles: Array.from(new Set(deletedFiles)),
+                deletedStates,
+                requestId,
+                stateReplacements,
+            });
+        }
+    }
+
+    private collectPersistedStates(stateIds: number[]): PersistedState[] {
+        return Array.from(new Set(stateIds))
             .map(id => this.loader.worldMap.getStateById(id))
             .filter((state): state is NonNullable<typeof state> => !!state)
             .map(state => ({
@@ -2846,6 +4449,7 @@ export class TopBar extends Subscriber {
                 manpower: state.manpower,
                 category: state.category,
                 owner: solveWithCondition(state.owner, this.selectedConditions$.value),
+                controller: solveWithCondition(state.controller, this.selectedConditions$.value),
                 provinces: [...state.provinces],
                 cores: solveWithConditionAsSet(state.cores, this.selectedConditions$.value),
                 impassable: state.impassable,
@@ -2855,10 +4459,6 @@ export class TopBar extends Subscriber {
                 tokenStart: state.token?.start,
                 tokenEnd: state.token?.end,
             }));
-
-        if (payload.length > 0 || deletedFiles.length > 0) {
-            vscode.postMessage<WorldMapMessage>({ command: 'persiststates', states: payload, deletedFiles: Array.from(new Set(deletedFiles)) });
-        }
     }
 
     private assignStatesToStrategicRegion() {
@@ -2976,6 +4576,7 @@ export class TopBar extends Subscriber {
     private getPersistenceTargets(target: any[], source: any[], type: 'state' | 'strategicregion' | 'province'): { ids: number[]; deletedFiles: string[] } {
         const ids: number[] = [];
         const deletedFiles: string[] = [];
+        const currentFiles = new Set<string>();
 
         const sourceById: Record<number, any> = {};
         for (const snapshot of source) {
@@ -2989,11 +4590,17 @@ export class TopBar extends Subscriber {
 
             if (current) {
                 ids.push(snapshot.id);
+                if (current.file) currentFiles.add(current.file);
                 continue;
             }
+        }
 
+        for (const snapshot of target) {
+            const current = type === 'strategicregion' ? snapshot.strategicRegion :
+                type === 'province' ? snapshot.province : snapshot.state;
+            if (current) continue;
             const previous = sourceById[snapshot.id];
-            if (previous && previous.token === null) {
+            if (previous?.file && !currentFiles.has(previous.file)) {
                 deletedFiles.push(previous.file);
             }
         }
