@@ -72,11 +72,26 @@ interface FEWorldMapClassExtra {
     getNextProvinceId(): number;
     snapshotProvinces(provinceIds: number[]): ProvinceSnapshot[];
     restoreProvinces(snapshots: ProvinceSnapshot[]): void;
-    mergeProvinces(targetProvinceId: number, sourceProvinceIds: number[]): {
+    mergeProvinces(targetProvinceId: number, sourceProvinceIds: number[], removeTargetFromStates?: boolean): {
         paintedPixels: Map<string, number>;
         deletedProvinceIds: number[];
         changedStateIds: number[];
         changedStrategicRegionIds: number[];
+        deletedStrategicRegionFiles: string[];
+        deletedStrategicRegions: Array<{ id: number; file: string }>;
+    } | undefined;
+    convertWaterProvincesToLand(
+        provinceIds: number[],
+        terrain: string,
+        continent: number,
+        coastal: boolean,
+        targetStateId: number,
+        targetStrategicRegionId: number
+    ): {
+        changedStateIds: number[];
+        changedStrategicRegionIds: number[];
+        deletedStrategicRegionFiles: string[];
+        deletedStrategicRegions: Array<{ id: number; file: string }>;
     } | undefined;
 
     /** Paintbrush: get the color at a pixel position */
@@ -300,7 +315,7 @@ export class Loader extends Subscriber {
     }
 }
 
-class FEWorldMapClass implements FEWorldMap {
+export class FEWorldMapClass implements FEWorldMap {
     width!: number;
     height!: number;
     countries!: Country[];
@@ -903,6 +918,41 @@ class FEWorldMapClass implements FEWorldMap {
         this.strategicRegionsCount = Math.max(this.badStrategicRegionsCount, lastSRId + 1);
     }
 
+    private deleteEmptyStrategicRegions(regionIds: number[]): {
+        deletedFiles: string[];
+        deletedRegions: Array<{ id: number; file: string }>;
+    } {
+        const deletedRegionRecords = Array.from(new Set(regionIds))
+            .map(id => this.getStrategicRegionById(id))
+            .filter((region): region is StrategicRegion => !!region && region.provinces.length === 0)
+            .map(region => ({ id: region.id, file: region.file }));
+        for (const region of deletedRegionRecords) {
+            this.strategicRegions[region.id] = undefined as any;
+        }
+
+        let lastRegionId = this.badStrategicRegionsCount - 1;
+        for (let id = this.strategicRegions.length - 1; id >= this.badStrategicRegionsCount; id--) {
+            if (this.strategicRegions[id]) {
+                lastRegionId = id;
+                break;
+            }
+        }
+        this.strategicRegionsCount = Math.max(
+            this.badStrategicRegionsCount,
+            lastRegionId + 1
+        );
+
+        const deletedFiles = Array.from(new Set(
+            deletedRegionRecords
+                .map(region => region.file)
+                .filter(file => !this.strategicRegions.some(region => region?.file === file))
+        ));
+        return {
+            deletedFiles,
+            deletedRegions: deletedRegionRecords.filter(region => !deletedFiles.includes(region.file)),
+        };
+    }
+
     private recomputeRegionGeometry(region: StrategicRegion | State): void {
         const provinces = region.provinces
             .map(id => this.getProvinceById(id))
@@ -1092,11 +1142,13 @@ class FEWorldMapClass implements FEWorldMap {
         this.provincesCount = Math.max(startScan, lastProvinceId + 1);
     }
 
-    public mergeProvinces(targetProvinceId: number, sourceProvinceIds: number[]): {
+    public mergeProvinces(targetProvinceId: number, sourceProvinceIds: number[], removeTargetFromStates = false): {
         paintedPixels: Map<string, number>;
         deletedProvinceIds: number[];
         changedStateIds: number[];
         changedStrategicRegionIds: number[];
+        deletedStrategicRegionFiles: string[];
+        deletedStrategicRegions: Array<{ id: number; file: string }>;
     } | undefined {
         const target = this.getProvinceById(targetProvinceId);
         const sources = Array.from(new Set(sourceProvinceIds))
@@ -1126,20 +1178,25 @@ class FEWorldMapClass implements FEWorldMap {
 
         const deletedProvinceIds = sources.map(source => source.id);
         const deletedSet = new Set(deletedProvinceIds);
+        const stateRemovalSet = removeTargetFromStates
+            ? new Set([targetProvinceId, ...deletedProvinceIds])
+            : deletedSet;
         this.rebuildCoverZonesFromPixels(target);
         const changedStateIds = new Set<number>();
         this.forEachState(state => {
-            const next = state.provinces.filter(id => !deletedSet.has(id));
+            const next = state.provinces.filter(id => !stateRemovalSet.has(id));
             if (next.length !== state.provinces.length) {
                 state.provinces = next;
                 changedStateIds.add(state.id);
                 this.recomputeStateGeometry(state);
             }
-            for (const deletedId of deletedProvinceIds) {
-                const value = state.victoryPoints[deletedId];
+            for (const removedId of stateRemovalSet) {
+                const value = state.victoryPoints[removedId];
                 if (value !== undefined) {
-                    state.victoryPoints[targetProvinceId] = (state.victoryPoints[targetProvinceId] ?? 0) + value;
-                    delete state.victoryPoints[deletedId];
+                    if (!removeTargetFromStates) {
+                        state.victoryPoints[targetProvinceId] = (state.victoryPoints[targetProvinceId] ?? 0) + value;
+                    }
+                    delete state.victoryPoints[removedId];
                     changedStateIds.add(state.id);
                 }
             }
@@ -1164,6 +1221,9 @@ class FEWorldMapClass implements FEWorldMap {
             changedStrategicRegionIds.add(targetRegion.id);
             this.recomputeRegionGeometry(targetRegion);
         }
+        const deletedRegionResult = this.deleteEmptyStrategicRegions(
+            Array.from(changedStrategicRegionIds).filter(id => id !== targetRegion?.id)
+        );
 
         for (const source of sources) {
             this.provinces[source.id] = undefined;
@@ -1189,6 +1249,67 @@ class FEWorldMapClass implements FEWorldMap {
             deletedProvinceIds,
             changedStateIds: Array.from(changedStateIds),
             changedStrategicRegionIds: Array.from(changedStrategicRegionIds),
+            deletedStrategicRegionFiles: deletedRegionResult.deletedFiles,
+            deletedStrategicRegions: deletedRegionResult.deletedRegions,
+        };
+    }
+
+    public convertWaterProvincesToLand(
+        provinceIds: number[],
+        terrain: string,
+        continent: number,
+        coastal: boolean,
+        targetStateId: number,
+        targetStrategicRegionId: number
+    ): {
+        changedStateIds: number[];
+        changedStrategicRegionIds: number[];
+        deletedStrategicRegionFiles: string[];
+        deletedStrategicRegions: Array<{ id: number; file: string }>;
+    } | undefined {
+        const normalizedIds = this.normalizeProvinceIds(provinceIds);
+        const provinces = normalizedIds
+            .map(id => this.getProvinceById(id))
+            .filter((province): province is Province => !!province);
+        const targetState = this.getStateById(targetStateId);
+        const targetRegion = this.getStrategicRegionById(targetStrategicRegionId);
+        const selectedTerrain = this.terrains.find(value => value.name === terrain && !value.isNaval);
+        if (provinces.length !== normalizedIds.length || provinces.length === 0 ||
+            provinces.some(province => province.id <= 0 || province.color === 0 ||
+                (province.type !== 'sea' && province.type !== 'lake')) ||
+            !targetState || !targetRegion || !selectedTerrain ||
+            continent <= 0 || !this.continents[continent]) {
+            return undefined;
+        }
+
+        const sourceRegionIds = new Set<number>();
+        for (const province of provinces) {
+            const sourceRegion = this.getStrategicRegionByProvinceId(province.id);
+            if (sourceRegion) {
+                sourceRegionIds.add(sourceRegion.id);
+            }
+            province.type = 'land';
+            province.terrain = terrain;
+            province.continent = continent;
+            province.coastal = coastal;
+        }
+
+        const changedStateIds = new Set(
+            this.assignProvincesToState(normalizedIds, targetStateId) ?? []
+        );
+        changedStateIds.add(targetStateId);
+        const changedStrategicRegionIds = new Set(
+            this.assignProvincesToStrategicRegion(normalizedIds, targetStrategicRegionId) ?? []
+        );
+        changedStrategicRegionIds.add(targetStrategicRegionId);
+        const deletedRegionResult = this.deleteEmptyStrategicRegions(
+            Array.from(sourceRegionIds).filter(id => id !== targetStrategicRegionId)
+        );
+        return {
+            changedStateIds: Array.from(changedStateIds),
+            changedStrategicRegionIds: Array.from(changedStrategicRegionIds),
+            deletedStrategicRegionFiles: deletedRegionResult.deletedFiles,
+            deletedStrategicRegions: deletedRegionResult.deletedRegions,
         };
     }
 

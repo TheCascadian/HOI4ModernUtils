@@ -386,6 +386,30 @@
             </div>
         </div>
     </div>
+    <div id="water-to-land-modal" class="worldmap-modal" hidden style="display:none;">
+        <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="water-to-land-title">
+            <div id="water-to-land-title" class="worldmap-modal-title">%worldmap.waterland.title|Convert Water Provinces to Land%</div>
+            <div id="water-to-land-summary" class="worldmap-modal-summary"></div>
+            <label for="water-to-land-terrain">%worldmap.waterland.terrain|Land terrain%</label>
+            <select id="water-to-land-terrain"></select>
+            <label for="water-to-land-continent">%worldmap.waterland.continent|Continent%</label>
+            <select id="water-to-land-continent"></select>
+            <label for="water-to-land-state">%worldmap.waterland.state|Destination state%</label>
+            <select id="water-to-land-state"></select>
+            <label for="water-to-land-region">%worldmap.waterland.region|Destination strategic region%</label>
+            <select id="water-to-land-region"></select>
+            <label>
+                <input id="water-to-land-coastal" type="checkbox" checked/>
+                %worldmap.waterland.coastal|Mark converted provinces coastal%
+            </label>
+            <div class="worldmap-modal-summary">%worldmap.waterland.warning|This rewrites definition.csv plus state and strategic-region membership. Empty source strategic regions are removed. Province BMP undo does not restore all related files.%</div>
+            <div id="water-to-land-error" class="worldmap-modal-error" role="alert"></div>
+            <div class="worldmap-modal-actions">
+                <button id="water-to-land-cancel">%worldmap.waterland.cancel|Cancel%</button>
+                <button id="water-to-land-apply" class="primary">%worldmap.waterland.apply|Convert to Land%</button>
+            </div>
+        </div>
+    </div>
     <div id="warnings-container">
         <textarea id="warnings" readonly wrap="off"></textarea>
     </div>

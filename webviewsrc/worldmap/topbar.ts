@@ -14,7 +14,7 @@ import { ConditionItem, conditionItemToStringValue, conditionToString, stringVal
 import { Zone } from "../../src/previewdef/worldmap/definitions";
 import { applyBrushStroke, getBrushBounds, getInterpolatedBrushPositions } from "./brush";
 import { PaintDraftHistory } from "./paintdraft";
-import { ProvinceSelectionHistory, ProvinceSelectionSnapshot, selectProvinceIds, selectRiverProvinceIds } from "./selection";
+import { isPersistableProvinceDefinition, normalizeEditableProvinceIds, ProvinceSelectionHistory, ProvinceSelectionSnapshot, selectProvinceIds, selectRiverProvinceIds } from "./selection";
 import { OceanTileReadinessIssue, verifyOceanTileReadiness } from "../../src/previewdef/worldmap/areaoperations";
 
 export type ViewMode = 'province' | 'state' | 'strategicregion' | 'supplyarea' | 'warnings' | 'country';
@@ -196,7 +196,8 @@ export class TopBar extends Subscriber {
     public paintbrushCanUndo$: BehaviorSubject<boolean>;
     /** Whether a paintbrush save is pending backend acknowledgment */
     private paintbrushSavePending = false;
-    private pendingProvinceMerge: { targetId: number; sourceCount: number } | undefined;
+    private pendingProvinceMerge: { targetId: number; sourceCount: number; ocean: boolean } | undefined;
+    private pendingWaterToLand: { provinceCount: number } | undefined;
     /** Whether to refresh after the pending paintbrush save completes */
     private refreshAfterPaintbrushSave = false;
     private mergeRequestSequence = 0;
@@ -421,6 +422,7 @@ export class TopBar extends Subscriber {
                 if (data.success === false) {
                     this.paintbrushSavePending = false;
                     this.pendingProvinceMerge = undefined;
+                    this.pendingWaterToLand = undefined;
                     this.refreshAfterPaintbrushSave = false;
 
                     console.error(
@@ -457,6 +459,8 @@ export class TopBar extends Subscriber {
                 }
                 const completedProvinceMerge = this.pendingProvinceMerge;
                 this.pendingProvinceMerge = undefined;
+                const completedWaterToLand = this.pendingWaterToLand;
+                this.pendingWaterToLand = undefined;
 
                 if (shouldRefresh) {
                     this.loader.refresh();
@@ -464,12 +468,23 @@ export class TopBar extends Subscriber {
                 if (completedProvinceMerge) {
                     this.showActionStatus(
                         feLocalize(
-                            'worldmap.action.mergeprovinces.done',
-                            'Merged {0} provinces into province {1} and updated state/strategic-region membership.',
+                            completedProvinceMerge.ocean
+                                ? 'worldmap.action.consolidateocean.done'
+                                : 'worldmap.action.mergeprovinces.done',
+                            completedProvinceMerge.ocean
+                                ? 'Consolidated {0} ocean provinces into province {1}; removed state membership and empty source regions.'
+                                : 'Merged {0} provinces into province {1} and updated state/strategic-region membership.',
                             completedProvinceMerge.sourceCount,
                             completedProvinceMerge.targetId
                         )
                     );
+                }
+                if (completedWaterToLand) {
+                    this.showActionStatus(feLocalize(
+                        'worldmap.waterland.done',
+                        'Converted {0} water province(s) to land and assigned their state and strategic region.',
+                        completedWaterToLand.provinceCount
+                    ));
                 }
 
                 return;
@@ -584,6 +599,7 @@ export class TopBar extends Subscriber {
         this.loadAreaOperationResults();
         this.loadNorthAmericaPipelineModal();
         this.loadOceanReadinessModal();
+        this.loadWaterToLandModal();
         this.initExportMapMessageListener();
     }
 
@@ -598,6 +614,211 @@ export class TopBar extends Subscriber {
             modal.hidden = true;
             modal.style.display = 'none';
         }));
+    }
+
+    private loadWaterToLandModal() {
+        const modal = document.getElementById('water-to-land-modal') as HTMLDivElement | null;
+        const cancel = document.getElementById('water-to-land-cancel') as HTMLButtonElement | null;
+        const apply = document.getElementById('water-to-land-apply') as HTMLButtonElement | null;
+        if (!modal || !cancel || !apply) {
+            return;
+        }
+        const close = () => {
+            modal.hidden = true;
+            modal.style.display = 'none';
+        };
+        this.addSubscription(fromEvent(cancel, 'click').subscribe(event => {
+            event.preventDefault();
+            close();
+        }));
+        this.addSubscription(fromEvent(apply, 'click').subscribe(event => {
+            event.preventDefault();
+            if (this.applyWaterToLandConversion()) {
+                close();
+            }
+        }));
+    }
+
+    private showWaterToLandModal() {
+        if (this.paintbrushActive$.value || this.paintbrushSavePending ||
+            this.pendingProvinceMerge || this.pendingWaterToLand) {
+            this.showActionStatus(feLocalize(
+                'worldmap.action.provinceedit.busy',
+                'Finish or cancel the current province edit first.'
+            ), 'warn');
+            return;
+        }
+        const selectedIds = normalizeEditableProvinceIds(
+            this.loader.worldMap,
+            Array.from(this.selectedProvinceIds$.value)
+        );
+        const selected = selectedIds
+            .map(id => this.loader.worldMap.getProvinceById(id))
+            .filter((province): province is NonNullable<typeof province> => !!province);
+        if (selected.length === 0) {
+            this.showActionStatus(feLocalize(
+                'worldmap.waterland.missingselection',
+                'Select one or more sea or lake provinces first.'
+            ), 'warn');
+            return;
+        }
+        if (selected.some(province => province.type !== 'sea' && province.type !== 'lake')) {
+            this.showActionStatus(feLocalize(
+                'worldmap.waterland.wateronly',
+                'Water-to-land conversion accepts only sea and lake provinces.'
+            ), 'warn');
+            return;
+        }
+
+        const modal = document.getElementById('water-to-land-modal') as HTMLDivElement | null;
+        const summary = document.getElementById('water-to-land-summary');
+        const terrain = document.getElementById('water-to-land-terrain') as HTMLSelectElement | null;
+        const continent = document.getElementById('water-to-land-continent') as HTMLSelectElement | null;
+        const state = document.getElementById('water-to-land-state') as HTMLSelectElement | null;
+        const region = document.getElementById('water-to-land-region') as HTMLSelectElement | null;
+        const coastal = document.getElementById('water-to-land-coastal') as HTMLInputElement | null;
+        const error = document.getElementById('water-to-land-error');
+        const apply = document.getElementById('water-to-land-apply') as HTMLButtonElement | null;
+        if (!modal || !summary || !terrain || !continent || !state || !region || !coastal || !error || !apply) {
+            return;
+        }
+
+        const setOptions = (
+            select: HTMLSelectElement,
+            options: Array<{ value: number | string; label: string }>
+        ) => {
+            select.textContent = '';
+            for (const item of options) {
+                const option = document.createElement('option');
+                option.value = String(item.value);
+                option.textContent = item.label;
+                select.appendChild(option);
+            }
+        };
+        setOptions(terrain, this.loader.worldMap.terrains
+            .filter(value => !value.isNaval)
+            .sort((a, b) => a.name.localeCompare(b.name))
+            .map(value => ({ value: value.name, label: value.name })));
+        setOptions(continent, this.loader.worldMap.continents
+            .map((name, id) => ({ id, name }))
+            .filter(value => value.id > 0 && !!value.name)
+            .map(value => ({ value: value.id, label: `${value.id}: ${value.name}` })));
+        const states: Array<{ value: number; label: string }> = [];
+        this.loader.worldMap.forEachState(value => {
+            if (value.id > 0) {
+                states.push({
+                    value: value.id,
+                    label: `${value.id}: ${value.localisedName ?? value.name}`,
+                });
+            }
+        });
+        setOptions(state, states.sort((a, b) => a.value - b.value));
+        const regions: Array<{ value: number; label: string }> = [];
+        this.loader.worldMap.forEachStrategicRegion(value => {
+            if (value.id > 0) {
+                regions.push({
+                    value: value.id,
+                    label: `${value.id}: ${value.localisedName ?? value.name}`,
+                });
+            }
+        });
+        setOptions(region, regions.sort((a, b) => a.value - b.value));
+
+        const selectedState = this.loader.worldMap.getStateById(this.selectedStateId$.value);
+        if (selectedState) {
+            state.value = String(selectedState.id);
+        }
+        const selectedRegion = this.loader.worldMap.getStrategicRegionById(this.selectedStrategicRegionId$.value) ??
+            this.loader.worldMap.getStrategicRegionByProvinceId(selectedIds[0]);
+        if (selectedRegion) {
+            region.value = String(selectedRegion.id);
+        }
+        const targetState = this.loader.worldMap.getStateById(Number.parseInt(state.value, 10));
+        const templateProvince = targetState?.provinces
+            .map(id => this.loader.worldMap.getProvinceById(id))
+            .find(province => !!province && province.type === 'land' && province.continent > 0);
+        const preferredTerrain = templateProvince?.terrain === 'ocean' || templateProvince?.terrain === 'lakes'
+            ? 'plains'
+            : templateProvince?.terrain ?? 'plains';
+        if (Array.from(terrain.options).some(option => option.value === preferredTerrain)) {
+            terrain.value = preferredTerrain;
+        }
+        if (templateProvince?.continent && Array.from(continent.options).some(option => option.value === String(templateProvince.continent))) {
+            continent.value = String(templateProvince.continent);
+        }
+        coastal.checked = true;
+        summary.textContent = feLocalize(
+            'worldmap.waterland.summary',
+            'Convert {0} selected water province(s) to land. Choose all required definition and ownership metadata before applying.',
+            selectedIds.length
+        );
+        error.textContent = '';
+        apply.disabled = terrain.options.length === 0 || continent.options.length === 0 ||
+            state.options.length === 0 || region.options.length === 0;
+        modal.dataset.provinceIds = selectedIds.join(',');
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        terrain.focus();
+    }
+
+    private applyWaterToLandConversion(): boolean {
+        const modal = document.getElementById('water-to-land-modal') as HTMLDivElement | null;
+        const terrain = document.getElementById('water-to-land-terrain') as HTMLSelectElement | null;
+        const continent = document.getElementById('water-to-land-continent') as HTMLSelectElement | null;
+        const state = document.getElementById('water-to-land-state') as HTMLSelectElement | null;
+        const region = document.getElementById('water-to-land-region') as HTMLSelectElement | null;
+        const coastal = document.getElementById('water-to-land-coastal') as HTMLInputElement | null;
+        const error = document.getElementById('water-to-land-error');
+        if (!modal || !terrain || !continent || !state || !region || !coastal || !error ||
+            this.paintbrushSavePending || this.pendingProvinceMerge || this.pendingWaterToLand) {
+            return false;
+        }
+        const provinceIds = (modal.dataset.provinceIds ?? '')
+            .split(',')
+            .map(value => Number.parseInt(value, 10))
+            .filter(Number.isInteger);
+        const continentId = Number.parseInt(continent.value, 10);
+        const stateId = Number.parseInt(state.value, 10);
+        const regionId = Number.parseInt(region.value, 10);
+        const previousProvinces = this.collectCurrentProvinceDefs();
+        const result = this.loader.worldMap.convertWaterProvincesToLand(
+            provinceIds,
+            terrain.value,
+            continentId,
+            coastal.checked,
+            stateId,
+            regionId
+        );
+        if (!result) {
+            error.textContent = feLocalize(
+                'worldmap.waterland.invalid',
+                'Conversion was refused. Confirm that every selection is a valid water province and every destination value still exists.'
+            );
+            return false;
+        }
+
+        this.pendingWaterToLand = { provinceCount: provinceIds.length };
+        this.refreshAfterPaintbrushSave = true;
+        this.mapMutation$.next(this.mapMutation$.value + 1);
+        vscode.postMessage<WorldMapMessage>({
+            command: 'persistprovincebmp',
+            paintedPixels: [],
+            width: this.loader.worldMap.width,
+            height: this.loader.worldMap.height,
+            provinces: this.collectCurrentProvinceDefs(),
+            previousProvinces,
+            targetProvinceId: provinceIds[0],
+            targetProvinceIds: provinceIds,
+            states: this.collectPersistedStates(result.changedStateIds),
+            strategicRegions: this.collectPersistedStrategicRegions(result.changedStrategicRegionIds),
+            deletedStrategicRegionFiles: result.deletedStrategicRegionFiles,
+            deletedStrategicRegions: result.deletedStrategicRegions,
+        });
+        this.showActionStatus(feLocalize(
+            'worldmap.waterland.pending',
+            'Saving water-to-land conversion...'
+        ));
+        return true;
     }
 
     private loadAccessibilityControls() {
@@ -2844,8 +3065,41 @@ export class TopBar extends Subscriber {
                                 'worldmap.contextmenu.provincetools.merge.disabled',
                                 'Merge Selected Provinces'
                             ),
-                        disabled: selectedProvinceIds.size < 2 || this.paintbrushSavePending,
+                        disabled: selectedProvinceIds.size < 2 || this.paintbrushActive$.value ||
+                            this.paintbrushSavePending || !!this.pendingProvinceMerge || !!this.pendingWaterToLand,
                         action: () => this.mergeSelectedProvinces(),
+                    },
+                    {
+                        label: selectedProvinceIds.size >= 2
+                            ? feLocalize(
+                                'worldmap.contextmenu.provincetools.consolidateocean',
+                                'Consolidate Selected Ocean Provinces into First (#{0})',
+                                Array.from(selectedProvinceIds)[0]
+                            )
+                            : feLocalize(
+                                'worldmap.contextmenu.provincetools.consolidateocean.disabled',
+                                'Consolidate Selected Ocean Provinces to One Tile'
+                            ),
+                        tooltip: feLocalize(
+                            'worldmap.contextmenu.provincetools.consolidateocean.tooltip',
+                            'Merge selected sea provinces across strategic-region boundaries, canonicalize the survivor as ocean, remove state membership, and delete empty source regions.'
+                        ),
+                        disabled: selectedProvinceIds.size < 2 || this.paintbrushActive$.value ||
+                            this.paintbrushSavePending || !!this.pendingProvinceMerge || !!this.pendingWaterToLand,
+                        action: () => this.confirmConsolidateSelectedOceanProvinces(),
+                    },
+                    {
+                        label: feLocalize(
+                            'worldmap.contextmenu.provincetools.watertoland',
+                            'Convert Selected Water Provinces to Land'
+                        ),
+                        tooltip: feLocalize(
+                            'worldmap.contextmenu.provincetools.watertoland.tooltip',
+                            'Choose land terrain, continent, destination state, and destination strategic region for selected sea or lake provinces.'
+                        ),
+                        disabled: selectedProvinceIds.size === 0 || this.paintbrushActive$.value ||
+                            this.paintbrushSavePending || !!this.pendingProvinceMerge || !!this.pendingWaterToLand,
+                        action: () => this.showWaterToLandModal(),
                     },
                     {
                         label: feLocalize('worldmap.contextmenu.provincetools.createstate', 'State from Selected Provinces'),
@@ -3517,6 +3771,7 @@ export class TopBar extends Subscriber {
         recordHistory: boolean,
         nextRiverIds: Set<number> = new Set<number>()
     ) {
+        nextSelection = new Set(normalizeEditableProvinceIds(this.loader.worldMap, nextSelection));
         const current = this.selectedProvinceIds$.value;
         const currentRiverIds = this.selectedRiverIds$.value;
         if (this.isSameSelection(current, nextSelection) &&
@@ -4019,9 +4274,54 @@ export class TopBar extends Subscriber {
         this.transferWandController = undefined;
     }
 
-    private mergeSelectedProvinces() {
-        const selectedIds = Array.from(this.selectedProvinceIds$.value);
-        if (selectedIds.length < 2 || this.paintbrushSavePending || this.pendingProvinceMerge) {
+    private confirmConsolidateSelectedOceanProvinces() {
+        const selectedIds = normalizeEditableProvinceIds(
+            this.loader.worldMap,
+            Array.from(this.selectedProvinceIds$.value)
+        );
+        if (selectedIds.length < 2) {
+            this.showActionStatus(feLocalize(
+                'worldmap.action.consolidateocean.missingselection',
+                'Select at least two sea provinces first.'
+            ), 'warn');
+            return;
+        }
+        const provinces = selectedIds
+            .map(id => this.loader.worldMap.getProvinceById(id))
+            .filter((province): province is NonNullable<typeof province> => !!province);
+        if (provinces.length !== selectedIds.length || provinces.some(province => province.type !== 'sea')) {
+            this.showActionStatus(feLocalize(
+                'worldmap.action.consolidateocean.seaonly',
+                'Ocean consolidation accepts only sea provinces. Lakes and land must be handled separately.'
+            ), 'warn');
+            return;
+        }
+        this.showDestructiveActionConfirmation(
+            feLocalize('worldmap.action.consolidateocean.title', 'Consolidate Ocean Provinces'),
+            feLocalize(
+                'worldmap.action.consolidateocean.confirm',
+                'Merge {0} selected sea provinces into province {1}, even across strategic-region boundaries? The survivor becomes a canonical ocean tile, all selected state membership is removed, and empty source regions are deleted.',
+                selectedIds.length,
+                selectedIds[0]
+            ),
+            feLocalize('worldmap.action.consolidateocean.apply', 'Consolidate Ocean'),
+            () => this.mergeSelectedProvinces(true)
+        );
+    }
+
+    private mergeSelectedProvinces(oceanConsolidation = false) {
+        const rawSelectedIds = Array.from(this.selectedProvinceIds$.value);
+        const selectedIds = normalizeEditableProvinceIds(this.loader.worldMap, rawSelectedIds);
+        if (selectedIds.length !== rawSelectedIds.length) {
+            this.setSelectedProvinceIds(new Set(selectedIds), true);
+            this.showActionStatus(feLocalize(
+                'worldmap.action.mergeprovinces.recoveryignored',
+                'Ignored {0} synthetic or zero-color recovery selection(s).',
+                rawSelectedIds.length - selectedIds.length
+            ), 'warn');
+        }
+        if (selectedIds.length < 2 || this.paintbrushActive$.value || this.paintbrushSavePending ||
+            this.pendingProvinceMerge || this.pendingWaterToLand) {
             return;
         }
 
@@ -4036,7 +4336,14 @@ export class TopBar extends Subscriber {
             this.showActionStatus(feLocalize('worldmap.action.mergeprovinces.invalid', 'One or more selected provinces no longer exist.'), 'warn');
             return;
         }
-        if (sources.some(source => source.type !== target.type)) {
+        if (oceanConsolidation && (target.type !== 'sea' || sources.some(source => source.type !== 'sea'))) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.consolidateocean.seaonly', 'Ocean consolidation accepts only sea provinces. Lakes and land must be handled separately.'),
+                'warn'
+            );
+            return;
+        }
+        if (!oceanConsolidation && sources.some(source => source.type !== target.type)) {
             this.showActionStatus(
                 feLocalize('worldmap.action.mergeprovinces.mixedtypes', 'Land, sea, and lake provinces cannot be merged together.'),
                 'warn'
@@ -4045,14 +4352,16 @@ export class TopBar extends Subscriber {
         }
         const targetStateId = this.loader.worldMap.getStateByProvinceId(targetId)?.id;
         const targetRegionId = this.loader.worldMap.getStrategicRegionByProvinceId(targetId)?.id;
-        if (sources.some(source => this.loader.worldMap.getStateByProvinceId(source.id)?.id !== targetStateId)) {
+        if (!oceanConsolidation &&
+            sources.some(source => this.loader.worldMap.getStateByProvinceId(source.id)?.id !== targetStateId)) {
             this.showActionStatus(
                 feLocalize('worldmap.action.mergeprovinces.mixedstates', 'Selected provinces must belong to the same state before merging.'),
                 'warn'
             );
             return;
         }
-        if (sources.some(source => this.loader.worldMap.getStrategicRegionByProvinceId(source.id)?.id !== targetRegionId)) {
+        if (!oceanConsolidation &&
+            sources.some(source => this.loader.worldMap.getStrategicRegionByProvinceId(source.id)?.id !== targetRegionId)) {
             this.showActionStatus(
                 feLocalize('worldmap.action.mergeprovinces.mixedregions', 'Selected provinces must belong to the same strategic region before merging.'),
                 'warn'
@@ -4061,9 +4370,32 @@ export class TopBar extends Subscriber {
         }
 
         const previousProvinces = this.collectCurrentProvinceDefs();
-        const result = this.loader.worldMap.mergeProvinces(targetId, selectedIds.slice(1));
-        if (!result || result.paintedPixels.size === 0) {
+        if (oceanConsolidation) {
+            target.type = 'sea';
+            target.terrain = 'ocean';
+            target.continent = 0;
+            target.coastal = false;
+            if (!targetRegionId) {
+                const sourceRegion = sources
+                    .map(source => this.loader.worldMap.getStrategicRegionByProvinceId(source.id))
+                    .find((region): region is NonNullable<typeof region> => !!region);
+                if (sourceRegion) {
+                    this.loader.worldMap.assignProvincesToStrategicRegion([targetId], sourceRegion.id);
+                } else {
+                    this.loader.worldMap.createStrategicRegionFromProvinces([targetId]);
+                }
+            }
+        }
+        const result = this.loader.worldMap.mergeProvinces(
+            targetId,
+            selectedIds.slice(1),
+            oceanConsolidation
+        );
+        if (!result) {
             this.showActionStatus(feLocalize('worldmap.action.mergeprovinces.nochange', 'No provinces were merged.'), 'warn');
+            if (oceanConsolidation) {
+                this.loader.refresh();
+            }
             return;
         }
 
@@ -4073,6 +4405,7 @@ export class TopBar extends Subscriber {
         this.pendingProvinceMerge = {
             targetId,
             sourceCount: selectedIds.length - 1,
+            ocean: oceanConsolidation,
         };
 
         vscode.postMessage<WorldMapMessage>({
@@ -4090,9 +4423,13 @@ export class TopBar extends Subscriber {
             targetProvinceId: targetId,
             states: this.collectPersistedStates(result.changedStateIds),
             strategicRegions: this.collectPersistedStrategicRegions(result.changedStrategicRegionIds),
+            deletedStrategicRegionFiles: result.deletedStrategicRegionFiles,
+            deletedStrategicRegions: result.deletedStrategicRegions,
         });
 
-        this.showActionStatus(feLocalize('worldmap.action.mergeprovinces.pending', 'Saving province merge...'));
+        this.showActionStatus(oceanConsolidation
+            ? feLocalize('worldmap.action.consolidateocean.pending', 'Saving ocean consolidation...')
+            : feLocalize('worldmap.action.mergeprovinces.pending', 'Saving province merge...'));
     }
 
     private requestDestructiveReindex() {
@@ -4620,6 +4957,12 @@ export class TopBar extends Subscriber {
     private collectCurrentProvinceDefs(): any[] {
         const defs: any[] = [];
         this.loader.worldMap.forEachProvince(p => {
+            // Negative/zero IDs and color 0 are loader recovery records. They
+            // are useful for diagnostics, but can never be written to
+            // definition.csv or used as province-edit targets.
+            if (!isPersistableProvinceDefinition(p)) {
+                return;
+            }
             defs.push({
                 id: p.id,
                 color: p.color,

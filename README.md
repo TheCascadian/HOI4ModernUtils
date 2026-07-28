@@ -60,6 +60,9 @@ The Preview HOI4 file toolbar button is available for supported HOI4 text files,
 - Paint province pixels directly on the map with exact square brush sizes, continuous gap-free strokes, a staged-pixel eraser, and draft undo/redo before saving.
 - Create provinces from a selected area, or transfer pixels into an existing province with the Brush, Fill Bucket, or Transfer Wand.
 - The Fill Bucket transfers one connected region and prevents invalid land, lake, and sea/ocean type transfers. Existing-province pixel transfers do not create province IDs.
+- Manual province merge ignores synthetic loader recovery records, including province `0` and color `0`, instead of sending them to the persistence validator.
+- **Consolidate Selected Ocean Provinces to One Tile** merges selected sea provinces across strategic-region boundaries, canonicalizes the survivor as `sea`/`ocean`/continent `0`, removes its state membership, and deletes empty source regions.
+- **Convert Selected Water Provinces to Land** requires explicit land terrain, continent, destination state, destination strategic region, and coastal metadata before changing selected sea or lake definitions.
 - Merge provinces and repair affected state victory points, strategic-region membership, `adjacencies.csv`, `railways.txt`, and `supply_nodes.txt`.
 - Use the standalone province-reference resolver to remove or repair invalid supported-map references.
 - Province bitmap and `definition.csv` changes are saved together. Map editing has its own undo/redo history.

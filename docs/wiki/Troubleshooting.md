@@ -18,6 +18,8 @@ The extension skips missing or stale DLC archives and reports the archive path i
 
 Run the smallest relevant repair workflow first. Supported province repairs can update victory points, strategic regions, adjacencies, railways, and supply nodes. Do not jump to global reindexing unless changing every loaded ID is truly intended.
 
+If an older build refuses every manual province merge with a message about province `0` or color `0`, update and reload the EXTENSION. Those values are loader recovery records and are now removed from both manual selections and persistence payloads before validation.
+
 ## A large action stopped or did not do what I expected
 
 Do not repeat it blindly. Restore your backup, confirm the selected scope, and retry on a disposable copy. The consolidation workflow uses in-webview preflight and execution UI instead of browser prompts, so look for an open in-map dialog before assuming the action failed.

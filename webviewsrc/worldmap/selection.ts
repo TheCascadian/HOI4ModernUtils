@@ -7,6 +7,36 @@ export interface SelectableWorldMap {
     getProvinceByPosition(x: number, y: number): Province | undefined;
 }
 
+export interface EditableProvinceLookup {
+    getProvinceById(provinceId: number): Province | undefined;
+}
+
+export function isPersistableProvinceDefinition(
+    province: Pick<Province, 'id' | 'color'>
+): boolean {
+    return province.id > 0 && province.color !== 0;
+}
+
+export function normalizeEditableProvinceIds(
+    worldMap: EditableProvinceLookup,
+    provinceIds: Iterable<number>
+): number[] {
+    const result: number[] = [];
+    const seen = new Set<number>();
+    for (const id of provinceIds) {
+        if (seen.has(id)) {
+            continue;
+        }
+        const province = worldMap.getProvinceById(id);
+        if (!province || !isPersistableProvinceDefinition(province)) {
+            continue;
+        }
+        seen.add(id);
+        result.push(id);
+    }
+    return result;
+}
+
 export interface ProvinceSelectionSnapshot {
     provinceIds: Set<number>;
     riverIds: Set<number>;
@@ -64,7 +94,7 @@ export function selectProvinceIds(
     worldMap.forEachProvince(province => {
         // Negative/zero IDs are loader-generated recovery records (for
         // example, an unmatched black BMP colour), not editable provinces.
-        if (province.id > 0 && province.color !== 0 && predicate(province)) {
+        if (isPersistableProvinceDefinition(province) && predicate(province)) {
             result.add(province.id);
         }
     });

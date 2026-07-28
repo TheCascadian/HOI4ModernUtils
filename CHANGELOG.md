@@ -12,9 +12,15 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Added an exact province-scoped action that moves only the selected provinces into a newly created strategic region and removes source regions that become empty.
 * Added a guarded action to remove all province membership and direct victory points from selected states while retaining the state records and unrelated content.
 * Added read-only ocean-tile readiness verification for definition fields, pixel presence, state and strategic-region membership, railways, and supply hubs.
+* Added a guarded ocean consolidation action that merges selected sea provinces into one canonical ocean tile across strategic-region boundaries, removes state membership, and deletes emptied source regions.
+* Added water-to-land conversion with explicit land terrain, continent, destination state, destination strategic region, and coastal metadata.
 
 ### Changed
 * Province-to-ocean conversion no longer forces a global province/state reindex. Existing IDs remain stable so users can rebuild strategic-region membership explicitly and verify readiness afterward.
+
+### Fixed
+* Fixed every manual province merge being rejected when loader recovery province `0` or color `0` was included in the selection or definition persistence payload.
+* Province merges now accept orphaned source definitions with no remaining BMP pixels and transactionally remove strategic-region records that the merge empties.
 
 ## [0.4.4] - 2026-07-28
 

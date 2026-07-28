@@ -22,6 +22,8 @@ Selected-area and global actions include:
 - Set every affected state to one population.
 - Set affected states to the lowest non-wasteland development category, or include wasteland when explicitly enabled.
 - Convert an eligible selection to ocean and rebuild supported memberships and references without forcing a global reindex. When exact rivers are selected, only the selected `rivers.bmp` pixels are extracted into new ocean provinces. Assign ordinary converted provinces to an appropriate strategic region and run **Verify Ocean-Tile Readiness** afterward.
+- Consolidate selected sea provinces to one canonical ocean tile without requiring them to start in the same strategic region. The first selection survives, state membership is removed, and emptied source regions are deleted.
+- Convert selected sea or lake provinces to land with explicitly chosen terrain, continent, state, and strategic region.
 - Optionally split the selected-area operation by continent.
 - Remove all water crossings or all state resources globally.
 - Remove all cores without changing state owner or controller.

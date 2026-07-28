@@ -2,6 +2,8 @@ import * as assert from 'assert';
 import { Province, River } from '../../webviewsrc/worldmap/definitions';
 import {
     forEachRiverPixel,
+    isPersistableProvinceDefinition,
+    normalizeEditableProvinceIds,
     ProvinceSelectionHistory,
     SelectableWorldMap,
     selectProvinceIds,
@@ -63,6 +65,30 @@ describe('world map bulk selections', () => {
             Array.from(selectProvinceIds(worldMap(invalid), item => item.type === 'sea')),
             [5]
         );
+    });
+
+    it('normalizes manual selections before province merging', () => {
+        const valid = province(5, 'sea', 'ocean');
+        const zeroColor = { ...province(6, 'sea', 'ocean'), color: 0 };
+        const items = new Map([
+            [0, province(0, 'sea', '')],
+            [5, valid],
+            [6, zeroColor],
+        ]);
+        assert.deepStrictEqual(
+            normalizeEditableProvinceIds(
+                { getProvinceById: id => items.get(id) },
+                [0, 5, 6, 5, 999]
+            ),
+            [5]
+        );
+    });
+
+    it('excludes loader recovery records from province persistence payloads', () => {
+        assert.strictEqual(isPersistableProvinceDefinition({ id: 0, color: 0 }), false);
+        assert.strictEqual(isPersistableProvinceDefinition({ id: -2, color: 0x010203 }), false);
+        assert.strictEqual(isPersistableProvinceDefinition({ id: 7, color: 0 }), false);
+        assert.strictEqual(isPersistableProvinceDefinition({ id: 7, color: 0x010203 }), true);
     });
 
     it('selects each province touched by river pixels without duplicates', () => {
