@@ -109,6 +109,19 @@ export async function getFilePathFromModOrHOI4(
             return absolutePath;
         }
 
+        // The selected descriptor may point at a mod directory which is not an
+        // opened workspace folder. Writes already use this path, so reads must
+        // search it too or a later map edit will fall back to vanilla files and
+        // overwrite earlier province/ocean consolidations.
+        const configuredModPath = await getModPathFromDescriptor();
+        if (configuredModPath) {
+            const findPath = vscode.Uri.joinPath(configuredModPath, relativePath);
+            if (await isFile(findPath)) {
+                const document = vscode.workspace.textDocuments.find(d => isSameUri(d.uri, findPath));
+                return document?.uri.with({ fragment: ':opened' }) ?? findPath;
+            }
+        }
+
         const replacePaths = await getReplacePaths();
         if (replacePaths) {
             const relativePathDir = path.dirname(relativePath);
@@ -264,11 +277,25 @@ export async function listFilesFromModOrHOI4(
             }
         }
 
+        // Include the effective mod root selected by the descriptor even when
+        // that directory is outside the workspace. This keeps folder-based
+        // loaders and destructive materialization aligned with single-file
+        // resolution above.
+        const configuredModPath = await getModPathFromDescriptor();
+        if (configuredModPath) {
+            const findPath = vscode.Uri.joinPath(configuredModPath, relativePath);
+            if (await isDirectory(findPath)) {
+                try {
+                    result.push(...await readFunction(findPath));
+                } catch(e) {}
+            }
+        }
+
         const replacePaths = await getReplacePaths();
         if (replacePaths) {
             for (const replacePath of replacePaths) {
                 if (isSamePath(relativePath, replacePath)) {
-                    return result.filter((v, i, a) => i === a.indexOf(v));
+                    return Array.from(new Set(result));
                 }
             }
         }
@@ -319,7 +346,7 @@ export async function listFilesFromModOrHOI4(
         }
     }
 
-    return result.filter((v, i, a) => i === a.indexOf(v));
+    return Array.from(new Set(result));
 }
 
 async function getDlcZipPaths(installPathUri: vscode.Uri): Promise<vscode.Uri[] | null> {

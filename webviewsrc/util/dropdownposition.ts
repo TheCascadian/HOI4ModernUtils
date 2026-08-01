@@ -16,10 +16,10 @@ export function calculateDropdownMenuPlacement(
     menuHeight: number,
     viewportWidth: number,
     viewportHeight: number,
+    preferredWidth = anchor.width,
     padding = 4,
 ): DropdownMenuPlacement {
-    const availableWidth = Math.max(0, viewportWidth - padding * 2);
-    const width = Math.min(anchor.width, availableWidth);
+    const width = Math.max(anchor.width, preferredWidth);
     const left = Math.max(padding, Math.min(anchor.left, viewportWidth - width - padding));
     const fitsBelow = anchor.bottom + menuHeight <= viewportHeight - padding;
     const fitsAbove = anchor.top - menuHeight >= padding;

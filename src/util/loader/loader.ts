@@ -192,6 +192,7 @@ export abstract class FolderLoader<T, TFile, E={}, EFile={}, FileConstructorArgs
     private fileCount: number = 0;
     private subLoaders: Record<string, FileLoader<TFile, EFile>> = {};
     private fileConstructorArgs: FileConstructorArgs;
+    private pendingFiles: string[] | undefined;
 
     constructor(
         public folder: string,
@@ -204,15 +205,21 @@ export abstract class FolderLoader<T, TFile, E={}, EFile={}, FileConstructorArgs
 
     public async shouldReloadImpl(session: LoaderSession): Promise<boolean> {
         const files = await listFilesFromModOrHOI4(this.folder);
+        this.pendingFiles = files;
         if (this.fileCount !== files.length || files.some(f => !(f in this.subLoaders))) {
             return true;
         }
 
-        return (await Promise.all(Object.values(this.subLoaders).map(l => l.shouldReload(session)))).some(v => v);
+        const shouldReload = (await Promise.all(Object.values(this.subLoaders).map(l => l.shouldReload(session)))).some(v => v);
+        if (!shouldReload) {
+            this.pendingFiles = undefined;
+        }
+        return shouldReload;
     }
 
     protected async loadImpl(session: LoaderSession): Promise<LoadResult<T, E>> {
-        const files = await listFilesFromModOrHOI4(this.folder);
+        const files = this.pendingFiles ?? await listFilesFromModOrHOI4(this.folder);
+        this.pendingFiles = undefined;
         this.fileCount = files.length;
 
         const subLoaders = this.subLoaders;

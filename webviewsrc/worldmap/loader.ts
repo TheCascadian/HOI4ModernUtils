@@ -6,6 +6,7 @@ import { WorldMapWarning, Terrain, StrategicRegion, SupplyArea, Railway, SupplyN
 import { vscode } from "../util/vscode";
 import { BehaviorSubject, fromEvent, Observable, ObservedValueOf, Subject } from 'rxjs';
 import { ConditionItem } from "../../src/hoiformat/condition";
+import { Quadtree } from "./quadtree";
 
 interface ExtraMapData {
     provincesCount: number;
@@ -17,6 +18,7 @@ interface ExtraMapData {
 
 interface FEWorldMapClassExtra {
     getProvinceById(provinceId: number | undefined): Province | undefined;
+    getProvinceByColor(color: number): Province | undefined;
     getStateById(stateId: number | undefined): State | undefined;
     getStrategicRegionById(strategicRegionId: number | undefined): StrategicRegion | undefined;
     getSupplyAreaById(supplyAreaId: number | undefined): SupplyArea | undefined;
@@ -35,6 +37,7 @@ interface FEWorldMapClassExtra {
     getSupplyNodeByProvinceId(provinceId: number): SupplyNode | undefined;
 
     getProvinceByPosition(x: number, y: number): Province | undefined;
+    getProvincesInArea(area: Zone): Province[];
 
     getProvinceWarnings(province?: Province, state?: State, strategicRegion?: StrategicRegion, supplyArea?: SupplyArea): string[];
     getStateWarnings(state: State, supplyArea?: SupplyArea): string[];
@@ -43,8 +46,18 @@ interface FEWorldMapClassExtra {
     getRiverWarnings(riverIndex: number): string[];
 
     assignProvincesToState(provinceIds: number[], targetStateId: number): number[] | undefined;
-    createStateFromProvinces(provinceIds: number[]): { newStateId: number; changedStateIds: number[] } | undefined;
-    mergeStates(targetStateId: number, sourceStateIds: number[]): { changedStateIds: number[]; deletedFiles: string[] } | undefined;
+    createStateFromProvinces(provinceIds: number[]): {
+        newStateId: number;
+        changedStateIds: number[];
+        deletedFiles: string[];
+        deletedStates: Array<{ id: number; file: string }>;
+        stateReplacements: Record<number, number>;
+    } | undefined;
+    mergeStates(targetStateId: number, sourceStateIds: number[]): {
+        changedStateIds: number[];
+        deletedFiles: string[];
+        deletedStates: Array<{ id: number; file: string }>;
+    } | undefined;
     clearStateProvinceMembership(stateIds: number[]): number[] | undefined;
     getNextStateId(): number;
     snapshotStates(stateIds: number[]): StateSnapshot[];
@@ -101,9 +114,9 @@ interface FEWorldMapClassExtra {
     /** Paintbrush: get province type ('land','sea',etc.) at a pixel position */
     getProvinceTypeAt(x: number, y: number): string | undefined;
     /** Paintbrush: get the full colorByPosition array */
-    getColorByPosition(): number[];
+    getColorByPosition(): Uint32Array;
     /** Paintbrush: set the full colorByPosition array */
-    setColorByPosition(colors: number[]): void;
+    setColorByPosition(colors: ArrayLike<number>): void;
     /** Paintbrush: apply painted pixels to province data structures */
     applyPaintbrushEdits(paintedPixels: Map<string, number>, sourceProvinceId?: number): { affectedProvinceIds: number[]; newProvinceId?: number };
     /** Find the next available color for a new province */
@@ -335,7 +348,7 @@ export class FEWorldMapClass implements FEWorldMap {
     terrains!: Terrain[];
     resources!: Resource[];
     rivers!: River[];
-    colorByPosition!: number[];
+    colorByPosition!: Uint32Array;
     conditionExprs!: ConditionItem[];
     bookmarks!: Bookmark[];
     diplomacyRelations!: DiplomacyRelation[];
@@ -347,10 +360,21 @@ export class FEWorldMapClass implements FEWorldMap {
     private supplyAreas!: (SupplyArea | null | undefined)[];
     private railways!: (Railway | null | undefined)[];
     private supplyNodes!: (SupplyNode | null | undefined)[];
+    private colorToProvince = new Map<number, Province>();
+    private provinceToState = new Map<number, State>();
+    private provinceToStrategicRegion = new Map<number, StrategicRegion>();
+    private stateToSupplyArea = new Map<number, SupplyArea>();
+    private railwayLevelByProvince = new Map<number, number>();
+    private supplyNodeByProvince = new Map<number, SupplyNode>();
+    private provinceToStateRecord: Record<number, number | undefined> = {};
+    private provinceToStrategicRegionRecord: Record<number, number | undefined> = {};
+    private stateToSupplyAreaRecord: Record<number, number | undefined> = {};
+    private provinceQuadtree!: Quadtree<Province>;
+    private lookupIndexesValid = false;
 
     constructor(worldMap?: WorldMapData & ExtraMapData) {
         Object.assign(this, worldMap ?? ({
-            width: 0, height: 0, colorByPosition: [],
+            width: 0, height: 0, colorByPosition: new Uint32Array(),
             provinces: [], states: [], countries: [], warnings: [], continents: [], strategicRegions: [], supplyAreas: [], terrains: [],
             railways: [], supplyNodes: [], resources: [], rivers: [],
             provincesCount: 0, statesCount: 0, countriesCount: 0, strategicRegionsCount: 0, supplyAreasCount: 0,
@@ -358,6 +382,78 @@ export class FEWorldMapClass implements FEWorldMap {
             railwaysCount: 0, supplyNodesCount: 0,
             conditionExprs: [], bookmarks: [], diplomacyRelations: [], countryHistoryFiles: {}
         } as WorldMapData & ExtraMapData));
+        this.rebuildLookupIndexes();
+    }
+
+    private invalidateLookupIndexes(): void {
+        this.lookupIndexesValid = false;
+    }
+
+    private ensureLookupIndexes(): void {
+        if (!this.lookupIndexesValid) {
+            this.rebuildLookupIndexes();
+        }
+    }
+
+    private rebuildLookupIndexes(): void {
+        this.colorToProvince.clear();
+        this.provinceToState.clear();
+        this.provinceToStrategicRegion.clear();
+        this.stateToSupplyArea.clear();
+        this.railwayLevelByProvince.clear();
+        this.supplyNodeByProvince.clear();
+        this.provinceToStateRecord = {};
+        this.provinceToStrategicRegionRecord = {};
+        this.stateToSupplyAreaRecord = {};
+        this.provinceQuadtree = new Quadtree<Province>({
+            x: 0,
+            y: 0,
+            w: Math.max(1, this.width || 0),
+            h: Math.max(1, this.height || 0),
+        });
+
+        this.forEachProvince(province => {
+            this.colorToProvince.set(province.color, province);
+            this.provinceQuadtree.insert({ bounds: province.boundingBox, value: province });
+        });
+        this.forEachState(state => {
+            for (const provinceId of state.provinces) {
+                if (!this.provinceToState.has(provinceId)) {
+                    this.provinceToState.set(provinceId, state);
+                    this.provinceToStateRecord[provinceId] = state.id;
+                }
+            }
+        });
+        this.forEachStrategicRegion(region => {
+            for (const provinceId of region.provinces) {
+                if (!this.provinceToStrategicRegion.has(provinceId)) {
+                    this.provinceToStrategicRegion.set(provinceId, region);
+                    this.provinceToStrategicRegionRecord[provinceId] = region.id;
+                }
+            }
+        });
+        this.forEachSupplyArea(area => {
+            for (const stateId of area.states) {
+                if (!this.stateToSupplyArea.has(stateId)) {
+                    this.stateToSupplyArea.set(stateId, area);
+                    this.stateToSupplyAreaRecord[stateId] = area.id;
+                }
+            }
+        });
+        this.forEachRailway(railway => {
+            for (const provinceId of railway.provinces) {
+                const oldLevel = this.railwayLevelByProvince.get(provinceId);
+                if (oldLevel === undefined || railway.level > oldLevel) {
+                    this.railwayLevelByProvince.set(provinceId, railway.level);
+                }
+            }
+        });
+        this.forEachSupplyNode(node => {
+            if (!this.supplyNodeByProvince.has(node.province)) {
+                this.supplyNodeByProvince.set(node.province, node);
+            }
+        });
+        this.lookupIndexesValid = true;
     }
 
     public getProvinceById = (provinceId: number | undefined): Province | undefined => {
@@ -366,6 +462,11 @@ export class FEWorldMapClass implements FEWorldMap {
         }
         return this.provinces[provinceId] ?? undefined;
     };
+
+    public getProvinceByColor(color: number): Province | undefined {
+        this.ensureLookupIndexes();
+        return this.colorToProvince.get(color);
+    }
 
     public getStateById = (stateId: number | undefined): State | undefined => {
         return stateId ? this.states[stateId] ?? undefined : undefined;
@@ -380,105 +481,61 @@ export class FEWorldMapClass implements FEWorldMap {
     };
 
     public getStateByProvinceId(provinceId: number): State | undefined {
-        let resultState: State | undefined = undefined;
-        this.forEachState(state => {
-            if (state.provinces.includes(provinceId)) {
-                resultState = state;
-                return true;
-            }
-        });
-        return resultState;
+        this.ensureLookupIndexes();
+        return this.provinceToState.get(provinceId);
     }
     
     public getStrategicRegionByProvinceId(provinceId: number): StrategicRegion | undefined {
-        let resultStrategicRegion: StrategicRegion | undefined = undefined;
-        this.forEachStrategicRegion(strategicRegion => {
-            if (strategicRegion.provinces.includes(provinceId)) {
-                resultStrategicRegion = strategicRegion;
-                return true;
-            }
-        });
-        return resultStrategicRegion;
+        this.ensureLookupIndexes();
+        return this.provinceToStrategicRegion.get(provinceId);
     }
 
     public getSupplyAreaByStateId(stateId: number): SupplyArea | undefined {
-        let resultSupplyArea: SupplyArea | undefined = undefined;
-        this.forEachSupplyArea(supplyArea => {
-            if (supplyArea.states.includes(stateId)) {
-                resultSupplyArea = supplyArea;
-                return true;
-            }
-        });
-        return resultSupplyArea;
+        this.ensureLookupIndexes();
+        return this.stateToSupplyArea.get(stateId);
     }
 
     public getRailwayLevelByProvinceId(provinceId: number): number | undefined {
-        let resultRailwayLevel = -1;
-        this.forEachRailway(railway => {
-            if (railway.provinces.includes(provinceId)) {
-                resultRailwayLevel = Math.max(resultRailwayLevel, railway.level);
-            }
-        });
-        return resultRailwayLevel === -1 ? undefined : resultRailwayLevel;
+        this.ensureLookupIndexes();
+        return this.railwayLevelByProvince.get(provinceId);
     }
 
     public getSupplyNodeByProvinceId(provinceId: number): SupplyNode | undefined {
-        let resultSupplyNode: SupplyNode | undefined = undefined;
-        this.forEachSupplyNode(supplyNode => {
-            if (supplyNode.province === provinceId) {
-                resultSupplyNode = supplyNode;
-                return true;
-            }
-        });
-        return resultSupplyNode;
+        this.ensureLookupIndexes();
+        return this.supplyNodeByProvince.get(provinceId);
     }
     
     public getProvinceByPosition(x: number, y: number): Province | undefined {
-        const point: Point = { x, y };
-        let resultProvince: Province | undefined = undefined;
-        this.forEachProvince(province => {
-            if (inBBox(point, province.boundingBox) && province.coverZones.some(z => inBBox(point, z))) {
-                resultProvince = province;
-                return true;
-            }
-        });
-        return resultProvince;
+        x = Math.floor(x);
+        y = Math.floor(y);
+        if (x < 0 || y < 0 || x >= this.width || y >= this.height || !this.colorByPosition) {
+            return undefined;
+        }
+        this.ensureLookupIndexes();
+        return this.colorToProvince.get(this.colorByPosition[y * this.width + x]);
+    }
+
+    public getProvincesInArea(area: Zone): Province[] {
+        this.ensureLookupIndexes();
+        // Preserve the legacy province-ID draw order. Coarse Canvas2D cover
+        // rectangles can overlap at low zoom, so spatial traversal order is
+        // not pixel-equivalent even when the candidate set is identical.
+        return this.provinceQuadtree.query(area).sort((a, b) => a.id - b.id);
     }
 
     public getProvinceToStateMap(): Record<number, number | undefined> {
-        const result: Record<number, number | undefined> = {};
-
-        this.forEachState(state =>
-            state.provinces.forEach(p => {
-                result[p] = state.id;
-            })
-        );
-    
-        return result;
+        this.ensureLookupIndexes();
+        return this.provinceToStateRecord;
     }
 
     public getProvinceToStrategicRegionMap(): Record<number, number | undefined> {
-        const result: Record<number, number | undefined> = {};
-
-        this.forEachStrategicRegion(strategicRegion =>
-            strategicRegion.provinces.forEach(p => {
-                result[p] = strategicRegion.id;
-            })
-        );
-    
-        return result;
+        this.ensureLookupIndexes();
+        return this.provinceToStrategicRegionRecord;
     }
 
     public getStateToSupplyAreaMap(): Record<number, number | undefined> {
-        const result: Record<number, number | undefined> = {};
-
-        this.forEachSupplyArea(supplyArea =>
-            supplyArea.states.forEach(s => {
-                result[s] = supplyArea.id;
-            })
-        );
-    
-        return result;
+        this.ensureLookupIndexes();
+        return this.stateToSupplyAreaRecord;
     }
 
     public forEachProvince(callback: (province: Province) => boolean | void) {
@@ -574,6 +631,7 @@ export class FEWorldMapClass implements FEWorldMap {
     }
 
     public assignProvincesToState(provinceIds: number[], targetStateId: number): number[] | undefined {
+        this.invalidateLookupIndexes();
         const target = this.getStateById(targetStateId);
         if (!target) {
             return undefined;
@@ -581,6 +639,11 @@ export class FEWorldMapClass implements FEWorldMap {
 
         const normalizedIds = this.normalizeProvinceIds(provinceIds);
         if (normalizedIds.length === 0) {
+            return undefined;
+        }
+
+        const normalizedSet = new Set(normalizedIds);
+        if (this.wouldEmptySourceState(normalizedSet, targetStateId)) {
             return undefined;
         }
 
@@ -593,7 +656,7 @@ export class FEWorldMapClass implements FEWorldMap {
             }
 
             const beforeLength = state.provinces.length;
-            state.provinces = state.provinces.filter(id => !normalizedIds.includes(id));
+            state.provinces = state.provinces.filter(id => !normalizedSet.has(id));
             if (state.provinces.length !== beforeLength) {
                 changed = true;
                 changedStateIds.add(state.id);
@@ -623,7 +686,14 @@ export class FEWorldMapClass implements FEWorldMap {
         return Array.from(changedStateIds.values());
     }
 
-    public createStateFromProvinces(provinceIds: number[]): { newStateId: number; changedStateIds: number[] } | undefined {
+    public createStateFromProvinces(provinceIds: number[]): {
+        newStateId: number;
+        changedStateIds: number[];
+        deletedFiles: string[];
+        deletedStates: Array<{ id: number; file: string }>;
+        stateReplacements: Record<number, number>;
+    } | undefined {
+        this.invalidateLookupIndexes();
         const normalizedIds = this.normalizeProvinceIds(provinceIds);
         if (normalizedIds.length === 0) {
             return undefined;
@@ -631,6 +701,13 @@ export class FEWorldMapClass implements FEWorldMap {
 
         const template = this.getStateByProvinceId(normalizedIds[0]);
         const newStateId = this.findNextStateId();
+        const normalizedSet = new Set(normalizedIds);
+        const sourceStates: State[] = [];
+        this.forEachState(state => {
+            if (state.provinces.some(id => normalizedSet.has(id))) {
+                sourceStates.push(state);
+            }
+        });
         const newState: State = {
             id: newStateId,
             name: `STATE_${newStateId}`,
@@ -658,12 +735,42 @@ export class FEWorldMapClass implements FEWorldMap {
             this.statesCount = newStateId + 1;
         }
 
-        const changedStateIds = this.assignProvincesToState(normalizedIds, newStateId);
-        if (!changedStateIds) {
-            return undefined;
+        const deletedCandidates: Array<{ id: number; file: string }> = [];
+        for (const source of sourceStates) {
+            source.provinces = source.provinces.filter(id => !normalizedSet.has(id));
+            for (const provinceId of normalizedIds) {
+                const victoryPoint = source.victoryPoints[provinceId];
+                if (victoryPoint !== undefined) {
+                    newState.victoryPoints[provinceId] = victoryPoint;
+                    delete source.victoryPoints[provinceId];
+                }
+            }
+            if (source.provinces.length === 0) {
+                deletedCandidates.push({ id: source.id, file: source.file });
+                this.states[source.id] = undefined;
+            } else {
+                this.recomputeStateGeometry(source);
+            }
         }
 
-        return { newStateId, changedStateIds };
+        newState.provinces = [...normalizedIds].sort((a, b) => a - b);
+        this.recomputeStateGeometry(newState);
+
+        const deletedFiles = Array.from(new Set(deletedCandidates
+            .map(state => state.file)
+            .filter(file => !this.states.some(state => state?.file === file))));
+        const deletedStates = deletedCandidates.filter(state => !deletedFiles.includes(state.file));
+        const stateReplacements = Object.fromEntries(
+            deletedCandidates.map(state => [state.id, newStateId])
+        );
+
+        return {
+            newStateId,
+            changedStateIds: [newStateId, ...sourceStates.map(state => state.id)],
+            deletedFiles,
+            deletedStates,
+            stateReplacements,
+        };
     }
 
     public mergeStates(targetStateId: number, sourceStateIds: number[]): {
@@ -671,6 +778,7 @@ export class FEWorldMapClass implements FEWorldMap {
         deletedFiles: string[];
         deletedStates: Array<{ id: number; file: string }>;
     } | undefined {
+        this.invalidateLookupIndexes();
         const target = this.getStateById(targetStateId);
         const sources = Array.from(new Set(sourceStateIds))
             .filter(id => id !== targetStateId)
@@ -723,6 +831,7 @@ export class FEWorldMapClass implements FEWorldMap {
     }
 
     public clearStateProvinceMembership(stateIds: number[]): number[] | undefined {
+        this.invalidateLookupIndexes();
         const changedStateIds: number[] = [];
         for (const stateId of new Set(stateIds)) {
             const state = this.getStateById(stateId);
@@ -755,6 +864,7 @@ export class FEWorldMapClass implements FEWorldMap {
     }
 
     public restoreStates(snapshots: StateSnapshot[]): void {
+        this.invalidateLookupIndexes();
         for (const snapshot of snapshots) {
             this.states[snapshot.id] = this.cloneState(snapshot.state);
         }
@@ -778,6 +888,32 @@ export class FEWorldMapClass implements FEWorldMap {
             }
         }
         return Array.from(unique.values());
+    }
+
+    private wouldEmptySourceState(provinceIds: ReadonlySet<number>, targetStateId: number): boolean {
+        let wouldEmpty = false;
+        this.forEachState(state => {
+            if (state.id !== targetStateId &&
+                state.provinces.some(id => provinceIds.has(id)) &&
+                state.provinces.every(id => provinceIds.has(id))) {
+                wouldEmpty = true;
+                return false;
+            }
+        });
+        return wouldEmpty;
+    }
+
+    private wouldEmptySourceStrategicRegion(provinceIds: ReadonlySet<number>, targetSRId: number): boolean {
+        let wouldEmpty = false;
+        this.forEachStrategicRegion(region => {
+            if (region.id !== targetSRId &&
+                region.provinces.some(id => provinceIds.has(id)) &&
+                region.provinces.every(id => provinceIds.has(id))) {
+                wouldEmpty = true;
+                return false;
+            }
+        });
+        return wouldEmpty;
     }
 
     private findNextStateId(): number {
@@ -834,7 +970,12 @@ export class FEWorldMapClass implements FEWorldMap {
 
     // ======== Strategic Region Methods ========
 
-    public assignProvincesToStrategicRegion(provinceIds: number[], targetSRId: number): number[] | undefined {
+    public assignProvincesToStrategicRegion(
+        provinceIds: number[],
+        targetSRId: number,
+        allowEmptySources = false
+    ): number[] | undefined {
+        this.invalidateLookupIndexes();
         const target = this.getStrategicRegionById(targetSRId);
         if (!target) {
             return undefined;
@@ -842,6 +983,11 @@ export class FEWorldMapClass implements FEWorldMap {
 
         const normalizedIds = this.normalizeProvinceIds(provinceIds);
         if (normalizedIds.length === 0) {
+            return undefined;
+        }
+
+        const normalizedSet = new Set(normalizedIds);
+        if (!allowEmptySources && this.wouldEmptySourceStrategicRegion(normalizedSet, targetSRId)) {
             return undefined;
         }
 
@@ -854,7 +1000,7 @@ export class FEWorldMapClass implements FEWorldMap {
             }
 
             const beforeLength = sr.provinces.length;
-            sr.provinces = sr.provinces.filter(id => !normalizedIds.includes(id));
+            sr.provinces = sr.provinces.filter(id => !normalizedSet.has(id));
             if (sr.provinces.length !== beforeLength) {
                 changed = true;
                 changedSRIds.add(sr.id);
@@ -885,6 +1031,7 @@ export class FEWorldMapClass implements FEWorldMap {
     }
 
     public assignStatesToStrategicRegion(stateIds: number[], targetSRId: number): number[] | undefined {
+        this.invalidateLookupIndexes();
         const allProvinceIds: number[] = [];
         for (const stateId of stateIds) {
             const state = this.getStateById(stateId);
@@ -904,6 +1051,7 @@ export class FEWorldMapClass implements FEWorldMap {
     }
 
     public restoreStrategicRegions(snapshots: StrategicRegionSnapshot[]): void {
+        this.invalidateLookupIndexes();
         for (const snapshot of snapshots) {
             this.strategicRegions[snapshot.id] = this.cloneStrategicRegion(snapshot.strategicRegion);
         }
@@ -1000,6 +1148,7 @@ export class FEWorldMapClass implements FEWorldMap {
     // ======== Province Creation Methods ========
 
     public createProvinceAt(targetProvinceId: number): Province | undefined {
+        this.invalidateLookupIndexes();
         const sourceProvince = this.getProvinceById(targetProvinceId);
         if (!sourceProvince) {
             return undefined;
@@ -1124,6 +1273,7 @@ export class FEWorldMapClass implements FEWorldMap {
     }
 
     public restoreProvinces(snapshots: ProvinceSnapshot[]): void {
+        this.invalidateLookupIndexes();
         for (const snapshot of snapshots) {
             if (snapshot.id >= 1) {
                 this.provinces[snapshot.id] = this.cloneProvince(snapshot.province);
@@ -1150,6 +1300,7 @@ export class FEWorldMapClass implements FEWorldMap {
         deletedStrategicRegionFiles: string[];
         deletedStrategicRegions: Array<{ id: number; file: string }>;
     } | undefined {
+        this.invalidateLookupIndexes();
         const target = this.getProvinceById(targetProvinceId);
         const sources = Array.from(new Set(sourceProvinceIds))
             .filter(id => id !== targetProvinceId)
@@ -1267,6 +1418,7 @@ export class FEWorldMapClass implements FEWorldMap {
         deletedStrategicRegionFiles: string[];
         deletedStrategicRegions: Array<{ id: number; file: string }>;
     } | undefined {
+        this.invalidateLookupIndexes();
         const normalizedIds = this.normalizeProvinceIds(provinceIds);
         const provinces = normalizedIds
             .map(id => this.getProvinceById(id))
@@ -1279,6 +1431,12 @@ export class FEWorldMapClass implements FEWorldMap {
                 (province.type !== 'sea' && province.type !== 'lake')) ||
             !targetState || !targetRegion || !selectedTerrain ||
             continent <= 0 || !this.continents[continent]) {
+            return undefined;
+        }
+
+        const normalizedSet = new Set(normalizedIds);
+        if (this.wouldEmptySourceState(normalizedSet, targetStateId) ||
+            this.wouldEmptySourceStrategicRegion(normalizedSet, targetStrategicRegionId)) {
             return undefined;
         }
 
@@ -1380,7 +1538,7 @@ export class FEWorldMapClass implements FEWorldMap {
             return;
         }
         if (!this.colorByPosition) {
-            this.colorByPosition = new Array(this.width * this.height).fill(0);
+            this.colorByPosition = new Uint32Array(this.width * this.height);
         }
         this.colorByPosition[y * this.width + x] = color;
     }
@@ -1401,15 +1559,16 @@ export class FEWorldMapClass implements FEWorldMap {
     /**
      * Get the full colorByPosition array (a copy for safety).
      */
-    public getColorByPosition(): number[] {
-        return this.colorByPosition ? [...this.colorByPosition] : [];
+    public getColorByPosition(): Uint32Array {
+        return this.colorByPosition ? this.colorByPosition.slice() : new Uint32Array();
     }
 
     /**
      * Set the full colorByPosition array.
      */
-    public setColorByPosition(colors: number[]): void {
-        this.colorByPosition = [...colors];
+    public setColorByPosition(colors: ArrayLike<number>): void {
+        this.colorByPosition = Uint32Array.from(colors);
+        this.invalidateLookupIndexes();
     }
 
     /**
@@ -1420,6 +1579,7 @@ export class FEWorldMapClass implements FEWorldMap {
      * @returns Affected province IDs and new province ID if one was created
      */
     public applyPaintbrushEdits(paintedPixels: Map<string, number>, sourceProvinceId?: number): { affectedProvinceIds: number[]; newProvinceId?: number } {
+        this.invalidateLookupIndexes();
         const affectedProvinceIds = new Set<number>();
         // Record donor provinces before replacing their colors. Their geometry
         // must be rebuilt just as the receiving province's geometry is.
@@ -1500,19 +1660,6 @@ export class FEWorldMapClass implements FEWorldMap {
         this.rebuildAffectedProvinceEdges(affectedProvinceIds);
 
         return { affectedProvinceIds: Array.from(affectedProvinceIds), newProvinceId };
-    }
-
-    /**
-     * Find a province by its color value.
-     */
-    private getProvinceByColor(color: number): Province | undefined {
-        for (let i = 0; i < this.provinces.length; i++) {
-            const p = this.provinces[i];
-            if (p && p.color === color) {
-                return p;
-            }
-        }
-        return undefined;
     }
 
     /**
@@ -1891,6 +2038,7 @@ export class FEWorldMapClass implements FEWorldMap {
         deletedFiles: string[];
         deletedRegions: Array<{ id: number; file: string }>;
     } | undefined {
+        this.invalidateLookupIndexes();
         const normalizedProvinceIds = this.normalizeProvinceIds(provinceIds);
         if (normalizedProvinceIds.length === 0) {
             return undefined;
@@ -1914,7 +2062,11 @@ export class FEWorldMapClass implements FEWorldMap {
             this.strategicRegionsCount = newId + 1;
         }
 
-        const changed = this.assignProvincesToStrategicRegion(normalizedProvinceIds, newId);
+        const changed = this.assignProvincesToStrategicRegion(
+            normalizedProvinceIds,
+            newId,
+            true
+        );
         if (!changed || changed.length === 0) {
             // Revert creation
             this.strategicRegions[newId] = undefined as any;
@@ -1968,6 +2120,7 @@ export class FEWorldMapClass implements FEWorldMap {
         deletedFiles: string[];
         deletedRegions: Array<{ id: number; file: string }>;
     } | undefined {
+        this.invalidateLookupIndexes();
         const provinceIds: number[] = [];
         for (const stateId of new Set(stateIds)) {
             const state = this.getStateById(stateId);

@@ -32,6 +32,7 @@ export class ViewPoint extends Subscriber {
     public y: number;
     public scale: number;
     public observable$: Observable<ViewPointObj>;
+    private wheelActionHandler: ((event: WheelEvent) => boolean) | undefined;
 
     constructor(
         private canvas: HTMLCanvasElement,
@@ -45,6 +46,14 @@ export class ViewPoint extends Subscriber {
         this.scale = viewPointObj.scale;
         this.observable$ = new BehaviorSubject<ViewPointObj>(viewPointObj);
         this.enableDragger();
+    }
+
+    /**
+     * Gives the toolbar first refusal on wheel gestures that control an
+     * editor tool instead of the camera.
+     */
+    public setWheelActionHandler(handler: (event: WheelEvent) => boolean): void {
+        this.wheelActionHandler = handler;
     }
 
     public convertX(x: number) {
@@ -69,6 +78,15 @@ export class ViewPoint extends Subscriber {
         const br = bbox.x + bbox.w;
         const bb = bbox.y + bbox.h;
         return r > bbox.x + xoffset && br + xoffset > this.x && b > bbox.y && bb > this.y;
+    }
+
+    public getViewZone(xoffset: number = 0): Zone {
+        return {
+            x: this.x - xoffset,
+            y: this.y,
+            w: this.canvas.width / this.scale,
+            h: this.canvas.height / this.scale,
+        };
     }
 
     public lineInView(start: Point, end: Point, xoffset: number) {
@@ -160,6 +178,9 @@ export class ViewPoint extends Subscriber {
     
         this.addSubscription(fromEvent<WheelEvent>(this.canvas, 'wheel').subscribe((e) => {
             e.preventDefault();
+            if (this.wheelActionHandler?.(e)) {
+                return;
+            }
             const rect = this.canvas.getBoundingClientRect();
             const canvasX = (e.clientX - rect.left) * (this.canvas.width / Math.max(1, rect.width));
             const canvasY = (e.clientY - rect.top) * (this.canvas.height / Math.max(1, rect.height));

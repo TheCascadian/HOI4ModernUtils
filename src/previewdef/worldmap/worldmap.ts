@@ -4,23 +4,36 @@ import worldmapviewstyles from './worldmapview.css';
 import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistVictoryPointLocalisationMessage, PersistCountryDiplomacyMessage, CreateCountryMessage, RunAreaOperationMessage, RunContinentPipelineMessage, WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest, WorldMapRuntimeTestResultMessage } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistProvinceBmpMessage, PersistVictoryPointLocalisationMessage, PersistCountryDiplomacyMessage, CreateCountryMessage, RunAreaOperationMessage, RunContinentPipelineMessage, WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest, WorldMapRuntimeTestResultMessage } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
-import { getFilePathFromMod, getHoiOpenedFileOriginalUri, readFileFromModOrHOI4, readFileFromPath, getModPathFromDescriptor, getSelectedModFileUri, invalidateModDescriptorCaches, listFilesFromModOrHOI4 } from '../../util/fileloader';
+import { getFilePathFromMod, getFilePathFromModOrHOI4, getHoiOpenedFileOriginalUri, readFileFromModOrHOI4, readFileFromPath, getModPathFromDescriptor, getSelectedModFileUri, invalidateModDescriptorCaches, listFilesFromModOrHOI4 } from '../../util/fileloader';
 import { WorldMapLoader } from './loader/worldmaploader';
 import { isEqual } from 'lodash';
 import { LoaderSession } from '../../util/loader/loader';
 import { TelemetryMessage, sendByMessage } from '../../util/telemetry';
 import { getConfiguration } from '../../util/vsccommon';
-import { repairAdjacencies, repairRailways, repairSupplyNodes, validateProvinceBmpEdit } from './provincefixes';
+import { extractProvinceBmpColors, repairAdjacencies, repairRailways, repairSupplyNodes, validateNewProvinceMembership, validateProvinceBmpEdit } from './provincefixes';
 import { clearMapBuildings, clearRailways, clearSupplyHubs, clearWaterCrossings, convertDefinitionsToOcean, partitionLandAndWaterProvinces, partitionMappedMembership, patchStateMembershipPreservingContent, patchStatePreservingUnknownContent, planProvinceMergesByType, removeAllCores, removeProvincesFromRegionBlocks, replaceStateIdsInSupplyAreas, transformSelectedStates } from './areaoperations';
-import { createSequentialIdMap, reindexCountryHistoryFile, reindexDefinitions, reindexMapBuildings, reindexStateFile, reindexStrategicRegionFile, reindexSupplyAreaFile } from './reindex';
+import { createSequentialIdMap, reindexCountryHistoryFile, reindexDefinitions, reindexMapBuildings, reindexStateFile, reindexStrategicRegionFile, reindexSupplyAreaFile, reindexUnitStacks } from './reindex';
 import { addReplacePathsToDescriptor } from '../../util/replacepath';
 import { buildClippedRiverOceanEdit } from './riverconversion';
+import { applyEntriesWithRollback } from './transactionjournal';
 
 export const WorldMapRuntimeTestCommand = 'hoi4modernutils.test.worldmap.renderCases';
+
+interface OperationalSnapshotEntry {
+    target: vscode.Uri;
+    previous?: Buffer;
+    binary: boolean;
+}
+
+type OperationalSnapshot = Map<string, OperationalSnapshotEntry>;
+
+interface ProvinceBmpTransactionSnapshot {
+    files: OperationalSnapshotEntry[];
+}
 
 export function isWorldMapRuntimeTestEnabled(): boolean {
     return !IS_WEB_EXT &&
@@ -46,10 +59,9 @@ export class WorldMap {
         timeout: NodeJS.Timeout;
     }>();
 
-    /** Undo stack for province BMP edits: stores raw BMP buffers and CSV snapshots */
-    private bmpUndoStack: { bmpBuffer: Buffer; provinces: PersistedProvince[]; deletedProvinceIds?: number[] }[] = [];
-    /** Redo stack for province BMP edits */
-    private bmpRedoStack: { bmpBuffer: Buffer; provinces: PersistedProvince[]; deletedProvinceIds?: number[] }[] = [];
+    /** Undo/redo snapshots cover every file touched by a province-BMP transaction. */
+    private bmpUndoStack: ProvinceBmpTransactionSnapshot[] = [];
+    private bmpRedoStack: ProvinceBmpTransactionSnapshot[] = [];
 
     private getMaxUndoSteps(): number {
         return (getConfiguration() as any).paintbrushMaxUndoSteps ?? 5;
@@ -225,7 +237,7 @@ export class WorldMap {
                     await this.createCountry(msg as CreateCountryMessage);
                     break;
                 case 'resolveprovincewarnings':
-                    await this.resolveProvinceWarnings();
+                    await this.resolveProvinceWarnings(msg.requestId);
                     break;
                 case 'runareaoperation':
                     await this.runAreaOperation(msg as RunAreaOperationMessage);
@@ -234,10 +246,10 @@ export class WorldMap {
                     await this.runContinentPipeline(msg as RunContinentPipelineMessage);
                     break;
                 case 'removeallcores':
-                    await this.removeAllCores();
+                    await this.removeAllCores(msg.requestId);
                     break;
                 case 'reindexmap':
-                    await this.runReindexMap();
+                    await this.runReindexMap(msg.requestId);
                     break;
                 case 'exportmap':
                     await this.exportMap(msg.dataUrl);
@@ -271,74 +283,108 @@ export class WorldMap {
                         error(e);
                         await this.postMessageToWebview({
                             command: 'countrydiplomacyupdated',
+                            requestId: msg.requestId,
                             success: false,
                             error: e instanceof Error ? e.message : String(e),
                         });
                     }
                     break;
                 case 'persiststrategicregions':
-                    await this.persistStrategicRegions(
-                        (msg as any).strategicRegions,
-                        (msg as any).deletedFiles ?? [],
-                        (msg as any).deletedRegions ?? []
-                    );
+                    try {
+                        await this.persistStrategicRegions(
+                            msg.strategicRegions,
+                            msg.deletedFiles ?? [],
+                            msg.deletedRegions ?? []
+                        );
+                        await this.postMessageToWebview({
+                            command: 'persiststrategicregionsresult',
+                            requestId: msg.requestId,
+                            success: true,
+                        });
+                    } catch (e) {
+                        error(e);
+                        await this.postMessageToWebview({
+                            command: 'persiststrategicregionsresult',
+                            requestId: msg.requestId,
+                            success: false,
+                            error: e instanceof Error ? e.message : String(e),
+                        });
+                    }
                     break;
                 case 'persistvictorypointlocalisation':
-                    await this.persistVictoryPointLocalisation(msg as PersistVictoryPointLocalisationMessage);
+                    try {
+                        await this.persistVictoryPointLocalisation(msg);
+                        await this.postMessageToWebview({
+                            command: 'persistvictorypointlocalisationresult',
+                            requestId: msg.requestId,
+                            success: true,
+                        });
+                    } catch (e) {
+                        error(e);
+                        await this.postMessageToWebview({
+                            command: 'persistvictorypointlocalisationresult',
+                            requestId: msg.requestId,
+                            success: false,
+                            error: e instanceof Error ? e.message : String(e),
+                        });
+                    }
                     break;
                 case 'persistprovinces':
-                    await this.persistProvinces((msg as any).provinces, (msg as any).deletedFiles ?? []);
+                    try {
+                        await this.persistProvinces(msg.provinces, msg.deletedFiles ?? []);
+                        await this.postMessageToWebview({
+                            command: 'persistprovincesresult',
+                            requestId: msg.requestId,
+                            success: true,
+                        });
+                    } catch (e) {
+                        error(e);
+                        await this.postMessageToWebview({
+                            command: 'persistprovincesresult',
+                            requestId: msg.requestId,
+                            success: false,
+                            error: e instanceof Error ? e.message : String(e),
+                        });
+                    }
                     break;
                 case 'persistprovincebmp':
                     try {
-                        await this.persistProvinceBmp(msg as any);
+                        await this.persistProvinceBmp(msg);
 
                         await this.postMessageToWebview({
                             command: 'provincebmpupdated',
-                            data: JSON.stringify({
-                                success: true,
-                                canUndo: this.bmpUndoStack.length > 0,
-                                canRedo: this.bmpRedoStack.length > 0,
-                                forceReload: true,
-                            }),
-                            start: 0,
-                            end: 0,
-                        } as any);
+                            requestId: msg.requestId,
+                            success: true,
+                            canUndo: this.bmpUndoStack.length > 0,
+                            canRedo: this.bmpRedoStack.length > 0,
+                            forceReload: true,
+                        });
 
-                        // Remind the user to assign the new province to a
-                        // strategic region and state.
                         vscode.window.showInformationMessage(
-                            'Province BMP updated. ' +
-                            'Remember to assign any new province(s) to a strategic region and state.'
+                            'Province BMP and dependent map records updated.'
                         );
                     } catch (e) {
                         error(e);
 
                         await this.postMessageToWebview({
                             command: 'provincebmpupdated',
-                            data: JSON.stringify({
-                                success: false,
-                                error:
-                                    e instanceof Error
-                                        ? e.message
-                                        : String(e),
-                                canUndo: this.bmpUndoStack.length > 0,
-                                canRedo: this.bmpRedoStack.length > 0,
-                                forceReload: false,
-                            }),
-                            start: 0,
-                            end: 0,
-                        } as any);
+                            requestId: msg.requestId,
+                            success: false,
+                            error: e instanceof Error ? e.message : String(e),
+                            canUndo: this.bmpUndoStack.length > 0,
+                            canRedo: this.bmpRedoStack.length > 0,
+                            forceReload: false,
+                        });
                     }
                     break;
                 case 'requestprovincebmp':
-                    await this.sendProvinceBmpData();
+                    await this.sendProvinceBmpData(msg.requestId);
                     break;
                 case 'undoprovincebmp':
-                    await this.undoProvinceBmp();
+                    await this.undoProvinceBmp(msg.requestId);
                     break;
                 case 'redoprovincebmp':
-                    await this.redoProvinceBmp();
+                    await this.redoProvinceBmp(msg.requestId);
                     break;
             }
         } catch (e) {
@@ -671,7 +717,8 @@ export class WorldMap {
             }
             descriptorSnapshot = {
                 target: descriptor,
-                previous: Buffer.from(await vscode.workspace.fs.readFile(descriptor)),
+                previous: (await this.readOperationalSnapshot(descriptor)) ??
+                    Buffer.from(await vscode.workspace.fs.readFile(descriptor)),
             };
         }
 
@@ -709,12 +756,7 @@ export class WorldMap {
                 return;
             }
             const target = await this.resolveTargetFile(relativePath);
-            let previous: Buffer | undefined;
-            try {
-                previous = Buffer.from(await vscode.workspace.fs.readFile(target));
-            } catch {
-                // The mod does not own this effective file yet.
-            }
+            const previous = await this.readOperationalSnapshot(target);
             pending.set(relativePath, { target, previous, next });
         };
 
@@ -816,7 +858,7 @@ export class WorldMap {
             for (const operation of pending.values()) {
                 if (operation.next) {
                     await mkdirs(dirUri(operation.target));
-                    await writeFile(operation.target, operation.next);
+                    await this.writeOperationalFile(operation.target, operation.next);
                 } else if (operation.previous) {
                     await vscode.workspace.fs.delete(
                         operation.target,
@@ -833,7 +875,7 @@ export class WorldMap {
                 try {
                     if (operation.previous) {
                         await mkdirs(dirUri(operation.target));
-                        await writeFile(operation.target, operation.previous);
+                        await this.writeOperationalFile(operation.target, operation.previous);
                     } else if (operation.next) {
                         await vscode.workspace.fs.delete(
                             operation.target,
@@ -846,7 +888,7 @@ export class WorldMap {
             }
             if (descriptorSnapshot) {
                 try {
-                    await writeFile(descriptorSnapshot.target, descriptorSnapshot.previous);
+                    await this.writeOperationalFile(descriptorSnapshot.target, descriptorSnapshot.previous);
                     invalidateModDescriptorCaches();
                 } catch {
                     // Preserve the original persistence failure.
@@ -908,12 +950,13 @@ export class WorldMap {
         const targetFile = await this.resolveTargetFile(normalizedFile);
 
         await mkdirs(dirUri(targetFile));
-        await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
+        await this.writeOperationalFile(targetFile, Buffer.from(newContent, 'utf-8'));
         this.cachedWorldMap = undefined;
         this.worldMapDependencies = undefined;
 
         await this.postMessageToWebview({
             command: 'countrydiplomacyupdated',
+            requestId: msg.requestId,
             success: true,
         });
     }
@@ -969,12 +1012,7 @@ export class WorldMap {
             const pending: { target: vscode.Uri; previous?: Buffer; next: Buffer }[] = [];
             for (const item of writes) {
                 const target = await this.resolveTargetFile(item.path);
-                let previous: Buffer | undefined;
-                try {
-                    previous = Buffer.from(await vscode.workspace.fs.readFile(target));
-                } catch {
-                    // New file.
-                }
+                const previous = await this.readOperationalSnapshot(target);
                 if (item.create !== undefined && previous) {
                     throw new Error(`Refusing to overwrite existing file ${item.path}.`);
                 }
@@ -998,14 +1036,14 @@ export class WorldMap {
             try {
                 for (const write of pending) {
                     await mkdirs(dirUri(write.target));
-                    await writeFile(write.target, write.next);
+                    await this.writeOperationalFile(write.target, write.next);
                     completed.push(write);
                 }
             } catch (e) {
                 for (const write of completed.reverse()) {
                     try {
                         if (write.previous) {
-                            await writeFile(write.target, write.previous);
+                            await this.writeOperationalFile(write.target, write.previous);
                         } else {
                             await vscode.workspace.fs.delete(write.target, { recursive: false, useTrash: false });
                         }
@@ -1018,10 +1056,16 @@ export class WorldMap {
 
             this.cachedWorldMap = undefined;
             this.worldMapDependencies = undefined;
-            await this.postMessageToWebview({ command: 'createcountryresult', success: true, tag });
+            await this.postMessageToWebview({
+                command: 'createcountryresult',
+                requestId: msg.requestId,
+                success: true,
+                tag,
+            });
         } catch (e) {
             await this.postMessageToWebview({
                 command: 'createcountryresult',
+                requestId: msg.requestId,
                 success: false,
                 error: e instanceof Error ? e.message : String(e),
             });
@@ -1072,21 +1116,23 @@ export class WorldMap {
         }
 
         await mkdirs(localisationDir);
-        await writeFile(targetFile, Buffer.from(newContent, 'utf-8'));
+        await this.writeOperationalFile(targetFile, Buffer.from(newContent, 'utf-8'));
         debug(`Wrote victory point localisation entry ${msg.key} to ${targetFile.fsPath}`);
     }
 
     private async resolveTargetFile(relativePath: string): Promise<vscode.Uri> {
-        const modFile = await getFilePathFromMod(relativePath);
-        if (modFile) {
-            return getHoiOpenedFileOriginalUri(modFile);
-        }
-
-        // File doesn't exist in the mod yet -  write into the mod folder determined
-        // by the selected .mod descriptor's `path` attribute.
+        // A selected descriptor is the authority for operational writes. The
+        // general read resolver searches open workspace folders first, which is
+        // useful for previews but can otherwise redirect an edit away from the
+        // selected mod when another workspace contains the same relative file.
         const modPath = await getModPathFromDescriptor();
         if (modPath) {
             return vscode.Uri.joinPath(modPath, relativePath);
+        }
+
+        const modFile = await getFilePathFromMod(relativePath);
+        if (modFile) {
+            return getHoiOpenedFileOriginalUri(modFile);
         }
 
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -1115,7 +1161,7 @@ export class WorldMap {
             return;
         }
 
-        await writeFile(descriptor, Buffer.from(update.text, 'utf-8'));
+        await this.writeOperationalFile(descriptor, Buffer.from(update.text, 'utf-8'));
         invalidateModDescriptorCaches();
         debug(`Added descriptor replace_path entries: ${update.added.join(', ')}`);
     }
@@ -1319,21 +1365,13 @@ export class WorldMap {
         }
 
         const pending: Array<{ target: vscode.Uri; previous?: Buffer; next: Buffer }> = [];
-        const readExistingTarget = async (target: vscode.Uri): Promise<Buffer | undefined> => {
-            try {
-                return Buffer.from(await vscode.workspace.fs.readFile(target));
-            } catch {
-                return undefined;
-            }
-        };
-
         for (const [relativePath, fileSRs] of groupedByFile) {
             const targetFile = await this.resolveTargetFile(relativePath);
             let sourceText = '';
             try {
-                const sourcePath = await getFilePathFromMod(relativePath);
-                if (sourcePath) {
-                    sourceText = (await readFileFromPath(sourcePath))[0].toString('utf-8').replace(/^\uFEFF/, '');
+                const targetSnapshot = await this.readOperationalSnapshot(targetFile);
+                if (targetSnapshot !== undefined) {
+                    sourceText = targetSnapshot.toString('utf-8').replace(/^\uFEFF/, '');
                 } else {
                     sourceText = (await readFileFromModOrHOI4(relativePath))[0].toString('utf-8').replace(/^\uFEFF/, '');
                 }
@@ -1351,7 +1389,7 @@ export class WorldMap {
             );
             pending.push({
                 target: targetFile,
-                previous: await readExistingTarget(targetFile),
+                previous: await this.readOperationalSnapshot(targetFile),
                 next: Buffer.from(newContent, 'utf-8'),
             });
         }
@@ -1361,7 +1399,7 @@ export class WorldMap {
             // Empty overrides suppress inherited strategic-region records.
             pending.push({
                 target: targetFile,
-                previous: await readExistingTarget(targetFile),
+                previous: await this.readOperationalSnapshot(targetFile),
                 next: Buffer.from('', 'utf-8'),
             });
         }
@@ -1370,20 +1408,32 @@ export class WorldMap {
         try {
             for (const write of pending) {
                 await mkdirs(dirUri(write.target));
-                await writeFile(write.target, write.next);
+                await this.writeOperationalFile(write.target, write.next);
+                debug(`Wrote strategic-region changes to ${write.target.fsPath}`);
                 completed.push(write);
             }
+            invalidateModDescriptorCaches();
+            this.cachedWorldMap = undefined;
+            this.worldMapDependencies = undefined;
         } catch (e) {
+            const rollbackErrors: unknown[] = [];
             for (const write of completed.reverse()) {
                 try {
-                    if (write.previous) {
-                        await writeFile(write.target, write.previous);
+                    if (write.previous !== undefined) {
+                        await this.writeOperationalFile(write.target, write.previous);
                     } else {
                         await vscode.workspace.fs.delete(write.target, { recursive: false, useTrash: false });
                     }
-                } catch {
-                    // Preserve the original write error.
+                } catch (rollbackError) {
+                    rollbackErrors.push(rollbackError);
                 }
+            }
+            if (rollbackErrors.length > 0) {
+                const original = e instanceof Error ? e.message : String(e);
+                const rollback = rollbackErrors
+                    .map(value => value instanceof Error ? value.message : String(value))
+                    .join('; ');
+                throw new Error(`Strategic-region persistence failed: ${original}. Rollback failed: ${rollback}`);
             }
             throw e;
         }
@@ -1631,7 +1681,7 @@ export class WorldMap {
         });
 
         await mkdirs(dirUri(targetFile));
-        await writeFile(
+        await this.writeOperationalFile(
             targetFile,
             Buffer.from(output.join(eol), 'utf-8')
         );
@@ -1641,23 +1691,9 @@ export class WorldMap {
      * Atomically persist the province BMP and definition.csv after a paintbrush edit.
      * Applies pixel diffs to the existing BMP and saves the old BMP for undo.
      */
-    private async persistProvinceBmp(msg: {
-        paintedPixels: number[][];
-        width: number;
-        height: number;
-        provinces: PersistedProvince[];
-        previousProvinces?: PersistedProvince[];
-        deletedProvinceIds?: number[];
-        provinceReplacements?: Record<number, number>;
-        targetProvinceId: number;
-        targetProvinceIds?: number[];
-        states?: PersistedState[];
-        deletedStateFiles?: string[];
-        deletedStates?: Array<{ id: number; file: string }>;
-        stateReplacements?: Record<number, number>;
-        strategicRegions?: PersistedStrategicRegion[];
-        deletedStrategicRegionFiles?: string[];
-        deletedStrategicRegions?: Array<{ id: number; file: string }>;
+    private async persistProvinceBmp(msg: Omit<PersistProvinceBmpMessage, 'command' | 'requestId'> & {
+        command?: PersistProvinceBmpMessage['command'];
+        requestId?: string;
         relatedPaths?: string[];
         afterPersist?: () => Promise<void>;
     }) {
@@ -1667,6 +1703,15 @@ export class WorldMap {
             msg.targetProvinceId,
             msg.deletedProvinceIds,
             msg.targetProvinceIds
+        );
+
+        const existingProvinces = await this.readCurrentProvinceDefs();
+        const existingProvinceIds = new Set(existingProvinces.map(province => province.id));
+        validateNewProvinceMembership(
+            existingProvinceIds,
+            msg.provinces,
+            msg.states,
+            msg.strategicRegions
         );
 
         const defaultMap = await this.readDefaultMapConfig();
@@ -1685,35 +1730,30 @@ export class WorldMap {
             msg.width,
             msg.height
         );
+        const finalProvinceById = new Map(existingProvinces.map(province => [province.id, province]));
+        for (const province of msg.provinces) {
+            finalProvinceById.set(province.id, province);
+        }
+        for (const deletedId of msg.deletedProvinceIds ?? []) {
+            finalProvinceById.delete(deletedId);
+        }
+        const finalProvinces = Array.from(finalProvinceById.values());
+        const finalRasterColors = extractProvinceBmpColors(newBmpBuffer, msg.width, msg.height);
+        validateProvinceBmpEdit(
+            finalProvinces,
+            msg.paintedPixels,
+            msg.targetProvinceId,
+            msg.deletedProvinceIds,
+            msg.targetProvinceIds,
+            finalRasterColors
+        );
         const bmpTarget = await this.resolveTargetFile(bmpRelativePath);
         const definitionsTarget = await this.resolveTargetFile('map/definition.csv');
-        const readExisting = async (target: vscode.Uri): Promise<Buffer | undefined> => {
-            try {
-                return Buffer.from(await vscode.workspace.fs.readFile(target));
-            } catch {
-                return undefined;
-            }
-        };
-        const priorBmpTarget = await readExisting(bmpTarget);
-        const priorDefinitionsTarget = await readExisting(definitionsTarget);
-        const restore = async (target: vscode.Uri, previous: Buffer | undefined): Promise<void> => {
-            if (previous) {
-                await mkdirs(dirUri(target));
-                await writeFile(target, previous);
-            } else {
-                try {
-                    await vscode.workspace.fs.delete(target, { recursive: false, useTrash: false });
-                } catch {
-                    // The target may not have been created.
-                }
-            }
-        };
-        const relatedSnapshots = new Map<string, { target: vscode.Uri; previous?: Buffer }>();
+        const transactionSnapshot: OperationalSnapshot = new Map();
+        await this.captureOperationalTarget(transactionSnapshot, bmpTarget, true);
+        await this.captureOperationalTarget(transactionSnapshot, definitionsTarget);
         const snapshotTarget = async (target: vscode.Uri): Promise<void> => {
-            const key = target.toString();
-            if (!relatedSnapshots.has(key)) {
-                relatedSnapshots.set(key, { target, previous: await readExisting(target) });
-            }
+            await this.captureOperationalTarget(transactionSnapshot, target);
         };
         const relatedPaths = new Set<string>([
             ...(msg.states ?? []).map(state => state.file),
@@ -1792,30 +1832,22 @@ export class WorldMap {
             await msg.afterPersist?.();
         } catch (e) {
             try {
-                for (const snapshot of Array.from(relatedSnapshots.values()).reverse()) {
-                    await restore(snapshot.target, snapshot.previous);
-                }
+                await this.restoreOperationalSnapshot(transactionSnapshot);
                 if ((msg.deletedStateFiles?.length ?? 0) > 0) {
                     invalidateModDescriptorCaches();
                 }
-                await restore(definitionsTarget, priorDefinitionsTarget);
-                await restore(bmpTarget, priorBmpTarget);
             } catch (rollbackError) {
-                error(rollbackError);
+                const original = e instanceof Error ? e.message : String(e);
+                const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+                throw new Error(`Province BMP transaction failed: ${original}. Rollback failed: ${rollback}`);
             }
             throw e;
         }
 
         // Record undo only after the complete transaction succeeds.
         if (msg.previousProvinces) {
-            const previousIds = new Set(msg.previousProvinces.map(province => province.id));
-            const addedIds = msg.provinces
-                .map(province => province.id)
-                .filter(id => !previousIds.has(id));
             this.bmpUndoStack.push({
-                bmpBuffer: oldBmpBuffer,
-                provinces: msg.previousProvinces,
-                deletedProvinceIds: addedIds,
+                files: Array.from(transactionSnapshot.values()),
             });
             const maxSteps = this.getMaxUndoSteps();
             while (this.bmpUndoStack.length > maxSteps) {
@@ -1842,26 +1874,19 @@ export class WorldMap {
         const warnings: string[] = [];
 
         for (const item of targets) {
-            try {
-                const sourcePath = await getFilePathFromMod(item.path);
-                const source = sourcePath
-                    ? (await readFileFromPath(sourcePath))[0]
-                    : (await readFileFromModOrHOI4(item.path))[0];
-                const text = source.toString('utf-8').replace(/^\uFEFF/, '');
-                const result = item.transform(text, replacements, validProvinceIds);
-                warnings.push(...result.warnings.map(value => `${item.path}: ${value}`));
-                if (result.text !== text) {
-                    const target = await this.resolveTargetFile(item.path);
-                    let previous: Buffer | undefined;
-                    try {
-                        previous = Buffer.from(await vscode.workspace.fs.readFile(target));
-                    } catch {
-                        // A new mod override will be created.
-                    }
-                    pending.push({ target, previous, next: Buffer.from(result.text, 'utf-8') });
-                }
-            } catch {
-                // Optional files may not exist in small or total-conversion maps.
+            const sourcePath = await getFilePathFromModOrHOI4(item.path);
+            if (!sourcePath) {
+                // These files are optional in small and total-conversion maps.
+                continue;
+            }
+            const source = (await readFileFromPath(sourcePath, item.path))[0];
+            const text = source.toString('utf-8').replace(/^\uFEFF/, '');
+            const result = item.transform(text, replacements, validProvinceIds);
+            warnings.push(...result.warnings.map(value => `${item.path}: ${value}`));
+            if (result.text !== text) {
+                const target = await this.resolveTargetFile(item.path);
+                const previous = await this.readOperationalSnapshot(target);
+                pending.push({ target, previous, next: Buffer.from(result.text, 'utf-8') });
             }
         }
 
@@ -1869,20 +1894,28 @@ export class WorldMap {
         try {
             for (const write of pending) {
                 await mkdirs(dirUri(write.target));
-                await writeFile(write.target, write.next);
+                await this.writeOperationalFile(write.target, write.next);
                 completed.push(write);
             }
         } catch (e) {
+            const rollbackErrors: unknown[] = [];
             for (const write of completed.reverse()) {
                 try {
-                    if (write.previous) {
-                        await writeFile(write.target, write.previous);
+                    if (write.previous !== undefined) {
+                        await this.writeOperationalFile(write.target, write.previous);
                     } else {
                         await vscode.workspace.fs.delete(write.target, { recursive: false, useTrash: false });
                     }
-                } catch {
-                    // Preserve the original write error.
+                } catch (rollbackError) {
+                    rollbackErrors.push(rollbackError);
                 }
+            }
+            if (rollbackErrors.length > 0) {
+                const original = e instanceof Error ? e.message : String(e);
+                const rollback = rollbackErrors
+                    .map(value => value instanceof Error ? value.message : String(value))
+                    .join('; ');
+                throw new Error(`Province-reference repair failed: ${original}. Rollback failed: ${rollback}`);
             }
             throw e;
         }
@@ -1890,7 +1923,7 @@ export class WorldMap {
         return { warnings };
     }
 
-    private async resolveProvinceWarnings(): Promise<void> {
+    private async resolveProvinceWarnings(requestId: string): Promise<void> {
         try {
             const worldMap = await this.worldMapLoader.getWorldMap();
             const validProvinceIds = new Set<number>();
@@ -1904,12 +1937,14 @@ export class WorldMap {
             this.worldMapDependencies = undefined;
             await this.postMessageToWebview({
                 command: 'resolveprovincewarningsresult',
+                requestId,
                 success: true,
                 warnings: result.warnings,
             });
         } catch (e) {
             await this.postMessageToWebview({
                 command: 'resolveprovincewarningsresult',
+                requestId,
                 success: false,
                 error: e instanceof Error ? e.message : String(e),
             });
@@ -1930,6 +1965,7 @@ export class WorldMap {
                 this.worldMapDependencies = undefined;
                 await this.postMessageToWebview({
                     command: 'areaoperationresult',
+                    requestId: msg.requestId,
                     success: true,
                     operation: msg.operation,
                     affectedProvinces: result.provinces,
@@ -1974,7 +2010,10 @@ export class WorldMap {
                 addTransform('map/supply_nodes.txt', text => clearSupplyHubs(text, provinceIds));
             }
             if (msg.operation === 'clear-buildings' || msg.operation === 'convert-to-ocean') {
-                addTransform('map/buildings.txt', text => clearMapBuildings(text, provinceIds));
+                addTransform(
+                    'map/buildings.txt',
+                    text => clearMapBuildings(text, msg.entireMap ? undefined : provinceIds)
+                );
             }
             if (msg.operation === 'clear-water-crossings') {
                 const defaultMap = await this.readDefaultMapConfig();
@@ -2019,55 +2058,63 @@ export class WorldMap {
                 }
             }
 
+            const transactionSnapshot: OperationalSnapshot = new Map();
             const pending: { target: vscode.Uri; previous?: Buffer; next: Buffer }[] = [];
             let changedRecords = 0;
             for (const [path, transform] of transforms) {
-                try {
-                    const sourcePath = await getFilePathFromMod(path);
-                    const source = sourcePath
-                        ? (await readFileFromPath(sourcePath))[0]
-                        : (await readFileFromModOrHOI4(path))[0];
-                    const result = transform(source.toString('utf-8').replace(/^\uFEFF/, ''));
-                    changedRecords += result.changed;
-                    if (result.text === source.toString('utf-8').replace(/^\uFEFF/, '')) {continue;}
-                    const target = await this.resolveTargetFile(path);
-                    let previous: Buffer | undefined;
-                    try { previous = Buffer.from(await vscode.workspace.fs.readFile(target)); } catch { /* New override. */ }
-                    pending.push({ target, previous, next: Buffer.from(result.text, 'utf-8') });
-                } catch (e) {
-                    if (path === 'map/definition.csv' || !path.startsWith('map/')) {
-                        throw e;
+                const optional = path.startsWith('map/') && path !== 'map/definition.csv' &&
+                    !(msg.operation === 'clear-buildings' && path === 'map/buildings.txt');
+                const sourcePath = await getFilePathFromModOrHOI4(path);
+                if (!sourcePath) {
+                    if (optional) {
+                        // Railways, supply nodes, generated buildings, and
+                        // adjacencies are validly absent in some total conversions.
+                        continue;
                     }
-                    // Railways, supply nodes, generated buildings, and
-                    // adjacencies are validly absent in some total conversions.
+                    throw new Error(`Unable to find required area-operation input ${path}.`);
                 }
+                const source = (await readFileFromPath(sourcePath, path))[0];
+                const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
+                let result: { text: string; changed: number };
+                try {
+                    result = transform(sourceText);
+                } catch (e) {
+                    const detail = e instanceof Error ? e.message : String(e);
+                    throw new Error(`Unable to transform ${path}: ${detail}`);
+                }
+                changedRecords += result.changed;
+                if (result.text === sourceText) {continue;}
+                const target = await this.resolveTargetFile(path);
+                await this.captureOperationalTarget(transactionSnapshot, target);
+                const previous = transactionSnapshot.get(target.toString())?.previous;
+                pending.push({ target, previous, next: Buffer.from(result.text, 'utf-8') });
             }
             if (pending.length === 0) {throw new Error('The selected operation found no matching records to change.');}
 
-            const completed: typeof pending = [];
             try {
                 for (const write of pending) {
                     await mkdirs(dirUri(write.target));
-                    await writeFile(write.target, write.next);
-                    completed.push(write);
+                    await this.writeOperationalFile(write.target, write.next);
                 }
             } catch (e) {
-                for (const write of completed.reverse()) {
-                    try {
-                        if (write.previous) {await writeFile(write.target, write.previous);}
-                        else {await vscode.workspace.fs.delete(write.target, { recursive: false, useTrash: false });}
-                    } catch { /* Preserve the original error. */ }
+                try {
+                    await this.restoreOperationalSnapshot(transactionSnapshot);
+                } catch (rollbackError) {
+                    const original = e instanceof Error ? e.message : String(e);
+                    const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+                    throw new Error(`Area operation failed: ${original}. Rollback failed: ${rollback}`);
                 }
                 throw e;
             }
 
             if (msg.reindexAfter) {
-                changedRecords += await this.reindexMapSequentially();
+                changedRecords += await this.reindexMapSequentially(transactionSnapshot);
             }
             this.cachedWorldMap = undefined;
             this.worldMapDependencies = undefined;
             await this.postMessageToWebview({
                 command: 'areaoperationresult',
+                requestId: msg.requestId,
                 success: true,
                 operation: msg.operation,
                 affectedProvinces: provinceIds.size,
@@ -2077,11 +2124,125 @@ export class WorldMap {
         } catch (e) {
             await this.postMessageToWebview({
                 command: 'areaoperationresult',
+                requestId: msg.requestId,
                 success: false,
                 operation: msg.operation,
                 error: e instanceof Error ? e.message : String(e),
             });
         }
+    }
+
+    private async writeOperationalFile(target: vscode.Uri, content: Buffer): Promise<void> {
+        const openDocument = getDocumentByUri(target);
+        const expectedText = content.toString('utf-8').replace(/^\uFEFF/, '');
+        if (openDocument) {
+            const edit = new vscode.WorkspaceEdit();
+            edit.replace(
+                target,
+                new vscode.Range(
+                    openDocument.positionAt(0),
+                    openDocument.positionAt(openDocument.getText().length)
+                ),
+                expectedText
+            );
+            if (!await vscode.workspace.applyEdit(edit)) {
+                throw new Error(`VS Code rejected changes to the open file ${target.fsPath}.`);
+            }
+            if (!await openDocument.save()) {
+                throw new Error(`VS Code could not save changes to ${target.fsPath}.`);
+            }
+        } else {
+            await writeFile(target, content);
+        }
+
+        const persisted = Buffer.from(await vscode.workspace.fs.readFile(target));
+        if (persisted.toString('utf-8').replace(/^\uFEFF/, '') !== expectedText) {
+            throw new Error(`Verification failed after writing ${target.fsPath}.`);
+        }
+    }
+
+    private isFileNotFoundError(value: unknown): boolean {
+        return value instanceof vscode.FileSystemError && value.code === 'FileNotFound';
+    }
+
+    private async readOperationalSnapshot(target: vscode.Uri): Promise<Buffer | undefined> {
+        const openDocument = getDocumentByUri(target);
+        if (openDocument) {
+            return Buffer.from(openDocument.getText(), 'utf-8');
+        }
+        try {
+            return Buffer.from(await vscode.workspace.fs.readFile(target));
+        } catch (e) {
+            if (this.isFileNotFoundError(e)) {
+                return undefined;
+            }
+            throw e;
+        }
+    }
+
+    private async captureOperationalTarget(
+        snapshot: OperationalSnapshot,
+        target: vscode.Uri,
+        binary = false
+    ): Promise<void> {
+        const key = target.toString();
+        if (snapshot.has(key)) {
+            return;
+        }
+
+        let previous: Buffer | undefined;
+        if (binary) {
+            try {
+                previous = Buffer.from(await vscode.workspace.fs.readFile(target));
+            } catch (e) {
+                if (!this.isFileNotFoundError(e)) {
+                    throw e;
+                }
+            }
+        } else {
+            previous = await this.readOperationalSnapshot(target);
+        }
+        snapshot.set(key, { target, previous, binary });
+    }
+
+    private async applyOperationalSnapshotEntry(entry: OperationalSnapshotEntry): Promise<void> {
+        if (entry.previous !== undefined) {
+            await mkdirs(dirUri(entry.target));
+            if (entry.binary) {
+                await this.writeBinaryFileAtomic(entry.target, entry.previous);
+            } else {
+                await this.writeOperationalFile(entry.target, entry.previous);
+            }
+            return;
+        }
+
+        try {
+            await vscode.workspace.fs.delete(entry.target, { recursive: false, useTrash: false });
+        } catch (e) {
+            if (!this.isFileNotFoundError(e)) {
+                throw e;
+            }
+        }
+    }
+
+    /**
+     * Restore a multi-file snapshot as one recoverable operation. If any restore
+     * fails, every successful restore step is put back to its pre-restore value.
+     */
+    private async restoreOperationalSnapshot(snapshot: OperationalSnapshot): Promise<void> {
+        await applyEntriesWithRollback(
+            Array.from(snapshot.values()),
+            async entry => {
+                const current: OperationalSnapshot = new Map();
+                await this.captureOperationalTarget(current, entry.target, entry.binary);
+                return current.get(entry.target.toString())!;
+            },
+            entry => this.applyOperationalSnapshotEntry(entry)
+        );
+    }
+
+    private snapshotFromEntries(entries: readonly OperationalSnapshotEntry[]): OperationalSnapshot {
+        return new Map(entries.map(entry => [entry.target.toString(), entry]));
     }
 
     private async convertClippedRiversToOcean(
@@ -2143,9 +2304,7 @@ export class WorldMap {
             provinces: edit.provinces,
             targetProvinceId: edit.provinces[0].id,
             targetProvinceIds: edit.provinces.map(province => province.id),
-            afterPersist: updatedRegions.length > 0
-                ? () => this.persistStrategicRegions(updatedRegions, [])
-                : undefined,
+            strategicRegions: updatedRegions,
         });
 
         return {
@@ -2154,24 +2313,29 @@ export class WorldMap {
         };
     }
 
-    private async runReindexMap(): Promise<void> {
+    private async runReindexMap(requestId: string): Promise<void> {
         try {
             const changedRecords = await this.reindexMapSequentially();
             await this.postMessageToWebview({
                 command: 'reindexmapresult',
+                requestId,
                 success: true,
                 changedRecords,
             });
         } catch (e) {
             await this.postMessageToWebview({
                 command: 'reindexmapresult',
+                requestId,
                 success: false,
                 error: e instanceof Error ? e.message : String(e),
             });
         }
     }
 
-    private async reindexMapSequentially(): Promise<number> {
+    private async reindexMapSequentially(
+        transactionSnapshot: OperationalSnapshot = new Map()
+    ): Promise<number> {
+        try {
         const worldMap = await this.worldMapLoader.getWorldMap(true);
         const provinceIds = worldMap.provinces
             .filter((province): province is NonNullable<typeof province> => !!province)
@@ -2195,21 +2359,21 @@ export class WorldMap {
             materialize = false
         ) => {
             if (pending.has(path)) {return;}
-            try {
-                const sourcePath = await getFilePathFromMod(path);
-                const source = sourcePath
-                    ? (await readFileFromPath(sourcePath))[0]
-                    : (await readFileFromModOrHOI4(path))[0];
-                const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
-                const result = transform(sourceText);
-                if (result.text === sourceText && !materialize) {return;}
-                const target = await this.resolveTargetFile(path);
-                let previous: Buffer | undefined;
-                try {previous = Buffer.from(await vscode.workspace.fs.readFile(target));} catch { /* New override. */ }
-                pending.set(path, { target, previous, next: Buffer.from(result.text, 'utf-8'), changed: result.changed });
-            } catch (e) {
-                if (!optional) {throw e;}
+            const sourcePath = await getFilePathFromModOrHOI4(path);
+            if (!sourcePath) {
+                if (optional) {
+                    return;
+                }
+                throw new Error(`Unable to find required reindex input ${path}.`);
             }
+            const source = (await readFileFromPath(sourcePath, path))[0];
+            const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
+            const result = transform(sourceText);
+            if (result.text === sourceText && !materialize) {return;}
+            const target = await this.resolveTargetFile(path);
+            await this.captureOperationalTarget(transactionSnapshot, target);
+            const previous = transactionSnapshot.get(target.toString())?.previous;
+            pending.set(path, { target, previous, next: Buffer.from(result.text, 'utf-8'), changed: result.changed });
         };
 
         const materializeFolder = async (folder: string) => {
@@ -2256,6 +2420,7 @@ export class WorldMap {
             return { text: result.text, changed: result.replacements + result.removals };
         }, true);
         await queue('map/buildings.txt', text => reindexMapBuildings(text, provinceMap), true);
+        await queue('map/unitstacks.txt', text => reindexUnitStacks(text, provinceMap), true);
 
         // A changed ID space invalidates inherited database folders. Copy the
         // complete effective contents before enabling replace_path so files
@@ -2271,30 +2436,39 @@ export class WorldMap {
             await materializeFolder('history/countries');
         }
 
-        const completed: Array<{ target: vscode.Uri; previous?: Buffer }> = [];
-        try {
-            for (const write of pending.values()) {
-                await mkdirs(dirUri(write.target));
-                await writeFile(write.target, write.next);
-                completed.push(write);
+        if (replacementFolders.length > 0) {
+            const descriptor = await getSelectedModFileUri();
+            if (!descriptor) {
+                throw new Error(
+                    `Destructive map edits require a selected .mod descriptor so replace_path can be set for: ${replacementFolders.join(', ')}.`
+                );
             }
-            await this.ensureDescriptorReplacePaths(replacementFolders);
-        } catch (e) {
-            for (const write of completed.reverse()) {
-                try {
-                    if (write.previous) {await writeFile(write.target, write.previous);}
-                    else {await vscode.workspace.fs.delete(write.target, { recursive: false, useTrash: false });}
-                } catch { /* Preserve original failure. */ }
-            }
-            throw e;
+            await this.captureOperationalTarget(transactionSnapshot, descriptor);
         }
+
+        for (const write of pending.values()) {
+            await mkdirs(dirUri(write.target));
+            await this.writeOperationalFile(write.target, write.next);
+        }
+        await this.ensureDescriptorReplacePaths(replacementFolders);
 
         this.cachedWorldMap = undefined;
         this.worldMapDependencies = undefined;
         return Array.from(pending.values()).reduce((total, write) => total + write.changed, 0);
+        } catch (e) {
+            try {
+                await this.restoreOperationalSnapshot(transactionSnapshot);
+            } catch (rollbackError) {
+                const original = e instanceof Error ? e.message : String(e);
+                const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+                throw new Error(`Map reindex failed: ${original}. Rollback failed: ${rollback}`);
+            }
+            throw e;
+        }
     }
 
-    private async removeAllCores(): Promise<void> {
+    private async removeAllCores(requestId: string): Promise<void> {
+        const transactionSnapshot: OperationalSnapshot = new Map();
         try {
             const worldMap = await this.worldMapLoader.getWorldMap(true);
             const stateFiles = Array.from(new Set(
@@ -2314,24 +2488,35 @@ export class WorldMap {
                     continue;
                 }
                 const target = await this.resolveTargetFile(file);
+                await this.captureOperationalTarget(transactionSnapshot, target);
                 await mkdirs(dirUri(target));
-                await writeFile(target, Buffer.from(result.text, 'utf-8'));
+                await this.writeOperationalFile(target, Buffer.from(result.text, 'utf-8'));
                 changedRecords += result.changed;
             }
-            changedRecords += await this.reindexMapSequentially();
+            changedRecords += await this.reindexMapSequentially(transactionSnapshot);
             this.cachedWorldMap = undefined;
             this.worldMapDependencies = undefined;
             await this.postMessageToWebview({
                 command: 'removeallcoresresult',
+                requestId,
                 success: true,
                 affectedStates: worldMap.states.filter(Boolean).length,
                 changedRecords,
             });
         } catch (e) {
+            let failure: unknown = e;
+            try {
+                await this.restoreOperationalSnapshot(transactionSnapshot);
+            } catch (rollbackError) {
+                const original = e instanceof Error ? e.message : String(e);
+                const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+                failure = new Error(`Remove All Cores failed: ${original}. Rollback failed: ${rollback}`);
+            }
             await this.postMessageToWebview({
                 command: 'removeallcoresresult',
+                requestId,
                 success: false,
-                error: e instanceof Error ? e.message : String(e),
+                error: failure instanceof Error ? failure.message : String(failure),
             });
         }
     }
@@ -2651,16 +2836,12 @@ export class WorldMap {
                 relatedPaths: optionalTransforms.map(([path]) => path),
                 afterPersist: async () => {
                     for (const [path, transform] of optionalTransforms) {
-                        let source: Buffer;
-                        try {
-                            const sourcePath = await getFilePathFromMod(path);
-                            source = sourcePath
-                                ? (await readFileFromPath(sourcePath))[0]
-                                : (await readFileFromModOrHOI4(path))[0];
-                        } catch {
+                        const sourcePath = await getFilePathFromModOrHOI4(path);
+                        if (!sourcePath) {
                             // Optional in small and total-conversion maps.
                             continue;
                         }
+                        const source = (await readFileFromPath(sourcePath, path))[0];
                         const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
                         const result = transform(sourceText);
                         if (result.text === sourceText) {
@@ -2668,7 +2849,7 @@ export class WorldMap {
                         }
                         const target = await this.resolveTargetFile(path);
                         await mkdirs(dirUri(target));
-                        await writeFile(target, Buffer.from(result.text, 'utf-8'));
+                        await this.writeOperationalFile(target, Buffer.from(result.text, 'utf-8'));
                         changedRecords += result.changed;
                     }
                 },
@@ -2677,6 +2858,7 @@ export class WorldMap {
             this.worldMapDependencies = undefined;
             await this.postMessageToWebview({
                 command: 'continentpipelineresult',
+                requestId: msg.requestId,
                 success: true,
                 continentId,
                 continentName,
@@ -2689,6 +2871,7 @@ export class WorldMap {
         } catch (e) {
             await this.postMessageToWebview({
                 command: 'continentpipelineresult',
+                requestId: msg.requestId,
                 success: false,
                 continentId,
                 continentName,
@@ -2701,110 +2884,151 @@ export class WorldMap {
     /**
      * Send the current province BMP pixel data to the webview (for paintbrush initialization).
      */
-    private async sendProvinceBmpData() {
+    private async sendProvinceBmpData(requestId: string) {
         try {
             const worldMap = await this.worldMapLoader.getWorldMap();
             const provinceMap = worldMap as any;
             if (provinceMap.colorByPosition && provinceMap.width && provinceMap.height) {
                 await this.postMessageToWebview({
                     command: 'provincebmpdata',
+                    requestId,
+                    success: true,
                     colorByPosition: provinceMap.colorByPosition,
                     width: worldMap.width,
                     height: worldMap.height,
-                } as any);
+                });
             }
         } catch (e) {
             error(e);
+            await this.postMessageToWebview({
+                command: 'provincebmpdata',
+                requestId,
+                success: false,
+                error: e instanceof Error ? e.message : String(e),
+                colorByPosition: new Uint32Array(),
+                width: 0,
+                height: 0,
+            });
         }
     }
 
     /**
      * Undo the last province BMP edit by restoring the previous BMP and CSV.
      */
-    private async undoProvinceBmp() {
-        const snapshot = this.bmpUndoStack.pop();
+    private async undoProvinceBmp(requestId: string) {
+        try {
+            await this.undoProvinceBmpImpl(requestId);
+        } catch (e) {
+            error(e);
+            await this.postMessageToWebview({
+                command: 'provincebmpupdated',
+                requestId,
+                success: false,
+                error: e instanceof Error ? e.message : String(e),
+                canUndo: this.bmpUndoStack.length > 0,
+                canRedo: this.bmpRedoStack.length > 0,
+                forceReload: true,
+            });
+        }
+    }
+
+    private async undoProvinceBmpImpl(requestId: string) {
+        const snapshot = this.bmpUndoStack[this.bmpUndoStack.length - 1];
         if (!snapshot) {
+            await this.postMessageToWebview({
+                command: 'provincebmpupdated',
+                requestId,
+                success: true,
+                canUndo: false,
+                canRedo: this.bmpRedoStack.length > 0,
+                forceReload: false,
+            });
             return;
         }
 
-        const defaultMap = await this.readDefaultMapConfig();
-        const bmpRelativePath = 'map/' + (defaultMap?.provinces ?? 'provinces.bmp');
-
-        // Save current BMP and CSV for redo
-        const currentBmp = await this.readBmpFile(bmpRelativePath);
-        const currentProvinces = await this.readCurrentProvinceDefs();
-        if (currentBmp) {
-            const currentIds = new Set(currentProvinces.map(province => province.id));
-            this.bmpRedoStack.push({
-                bmpBuffer: currentBmp,
-                provinces: currentProvinces,
-                deletedProvinceIds: snapshot.provinces
-                    .map(province => province.id)
-                    .filter(id => !currentIds.has(id)),
-            });
-            const maxSteps = this.getMaxUndoSteps();
-            while (this.bmpRedoStack.length > maxSteps) {
-                this.bmpRedoStack.shift();
-            }
+        const current: OperationalSnapshot = new Map();
+        for (const entry of snapshot.files) {
+            await this.captureOperationalTarget(current, entry.target, entry.binary);
         }
-
-        // Restore old BMP
-        await this.writeBmpAtomic(bmpRelativePath, snapshot.bmpBuffer);
-
-        // Restore old CSV
-        await this.persistProvinces(snapshot.provinces, (snapshot.deletedProvinceIds ?? []).map(String));
+        await this.restoreOperationalSnapshot(this.snapshotFromEntries(snapshot.files));
+        this.bmpUndoStack.pop();
+        this.bmpRedoStack.push({ files: Array.from(current.values()) });
+        const maxSteps = this.getMaxUndoSteps();
+        while (this.bmpRedoStack.length > maxSteps) {
+            this.bmpRedoStack.shift();
+        }
+        invalidateModDescriptorCaches();
+        this.cachedWorldMap = undefined;
+        this.worldMapDependencies = undefined;
 
         // Signal webview to reload
         await this.postMessageToWebview({
             command: 'provincebmpupdated',
-            data: JSON.stringify({ canUndo: this.bmpUndoStack.length > 0, canRedo: this.bmpRedoStack.length > 0, forceReload: true }),
-            start: 0,
-            end: 0,
-        } as any);
+            requestId,
+            success: true,
+            canUndo: this.bmpUndoStack.length > 0,
+            canRedo: this.bmpRedoStack.length > 0,
+            forceReload: true,
+        });
     }
 
     /**
      * Redo the last undone province BMP edit.
      */
-    private async redoProvinceBmp() {
-        const snapshot = this.bmpRedoStack.pop();
+    private async redoProvinceBmp(requestId: string) {
+        try {
+            await this.redoProvinceBmpImpl(requestId);
+        } catch (e) {
+            error(e);
+            await this.postMessageToWebview({
+                command: 'provincebmpupdated',
+                requestId,
+                success: false,
+                error: e instanceof Error ? e.message : String(e),
+                canUndo: this.bmpUndoStack.length > 0,
+                canRedo: this.bmpRedoStack.length > 0,
+                forceReload: true,
+            });
+        }
+    }
+
+    private async redoProvinceBmpImpl(requestId: string) {
+        const snapshot = this.bmpRedoStack[this.bmpRedoStack.length - 1];
         if (!snapshot) {
+            await this.postMessageToWebview({
+                command: 'provincebmpupdated',
+                requestId,
+                success: true,
+                canUndo: this.bmpUndoStack.length > 0,
+                canRedo: false,
+                forceReload: false,
+            });
             return;
         }
 
-        const defaultMap = await this.readDefaultMapConfig();
-        const bmpRelativePath = 'map/' + (defaultMap?.provinces ?? 'provinces.bmp');
-
-        // Save current BMP and CSV for undo
-        const currentBmp = await this.readBmpFile(bmpRelativePath);
-        const currentProvinces = await this.readCurrentProvinceDefs();
-        if (currentBmp) {
-            const currentIds = new Set(currentProvinces.map(province => province.id));
-            this.bmpUndoStack.push({
-                bmpBuffer: currentBmp,
-                provinces: currentProvinces,
-                deletedProvinceIds: snapshot.provinces
-                    .map(province => province.id)
-                    .filter(id => !currentIds.has(id)),
-            });
-            const maxSteps = this.getMaxUndoSteps();
-            while (this.bmpUndoStack.length > maxSteps) {
-                this.bmpUndoStack.shift();
-            }
+        const current: OperationalSnapshot = new Map();
+        for (const entry of snapshot.files) {
+            await this.captureOperationalTarget(current, entry.target, entry.binary);
         }
-
-        // Restore redo BMP
-        await this.writeBmpAtomic(bmpRelativePath, snapshot.bmpBuffer);
-
-        // Restore redo CSV
-        await this.persistProvinces(snapshot.provinces, (snapshot.deletedProvinceIds ?? []).map(String));
+        await this.restoreOperationalSnapshot(this.snapshotFromEntries(snapshot.files));
+        this.bmpRedoStack.pop();
+        this.bmpUndoStack.push({ files: Array.from(current.values()) });
+        const maxSteps = this.getMaxUndoSteps();
+        while (this.bmpUndoStack.length > maxSteps) {
+            this.bmpUndoStack.shift();
+        }
+        invalidateModDescriptorCaches();
+        this.cachedWorldMap = undefined;
+        this.worldMapDependencies = undefined;
 
         await this.postMessageToWebview({
             command: 'provincebmpupdated',
-            data: JSON.stringify({ canUndo: this.bmpUndoStack.length > 0, canRedo: this.bmpRedoStack.length > 0, forceReload: true }),
-            start: 0,
-            end: 0,
-        } as any);
+            requestId,
+            success: true,
+            canUndo: this.bmpUndoStack.length > 0,
+            canRedo: this.bmpRedoStack.length > 0,
+            forceReload: true,
+        });
     }
 
     /**
@@ -2843,8 +3067,9 @@ export class WorldMap {
                 }
             }
             return provinces;
-        } catch {
-            return [];
+        } catch (e) {
+            const detail = e instanceof Error ? e.message : String(e);
+            throw new Error(`Unable to read current province definitions: ${detail}`);
         }
     }
 
@@ -2878,6 +3103,10 @@ export class WorldMap {
      */
     private async writeBmpAtomic(bmpRelativePath: string, buffer: Buffer): Promise<void> {
         const targetFile = await this.resolveTargetFile(bmpRelativePath);
+        await this.writeBinaryFileAtomic(targetFile, buffer);
+    }
+
+    private async writeBinaryFileAtomic(targetFile: vscode.Uri, buffer: Buffer): Promise<void> {
         const tempFile = vscode.Uri.parse(targetFile.toString() + '.tmp');
         await mkdirs(dirUri(targetFile));
         await writeFile(tempFile, buffer);

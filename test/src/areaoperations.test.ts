@@ -5,6 +5,7 @@ import {
     clearSupplyHubs,
     clearWaterCrossings,
     convertDefinitionsToOcean,
+    MAX_PROVINCE_MERGE_SPAN,
     removeAllCores,
     partitionLandAndWaterProvinces,
     partitionMappedMembership,
@@ -27,6 +28,11 @@ describe('selected area operations', () => {
     it('clears supply hubs and generated building rows by province', () => {
         assert.strictEqual(clearSupplyHubs('1 2\n3 9', selected).text, '3 9');
         assert.strictEqual(clearMapBuildings('2;arms_factory;1\n9;dockyard;1', selected).text, '9;dockyard;1');
+    });
+
+    it('clears every numeric map building record for an entire-map operation', () => {
+        const source = '# generated buildings\n2;arms_factory;1\n99999;dockyard;1\n';
+        assert.strictEqual(clearMapBuildings(source).text, '# generated buildings\n');
     });
 
     it('converts definitions to ocean fields', () => {
@@ -131,15 +137,58 @@ describe('selected area operations', () => {
 
     it('never merges lake provinces into sea provinces during consolidation', () => {
         const result = planProvinceMergesByType([
-            { id: 9, type: 'lake' },
-            { id: 2, type: 'land' },
-            { id: 7, type: 'sea' },
-            { id: 3, type: 'land' },
-            { id: 10, type: 'lake' },
-            { id: 8, type: 'sea' },
+            { id: 9, type: 'lake', mass: 16, boundingBox: { x: 0, y: 20, w: 4, h: 4 }, edges: [{ to: 10 }] },
+            { id: 2, type: 'land', mass: 16, boundingBox: { x: 0, y: 0, w: 4, h: 4 }, edges: [{ to: 3 }] },
+            { id: 7, type: 'sea', mass: 16, boundingBox: { x: 0, y: 10, w: 4, h: 4 }, edges: [{ to: 8 }] },
+            { id: 3, type: 'land', mass: 16, boundingBox: { x: 4, y: 0, w: 4, h: 4 }, edges: [{ to: 2 }] },
+            { id: 10, type: 'lake', mass: 16, boundingBox: { x: 4, y: 20, w: 4, h: 4 }, edges: [{ to: 9 }] },
+            { id: 8, type: 'sea', mass: 16, boundingBox: { x: 4, y: 10, w: 4, h: 4 }, edges: [{ to: 7 }] },
         ]);
         assert.deepStrictEqual(result.survivorIds, [2, 7, 9]);
         assert.deepStrictEqual(result.replacements, { 3: 2, 8: 7, 10: 9 });
+    });
+
+    it('preserves same-type provinces when topology or geometry is missing', () => {
+        const result = planProvinceMergesByType([
+            { id: 2, type: 'land' },
+            { id: 3, type: 'land' },
+        ]);
+        assert.deepStrictEqual(result.survivorIds, [2, 3]);
+        assert.deepStrictEqual(result.replacements, {});
+    });
+
+    it('preserves disconnected and sparse same-type geometry', () => {
+        const disconnected = planProvinceMergesByType([
+            { id: 2, type: 'land', mass: 16, boundingBox: { x: 0, y: 0, w: 4, h: 4 }, edges: [] },
+            { id: 3, type: 'land', mass: 16, boundingBox: { x: 4, y: 0, w: 4, h: 4 }, edges: [] },
+        ]);
+        assert.deepStrictEqual(disconnected.survivorIds, [2, 3]);
+
+        const sparse = planProvinceMergesByType([
+            { id: 4, type: 'land', mass: 1, boundingBox: { x: 0, y: 0, w: 1, h: 1 }, edges: [{ to: 5 }] },
+            { id: 5, type: 'land', mass: 1, boundingBox: { x: 200, y: 200, w: 1, h: 1 }, edges: [{ to: 4 }] },
+        ]);
+        assert.deepStrictEqual(sparse.survivorIds, [4, 5]);
+        assert.deepStrictEqual(sparse.replacements, {});
+    });
+
+    it('never plans a union wider than the 256-pixel HOI4 box ceiling', () => {
+        assert.strictEqual(MAX_PROVINCE_MERGE_SPAN, 256);
+        const result = planProvinceMergesByType([
+            { id: 2, type: 'land', mass: 2560, boundingBox: { x: 0, y: 0, w: 256, h: 10 }, edges: [{ to: 3 }] },
+            { id: 3, type: 'land', mass: 10, boundingBox: { x: 256, y: 0, w: 1, h: 10 }, edges: [{ to: 2 }] },
+        ]);
+        assert.deepStrictEqual(result.survivorIds, [2, 3]);
+        assert.deepStrictEqual(result.replacements, {});
+    });
+
+    it('chooses the largest adjacent province instead of a tiny low-ID survivor', () => {
+        const result = planProvinceMergesByType([
+            { id: 2, type: 'land', mass: 1, boundingBox: { x: 0, y: 0, w: 1, h: 1 }, edges: [{ to: 3 }] },
+            { id: 3, type: 'land', mass: 100, boundingBox: { x: 1, y: 0, w: 10, h: 10 }, edges: [{ to: 2 }] },
+        ]);
+        assert.deepStrictEqual(result.survivorIds, [3]);
+        assert.deepStrictEqual(result.replacements, { 2: 3 });
     });
 
     it('preserves prior out-of-continent edits in boundary records', () => {

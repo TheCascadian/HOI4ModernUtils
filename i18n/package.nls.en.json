@@ -15,6 +15,7 @@
     "hoi4modernutils.preview.title": "Preview HOI4 file",
     "hoi4modernutils.previewworld.title": "Preview World Map",
     "hoi4modernutils.scanreferences.title": "Scan References",
+    "hoi4modernutils.scanAndLogErrors.title": "Scan for World Map Errors and Write Log",
     "hoi4modernutils.selecthoifolder.title": "Select HOI4 Install Path",
     "hoi4modernutils.selecthoifolder.desc": "Heart of Iron IV install path.",
     "hoi4modernutils.selectmodfile.title": "Select Mod File",

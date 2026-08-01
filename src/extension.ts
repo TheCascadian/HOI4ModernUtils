@@ -10,6 +10,7 @@ import { loadI18n } from './util/i18n';
 import { Logger } from "./util/logger";
 import { registerLazyPreviews } from './previewdef/lazyregistration';
 import { registerLazyAssetService } from './fileSystem/lazyassetservice';
+import { registerScanAndLogErrorsCommand } from './util/worldmaperrorscan';
 
 export function activate(context: vscode.ExtensionContext) {
     const activationStarted = performance.now();
@@ -35,6 +36,7 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(registerLazyPreviews(context));
         context.subscriptions.push(registerModFile());
         context.subscriptions.push(registerScanReferencesCommand());
+        context.subscriptions.push(registerScanAndLogErrorsCommand());
         context.subscriptions.push(registerHoiFs());
         // Custom editor providers must be available before VS Code resolves an
         // onCustomEditor activation. Their constructors do no asset decoding.

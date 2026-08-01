@@ -2,7 +2,7 @@
     <div class="toolbar-outer">
         <div id="topbar" class="toolbar">
             <div class="group primary-map-control">
-                <label for="viewmode">%worldmap.topbar.viewmode|View mode: %</label>
+                <label for="viewmode" class="topbar-icon-label" title="%worldmap.topbar.viewmode|View mode%"><i class="codicon codicon-map"></i><span class="screen-reader-only">%worldmap.topbar.viewmode|View mode%</span></label>
                 <div class="select-container">
                     <select id="viewmode">
                         <option value="province">%worldmap.topbar.viewmode.province|Province%</option>
@@ -16,7 +16,7 @@
             </div>
 
             <div class="group primary-map-control">
-                <label for="colorset">%worldmap.topbar.colorset|Color set: %</label>
+                <label for="colorset" class="topbar-icon-label" title="%worldmap.topbar.colorset|Color set%"><i class="codicon codicon-symbol-color"></i><span class="screen-reader-only">%worldmap.topbar.colorset|Color set%</span></label>
                 <div class="select-container">
                     <select id="colorset">
                         <option viewmode="province" value="provinceid">%worldmap.topbar.colorset.provinceid|Province ID%</option>
@@ -39,7 +39,7 @@
             </div>
 
             <div class="group topbar-filter-control" data-overflow-priority="4">
-                <label id="display-label" for="display">%worldmap.topbar.display|Display: %</label>
+                <label id="display-label" for="display" class="topbar-icon-label" title="%worldmap.topbar.display|Display layers%"><i class="codicon codicon-eye"></i><span class="screen-reader-only">%worldmap.topbar.display|Display%</span></label>
                 <div class="select-container">
                     <div id="display" class="select multiple-select" tabindex="0" role="combobox" aria-labelledby="display-label" aria-haspopup="listbox" title="%worldmap.topbar.display.tooltip|Choose visible map layers and tooltip detail.%">
                         <span class="value"></span>
@@ -59,7 +59,7 @@
             </div>
 
             <div class="group topbar-filter-control" data-overflow-priority="2">
-                <label id="conditions-label" for="conditions">%worldmap.topbar.conditions|Conditions: %</label>
+                <label id="conditions-label" for="conditions" class="topbar-icon-label" title="%worldmap.topbar.conditions|Conditions%"><i class="codicon codicon-git-branch"></i><span class="screen-reader-only">%worldmap.topbar.conditions|Conditions%</span></label>
                 <div class="select-container">
                     <div id="conditions" class="select multiple-select" tabindex="0" role="combobox" aria-labelledby="conditions-label" aria-haspopup="listbox" title="%worldmap.topbar.conditions.tooltip|Choose condition branches used to resolve ownership, control, and cores.%">
                         <span class="value"></span>
@@ -68,11 +68,13 @@
             </div>
 
             <div class="group topbar-search-control" viewmode="province state strategicregion supplyarea supply" data-overflow-priority="3">
-                <label for="searchbox">%worldmap.topbar.search|Search: %</label>
-                <input id="searchbox" type="text"/>
-                <button id="search" title="%worldmap.topbar.search.title|Search%">
-                    <i class="codicon codicon-search"></i>
-                </button>
+                <label for="searchbox" class="screen-reader-only">%worldmap.topbar.search|Search%</label>
+                <div class="topbar-search-field">
+                    <input id="searchbox" type="text"/>
+                    <button id="search" type="button" title="%worldmap.topbar.search.title|Search%" aria-label="%worldmap.topbar.search.title|Search%">
+                        <i class="codicon codicon-search"></i>
+                    </button>
+                </div>
             </div>
 
             <div class="group topbar-filter-control" viewmode="warnings" data-overflow-priority="3">
@@ -95,12 +97,19 @@
                 </button>
             </div>
 
+            <div class="group interface-tools" data-overflow-priority="1">
+                <button id="interface-tools-button" type="button" aria-haspopup="menu" aria-controls="interface-tools-menu" aria-expanded="false" title="Interface and performance options (Ctrl+Alt+I)">
+                    <i class="codicon codicon-settings-gear"></i>
+                    <span class="responsive-button-label">Interface</span>
+                    <i class="codicon codicon-chevron-down"></i>
+                </button>
+                <div id="interface-tools-menu" class="interface-tools-menu" role="menu" aria-label="Interface and performance options" hidden>
             <div class="group render-optimizations">
-                <button id="render-optimizations-button" type="button" aria-haspopup="true" aria-controls="render-optimizations-menu" aria-expanded="false" title="%worldmap.topbar.optimizations.title|Experimental performance options%">
+                <button id="render-optimizations-button" type="button" role="menuitem" aria-haspopup="menu" aria-controls="render-optimizations-menu" aria-expanded="false" title="%worldmap.topbar.optimizations.title|Experimental performance options (Ctrl+Alt+Shift+P)%">
                     <i class="codicon codicon-dashboard"></i>
                     <span class="responsive-button-label">%worldmap.topbar.optimizations|Performance%</span>
                     <span id="render-optimizations-count" class="render-optimizations-count hidden"></span>
-                    <i class="codicon codicon-chevron-down"></i>
+                    <span class="menu-keybind">Ctrl+Alt+Shift+P</span><i class="codicon codicon-chevron-right"></i>
                 </button>
                 <div id="render-optimizations-menu" class="render-optimizations-menu" role="group" aria-label="%worldmap.topbar.optimizations.heading|Experimental rendering%" hidden>
                     <div class="render-optimizations-heading">%worldmap.topbar.optimizations.heading|Experimental rendering%</div>
@@ -140,10 +149,10 @@
             </div>
 
             <div class="group accessibility-options">
-                <button id="accessibility-options-button" type="button" aria-haspopup="true" aria-controls="accessibility-options-menu" aria-expanded="false" title="%worldmap.accessibility.title|Accessibility and interface preferences (Ctrl+Alt+A)%">
+                <button id="accessibility-options-button" type="button" role="menuitem" aria-haspopup="dialog" aria-controls="accessibility-options-menu" aria-expanded="false" title="%worldmap.accessibility.title|Accessibility and interface preferences (Ctrl+Alt+A)%">
                     <i class="codicon codicon-accessibility"></i>
                     <span class="responsive-button-label">%worldmap.accessibility|Accessibility%</span>
-                    <i class="codicon codicon-chevron-down"></i>
+                    <span class="menu-keybind">Ctrl+Alt+A</span><i class="codicon codicon-chevron-right"></i>
                 </button>
                 <div id="accessibility-options-menu" class="accessibility-options-menu" role="dialog" aria-label="%worldmap.accessibility.heading|Interface accessibility%" hidden>
                     <div class="accessibility-options-heading">%worldmap.accessibility.heading|Interface accessibility%</div>
@@ -157,14 +166,46 @@
                         <span><strong>%worldmap.accessibility.highcontrast|Increase contrast%</strong><small>%worldmap.accessibility.highcontrast.detail|Strengthens topbar, menu, border, and focus contrast.%</small></span>
                     </label>
                     <label class="accessibility-option">
-                        <input type="checkbox" data-accessibility-option="largeText"/>
-                        <span><strong>%worldmap.accessibility.largetext|Larger interface text%</strong><small>%worldmap.accessibility.largetext.detail|Enlarges topbar, menu, status, and dialog text.%</small></span>
-                    </label>
-                    <label class="accessibility-option">
                         <input type="checkbox" data-accessibility-option="largeTargets"/>
                         <span><strong>%worldmap.accessibility.largetargets|Larger controls%</strong><small>%worldmap.accessibility.largetargets.detail|Increases button and form-control target sizes.%</small></span>
                     </label>
+                    <div class="interface-settings-section">%worldmap.interface.typography|Typography%</div>
+                    <label class="interface-setting-row" for="interface-font-size">
+                        <span>%worldmap.interface.fontsize|Font size%</span>
+                        <output id="interface-font-size-output" for="interface-font-size">12 px</output>
+                        <input id="interface-font-size" type="range" min="10" max="20" step="1" value="12"/>
+                    </label>
+                    <label class="interface-setting-row" for="interface-font-family">
+                        <span>%worldmap.interface.typeface|Typeface%</span>
+                        <div class="select-container">
+                            <select id="interface-font-family">
+                                <option value="system">%worldmap.interface.typeface.system|VS Code interface%</option>
+                                <option value="editor">%worldmap.interface.typeface.editor|VS Code editor%</option>
+                                <option value="sans">%worldmap.interface.typeface.sans|Sans serif%</option>
+                                <option value="serif">%worldmap.interface.typeface.serif|Serif%</option>
+                                <option value="mono">%worldmap.interface.typeface.mono|Monospace%</option>
+                            </select>
+                        </div>
+                    </label>
+                    <div class="interface-settings-section">%worldmap.interface.appearance|Appearance%</div>
+                    <label class="interface-setting-row" for="interface-ui-scale">
+                        <span>%worldmap.interface.uiscale|UI scale%</span>
+                        <output id="interface-ui-scale-output" for="interface-ui-scale">100%</output>
+                        <input id="interface-ui-scale" type="range" min="80" max="150" step="5" value="100"/>
+                    </label>
+                    <label class="interface-setting-row" for="interface-panel-opacity">
+                        <span>%worldmap.interface.opacity|Glass opacity%</span>
+                        <output id="interface-panel-opacity-output" for="interface-panel-opacity">72%</output>
+                        <input id="interface-panel-opacity" type="range" min="45" max="95" step="5" value="72"/>
+                    </label>
+                    <label class="interface-setting-row" for="interface-glass-blur">
+                        <span>%worldmap.interface.blur|Glass blur%</span>
+                        <output id="interface-glass-blur-output" for="interface-glass-blur">18 px</output>
+                        <input id="interface-glass-blur" type="range" min="0" max="32" step="2" value="18"/>
+                    </label>
                     <button id="accessibility-options-reset" type="button">%worldmap.accessibility.reset|Reset accessibility options%</button>
+                </div>
+            </div>
                 </div>
             </div>
 
@@ -176,38 +217,28 @@
 
             <!-- Export as image, warnings toggle, province/state tools moved to the Shift+Right-click context menu (see topbar.ts loadToolsContextMenu). -->
 
-            <div class="group" viewmode="province strategicregion" data-overflow-priority="5">
-                <button id="assign-to-strategicregion" type="button" title="%worldmap.topbar.assignstrategicregion.title|Assign selected provinces to selected strategic region (Ctrl+Shift+R)%">
-                    <i class="codicon codicon-globe"></i>
+            <div class="group province-edit-tools" viewmode="province" data-overflow-priority="1">
+                <button id="province-edit-tools-button" type="button" aria-haspopup="true" aria-controls="province-edit-tools-menu" aria-expanded="false" title="%worldmap.topbar.provincetools.title|Province drawing and transfer tools%">
+                    <i class="codicon codicon-tools"></i>
+                    <span class="responsive-button-label">%worldmap.topbar.provincetools|Province edit%</span>
+                    <i class="codicon codicon-chevron-down"></i>
                 </button>
-            </div>
-
-            <div class="group" viewmode="province" data-overflow-priority="1">
-                <button id="new-province" type="button" title="%worldmap.topbar.newprovince.title|Create new province from selected (Ctrl+Alt+P)%">
-                    <i class="codicon codicon-add"></i>
-                </button>
-                <button id="toggle-paintbrush" type="button" title="%worldmap.topbar.paintbrush.title|Toggle paintbrush mode (P)%">
-                    <i class="codicon codicon-edit"></i>
-                </button>
-                <button id="toggle-fillbucket" type="button" title="%worldmap.topbar.fillbucket.title|Fill connected pixels into the selected existing province (F)%">
-                    <i class="codicon codicon-symbol-color"></i>
-                </button>
-                <button id="toggle-transfer-wand" type="button" title="%worldmap.topbar.wand.title|Transfer wand: choose a target, then click provinces or states to reassign them (W)%">
-                    <i class="codicon codicon-wand"></i>
-                </button>
-                <label for="brushsize" style="margin-left:8px;font-size:11px;color:#ccc;">%worldmap.topbar.brushsize|Brush:%</label>
-                <div class="select-container" style="width:50px;">
-                    <select id="brushsize" style="font-size:11px;padding:1px 2px;">
-                        <option value="1">1</option>
-                        <option value="2">2</option>
-                        <option value="3">3</option>
-                        <option value="4">4</option>
-                        <option value="5">5</option>
-                        <option value="6">6</option>
-                        <option value="7">7</option>
-                        <option value="8">8</option>
-                        <option value="9">9</option>
-                    </select>
+                <div id="province-edit-tools-menu" class="province-edit-tools-menu" role="menu" aria-label="%worldmap.topbar.provincetools|Province edit%" hidden>
+                    <button id="new-province" type="button" role="menuitem" title="%worldmap.topbar.newprovince.title|Create new province from selected (Ctrl+Alt+P)%">
+                        <i class="codicon codicon-add"></i><span>%worldmap.topbar.newprovince|Create new province%</span>
+                    </button>
+                    <button id="toggle-paintbrush" type="button" role="menuitem" title="%worldmap.topbar.paintbrush.title|Toggle paintbrush mode (P)%">
+                        <i class="codicon codicon-paintcan"></i><span>%worldmap.topbar.paintbrush|Paint pixels%</span>
+                    </button>
+                    <button id="toggle-fillbucket" type="button" role="menuitem" title="%worldmap.topbar.fillbucket.title|Fill connected pixels into the selected existing province (F)%">
+                        <i class="codicon codicon-symbol-color"></i><span>%worldmap.topbar.fillbucket|Fill connected area%</span>
+                    </button>
+                    <button id="toggle-lasso" type="button" role="menuitem" title="%worldmap.topbar.lasso.title|Lasso pixels into the selected existing province. Land or sea is detected from the target province (L)%">
+                        <i class="codicon codicon-selection"></i><span>%worldmap.topbar.lasso|Lasso assignment%</span>
+                    </button>
+                    <button id="toggle-transfer-wand" type="button" role="menuitem" title="%worldmap.topbar.wand.title|Transfer wand: choose a target, then click provinces or states to reassign them (W)%">
+                        <i class="codicon codicon-wand"></i><span>%worldmap.topbar.wand|Transfer province or state%</span>
+                    </button>
                 </div>
             </div>
 
@@ -249,47 +280,67 @@
     <div id="action-status" class="hidden" role="status" aria-live="polite"></div>
     <canvas id="main-canvas" tabindex="0" role="application" aria-label="%worldmap.canvas.label|Interactive Hearts of Iron IV world map. Use Shift+F10 for map tools.%" aria-describedby="map-accessible-status"></canvas>
     <div id="map-accessible-status" class="screen-reader-only" role="status" aria-live="polite"></div>
-    <div id="paintbrush-panel" role="region" aria-label="%worldmap.topbar.paintbrush.title|Paintbrush controls%" hidden style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(30,30,30,0.95);border:1px solid #555;border-radius:2px;padding:12px 18px;z-index:9999;font-size:13px;color:#ccc;box-shadow:0 4px 16px rgba(0,0,0,0.6);min-width:340px;max-width:420px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-            <span style="font-weight:bold;color:#fff;">Paintbrush</span>
-            <span id="paintbrush-pixel-count" style="color:#888;">0 pixels</span>
+    <div id="paintbrush-panel" class="worldmap-modal-card" role="region" aria-label="%worldmap.topbar.paintbrush.title|Paintbrush controls%" hidden>
+        <div class="paintbrush-panel-heading">
+            <div id="paintbrush-workflow-title" class="worldmap-modal-title">%worldmap.paintbrush.edit.title|Edit province boundary%</div>
+            <span id="paintbrush-pixel-count" class="paintbrush-stage-count">0 staged</span>
         </div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
-            <span>Color: <span id="paintbrush-color-preview" style="display:inline-block;width:14px;height:14px;border:1px solid #888;vertical-align:middle;margin-left:4px;"></span></span>
-            <span id="paintbrush-province-info" style="color:#aaa;"></span>
+        <div id="paintbrush-workflow-instruction" class="paintbrush-workflow-instruction" role="status" aria-live="polite">%worldmap.paintbrush.edit.start|Paint pixels on the map to change the selected province boundary.%</div>
+        <div id="paintbrush-draft-errors" class="worldmap-modal-error" hidden></div>
+        <div class="paintbrush-control-strip">
+            <div class="worldmap-modal-actions paintbrush-tool-actions" role="group" aria-label="%worldmap.paintbrush.tools|Drawing tool%">
+                <button id="paintbrush-tool-brush" type="button" title="%worldmap.topbar.paintbrush.title|Brush (P)%" aria-label="%worldmap.topbar.paintbrush.title|Brush (P)%"><i class="codicon codicon-paintcan"></i></button>
+                <button id="paintbrush-erase" type="button" aria-pressed="false" title="Eraser (E)" aria-label="Eraser (E)"><i class="codicon codicon-clear-all"></i></button>
+                <button id="paintbrush-tool-fill" type="button" title="%worldmap.topbar.fillbucket.title|Fill connected area (F)%" aria-label="%worldmap.topbar.fillbucket.title|Fill connected area (F)%"><i class="codicon codicon-symbol-color"></i></button>
+                <button id="paintbrush-tool-lasso" type="button" title="%worldmap.topbar.lasso.title|Lasso (L)%" aria-label="%worldmap.topbar.lasso.title|Lasso (L)%"><i class="codicon codicon-selection"></i></button>
+            </div>
+            <div id="paintbrush-brush-options" class="paintbrush-option-row">
+                <label for="brushsize" title="%worldmap.topbar.brushsize.title|Paint and eraser size in map pixels (1-512). Alt+wheel adjusts it.%"><i class="codicon codicon-symbol-ruler"></i><span class="screen-reader-only">%worldmap.topbar.brushsize|Brush size%</span></label>
+                <input id="brushsize" type="number" min="1" max="512" step="1" value="1" aria-label="%worldmap.topbar.brushsize|Brush size%" title="%worldmap.topbar.brushsize.title|Paint and eraser size in map pixels (1-512). Alt+wheel adjusts it.%"/>
+            </div>
         </div>
-        <div id="paintbrush-draft-details" style="font-size:11px;color:#999;margin-bottom:8px;line-height:1.5;">
-            <span id="paintbrush-draft-type"></span>
-            <span id="paintbrush-draft-terrain"></span>
-            <span id="paintbrush-draft-coastal"></span>
-            <span id="paintbrush-draft-continent"></span>
-        </div>
-        <div id="paintbrush-draft-errors" style="display:none;font-size:11px;color:#e06060;margin-bottom:8px;max-height:60px;overflow-y:auto;"></div>
-        <div class="paintbrush-history-actions">
-            <button id="paintbrush-erase" type="button" aria-pressed="false">%worldmap.paintbrush.erase|Erase staged pixels%</button>
-            <button id="paintbrush-draft-undo" type="button" title="%worldmap.paintbrush.undo.tooltip|Restore the previous painted region (T)%">Undo (T)</button>
-            <button id="paintbrush-draft-redo" type="button" title="%worldmap.paintbrush.redo.tooltip|Reapply the next painted region (R)%">Redo (R)</button>
-        </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;">
-            <button id="paintbrush-cancel" style="background:#555;color:#fff;border:none;padding:6px 14px;border-radius:1px;cursor:pointer;">Cancel (Esc)</button>
-            <button id="paintbrush-apply" style="background:#0e639c;color:#fff;border:none;padding:6px 14px;border-radius:1px;cursor:pointer;">Apply &amp; Exit</button>
-        </div>
-    </div>
-    <div id="new-province-confirm-modal" hidden style="display:none;position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.5);align-items:center;justify-content:center;">
-        <div role="dialog" aria-modal="true" aria-labelledby="new-province-confirm-title" style="background:rgba(30,30,30,0.98);border:1px solid #555;border-radius:2px;padding:18px 22px;min-width:320px;max-width:420px;box-shadow:0 4px 20px rgba(0,0,0,0.7);font-size:13px;color:#ccc;">
-            <div id="new-province-confirm-title" style="font-weight:bold;color:#fff;margin-bottom:10px;">%worldmap.paintbrush.confirm.title|Create new province?%</div>
-            <div id="new-province-confirm-summary" style="margin-bottom:12px;line-height:1.6;color:#bbb;"></div>
-            <label style="display:flex;align-items:center;gap:6px;margin-bottom:14px;cursor:pointer;">
-                <input id="new-province-confirm-dontask" type="checkbox"/>
-                <span>%worldmap.paintbrush.confirm.dontask|Don't ask again%</span>
+        <div id="paintbrush-lasso-options" class="paintbrush-lasso-options" hidden>
+            <label class="render-optimization-option">
+                <input id="paintbrush-lasso-inverted" type="checkbox"/>
+                <span>%worldmap.lasso.inverted|INVERTED: assign same-type pixels OUTSIDE the lasso%</span>
             </label>
-            <div style="display:flex;gap:8px;justify-content:flex-end;">
-                <button id="new-province-confirm-cancel" style="background:#555;color:#fff;border:none;padding:6px 14px;border-radius:1px;cursor:pointer;">%worldmap.paintbrush.confirm.cancel|Cancel%</button>
-                <button id="new-province-confirm-ok" style="background:#0e639c;color:#fff;border:none;padding:6px 14px;border-radius:1px;cursor:pointer;">%worldmap.paintbrush.confirm.ok|Create Province%</button>
+            <label class="render-optimization-option">
+                <input id="paintbrush-lasso-snap" type="checkbox" checked/>
+                <span>%worldmap.lasso.snap|Snap nearly straight edges%</span>
+            </label>
+            <label class="paintbrush-lasso-radius">
+                <span>%worldmap.lasso.snapradius|Snapping radius%</span>
+                <input id="paintbrush-lasso-snap-radius" type="number" min="1" max="64" step="1" value="6"/>
+                <span>%worldmap.paintbrush.pixels|pixels%</span>
+            </label>
+            <small class="worldmap-modal-summary">%worldmap.lasso.help|Drag around the region and release to close it. The dashed preview shows the snapped edge.%</small>
+        </div>
+        <div class="paintbrush-footer">
+            <div class="worldmap-modal-actions paintbrush-history-actions">
+                <button id="paintbrush-draft-undo" type="button" title="%worldmap.paintbrush.undo.tooltip|Restore the previous painted region%" aria-label="%worldmap.paintbrush.undo.tooltip|Restore the previous painted region%"><i class="codicon codicon-discard"></i></button>
+                <button id="paintbrush-draft-redo" type="button" title="%worldmap.paintbrush.redo.tooltip|Reapply the next painted region%" aria-label="%worldmap.paintbrush.redo.tooltip|Reapply the next painted region%"><i class="codicon codicon-redo"></i></button>
+            </div>
+            <div class="worldmap-modal-actions paintbrush-commit-actions">
+                <button id="paintbrush-cancel" title="Cancel paint edit (Esc)" aria-label="Cancel paint edit (Esc)"><i class="codicon codicon-close"></i></button>
+                <button id="paintbrush-apply" class="primary" title="Apply paint edit and exit" aria-label="Apply paint edit and exit"><i class="codicon codicon-check"></i><span id="paintbrush-apply-label">Apply</span></button>
             </div>
         </div>
     </div>
-    <div id="render-optimization-confirm-modal" class="worldmap-modal" hidden style="display:none;">
+    <div id="new-province-confirm-modal" class="worldmap-modal" hidden>
+        <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="new-province-confirm-title">
+            <div id="new-province-confirm-title" class="worldmap-modal-title">%worldmap.paintbrush.confirm.title|Create new province?%</div>
+            <div id="new-province-confirm-summary" class="worldmap-modal-summary"></div>
+            <label class="worldmap-modal-checkbox">
+                <input id="new-province-confirm-dontask" type="checkbox"/>
+                <span>%worldmap.paintbrush.confirm.dontask|Don't ask again%</span>
+            </label>
+            <div class="worldmap-modal-actions">
+                <button id="new-province-confirm-cancel">%worldmap.paintbrush.confirm.cancel|Cancel%</button>
+                <button id="new-province-confirm-ok" class="primary">%worldmap.paintbrush.confirm.ok|Create Province%</button>
+            </div>
+        </div>
+    </div>
+    <div id="render-optimization-confirm-modal" class="worldmap-modal" hidden>
         <div class="worldmap-modal-card render-optimization-confirm-card" role="dialog" aria-modal="true" aria-labelledby="render-optimization-confirm-title">
             <div id="render-optimization-confirm-title" class="worldmap-modal-title">%worldmap.optimizations.confirm.title|Enable experimental optimization?%</div>
             <div class="worldmap-modal-summary">
@@ -307,7 +358,7 @@
             </div>
         </div>
     </div>
-    <div id="country-puppet-modal" class="worldmap-modal" hidden style="display:none;">
+    <div id="country-puppet-modal" class="worldmap-modal" hidden>
         <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="country-puppet-title">
             <div id="country-puppet-title" class="worldmap-modal-title">%worldmap.country.puppet.title|Force Puppet State%</div>
             <div id="country-puppet-overlord" class="worldmap-modal-summary"></div>
@@ -335,7 +386,7 @@
             </div>
         </div>
     </div>
-    <div id="create-country-modal" class="worldmap-modal" hidden style="display:none;">
+    <div id="create-country-modal" class="worldmap-modal" hidden>
         <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="create-country-title">
             <div id="create-country-title" class="worldmap-modal-title">%worldmap.country.create.title|Create New TAG from Selected States%</div>
             <div id="create-country-summary" class="worldmap-modal-summary"></div>
@@ -350,7 +401,7 @@
             </div>
         </div>
     </div>
-    <div id="merge-states-modal" class="worldmap-modal" hidden style="display:none;">
+    <div id="merge-states-modal" class="worldmap-modal" hidden>
         <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="merge-states-title">
             <div id="merge-states-title" class="worldmap-modal-title">%worldmap.state.merge.title|Merge Selected States%</div>
             <div id="merge-states-summary" class="worldmap-modal-summary"></div>
@@ -363,13 +414,13 @@
             </div>
         </div>
     </div>
-    <div id="north-america-pipeline-modal" class="worldmap-modal" hidden style="display:none;">
+    <div id="north-america-pipeline-modal" class="worldmap-modal" hidden>
         <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="north-america-pipeline-title">
             <div id="north-america-pipeline-title" class="worldmap-modal-title">%worldmap.continent.modal.title|Continental Consolidation Pipeline%</div>
             <div id="north-america-pipeline-summary" class="worldmap-modal-summary"></div>
             <label id="north-america-pipeline-target-label" for="north-america-pipeline-target">%worldmap.continent.modal.target|Resulting owner and controller%</label>
             <select id="north-america-pipeline-target" size="8"></select>
-            <div id="north-america-pipeline-warning" class="worldmap-modal-summary">%worldmap.continent.modal.warning|This preserves separate land/water survivors and existing IDs while clearing scoped infrastructure and water crossings. Province BMP undo does not restore all changed files.%</div>
+            <div id="north-america-pipeline-warning" class="worldmap-modal-summary">%worldmap.continent.modal.warning|Only directly connected, geometry-compact provinces of the same type are merged. Unsafe or oversized groups remain separate, and undo restores the complete file transaction.%</div>
             <div id="north-america-pipeline-error" class="worldmap-modal-error" role="alert"></div>
             <div class="worldmap-modal-actions">
                 <button id="north-america-pipeline-cancel">%worldmap.northamerica.modal.cancel|Cancel%</button>
@@ -377,16 +428,16 @@
             </div>
         </div>
     </div>
-    <div id="ocean-readiness-modal" class="worldmap-modal" hidden style="display:none;">
+    <div id="ocean-readiness-modal" class="worldmap-modal" hidden>
         <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="ocean-readiness-title">
             <div id="ocean-readiness-title" class="worldmap-modal-title">%worldmap.ocean.readiness.title|Ocean-Tile Readiness%</div>
-            <div id="ocean-readiness-summary" class="worldmap-modal-summary" style="white-space:pre-wrap;max-height:55vh;overflow:auto;"></div>
+            <div id="ocean-readiness-summary" class="worldmap-modal-summary worldmap-modal-report"></div>
             <div class="worldmap-modal-actions">
                 <button id="ocean-readiness-close" class="primary">%worldmap.ocean.readiness.close|Close%</button>
             </div>
         </div>
     </div>
-    <div id="water-to-land-modal" class="worldmap-modal" hidden style="display:none;">
+    <div id="water-to-land-modal" class="worldmap-modal" hidden>
         <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="water-to-land-title">
             <div id="water-to-land-title" class="worldmap-modal-title">%worldmap.waterland.title|Convert Water Provinces to Land%</div>
             <div id="water-to-land-summary" class="worldmap-modal-summary"></div>
@@ -402,7 +453,7 @@
                 <input id="water-to-land-coastal" type="checkbox" checked/>
                 %worldmap.waterland.coastal|Mark converted provinces coastal%
             </label>
-            <div class="worldmap-modal-summary">%worldmap.waterland.warning|This rewrites definition.csv plus state and strategic-region membership. Empty source strategic regions are removed. Province BMP undo does not restore all related files.%</div>
+            <div class="worldmap-modal-summary">%worldmap.waterland.warning|This rewrites definition.csv plus state and strategic-region membership as one undoable transaction. Empty source strategic regions are removed.%</div>
             <div id="water-to-land-error" class="worldmap-modal-error" role="alert"></div>
             <div class="worldmap-modal-actions">
                 <button id="water-to-land-cancel">%worldmap.waterland.cancel|Cancel%</button>

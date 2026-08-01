@@ -114,6 +114,7 @@ export class WebGL2Renderer {
         getProvinceColor: (province: Province) => number,
         lodPrecision: number = 1,
         paletteToken: unknown = mutationToken,
+        dirtyPaletteProvinceIds?: ReadonlySet<number>,
     ): WebGL2FrameResult {
         if (this.disposed) {
             throw new Error('Cannot render with a disposed WebGL2Renderer.');
@@ -162,7 +163,7 @@ export class WebGL2Renderer {
         }
 
         if (this.currentPaletteToken !== paletteToken) {
-            this.updatePalette(getProvinceColor);
+            this.updatePalette(getProvinceColor, dirtyPaletteProvinceIds);
             this.currentPaletteToken = paletteToken;
         }
         gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
@@ -330,7 +331,37 @@ export class WebGL2Renderer {
         return visible;
     }
 
-    private updatePalette(getProvinceColor: (province: Province) => number): void {
+    private updatePalette(
+        getProvinceColor: (province: Province) => number,
+        dirtyProvinceIds?: ReadonlySet<number>,
+    ): void {
+        if (dirtyProvinceIds && this.currentPaletteToken !== undefined) {
+            this.gl.bindTexture(this.gl.TEXTURE_2D, this.paletteTexture);
+            for (const provinceId of dirtyProvinceIds) {
+                const province = this.provincesById.get(provinceId);
+                if (!province || provinceId < 0 || provinceId >= this.paletteWidth * this.paletteHeight) {
+                    continue;
+                }
+                const color = getProvinceColor(province);
+                const offset = provinceId * 4;
+                this.paletteData[offset] = (color >> 16) & 0xff;
+                this.paletteData[offset + 1] = (color >> 8) & 0xff;
+                this.paletteData[offset + 2] = color & 0xff;
+                this.paletteData[offset + 3] = 0xff;
+                this.gl.texSubImage2D(
+                    this.gl.TEXTURE_2D,
+                    0,
+                    provinceId % this.paletteWidth,
+                    Math.floor(provinceId / this.paletteWidth),
+                    1,
+                    1,
+                    this.gl.RGBA,
+                    this.gl.UNSIGNED_BYTE,
+                    this.paletteData.subarray(offset, offset + 4),
+                );
+            }
+            return;
+        }
         this.paletteData.fill(0);
         for (const [provinceId, province] of this.provincesById) {
             if (provinceId < 0 || provinceId >= this.paletteWidth * this.paletteHeight) {

@@ -142,6 +142,12 @@ function createFixture() {
         getProvinceToStrategicRegionMap: () => provinceToStrategicRegion,
         getStateToSupplyAreaMap: () => stateToSupplyArea,
         forEachProvince: (fn: any) => provinces.forEach(fn),
+        getProvincesInArea: (area: any) => provinces.filter(province =>
+            province.boundingBox.x < area.x + area.w &&
+            province.boundingBox.x + province.boundingBox.w > area.x &&
+            province.boundingBox.y < area.y + area.h &&
+            province.boundingBox.y + province.boundingBox.h > area.y
+        ),
         forEachState: (fn: any) => states.forEach(fn),
         forEachSupplyArea: (fn: any) => supplyAreas.forEach(fn),
         forEachRailway: (fn: any) => railways.forEach(fn),
@@ -228,6 +234,12 @@ function main() {
             zone.x + xOffset <= viewportX + canvas.width / 3 &&
             zone.y + zone.h >= 0 &&
             zone.y <= canvas.height / 3,
+        getViewZone: (xOffset = 0) => ({
+            x: viewportX - xOffset,
+            y: 0,
+            w: canvas.width / 3,
+            h: canvas.height / 3,
+        }),
         lineInView: () => true,
     };
     const results: any[] = [];

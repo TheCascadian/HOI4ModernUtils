@@ -16,7 +16,14 @@ export interface TextTransformResult {
 export interface ProvinceTypeMergeItem {
     id: number;
     type: string;
+    mass?: number;
+    boundingBox?: { x: number; y: number; w: number; h: number };
+    edges?: ReadonlyArray<{ to: number }>;
 }
+
+export const MAX_PROVINCE_MERGE_SPAN = 256;
+export const MAX_PROVINCE_MERGE_AREA_FACTOR = 16;
+export const MAX_PROVINCE_MERGE_EMPTY_SPACE_FACTOR = 16;
 
 export type OceanTileReadinessIssue =
     'invalid-id' |
@@ -86,32 +93,104 @@ export function verifyOceanTileReadiness(
 }
 
 /**
- * Builds a deterministic merge plan without ever crossing HOI4 province
- * types. In particular, lake provinces must not be painted into a sea
- * province merely because both are water.
+ * Builds a conservative deterministic merge plan without crossing exact HOI4
+ * province types. Provinces merge only inside directly connected, compact
+ * geometry clusters; when topology or geometry cannot prove a safe merge, the
+ * original provinces are retained.
  */
 export function planProvinceMergesByType(
     provinces: ReadonlyArray<ProvinceTypeMergeItem>
 ): { survivorIds: number[]; replacements: Record<number, number> } {
-    const groups = new Map<string, number[]>();
+    const groups = new Map<string, ProvinceTypeMergeItem[]>();
     for (const province of [...provinces].sort((a, b) => a.id - b.id)) {
-        const ids = groups.get(province.type) ?? [];
-        ids.push(province.id);
-        groups.set(province.type, ids);
+        const items = groups.get(province.type) ?? [];
+        items.push(province);
+        groups.set(province.type, items);
     }
     const survivorIds: number[] = [];
     const replacements: Record<number, number> = {};
-    for (const ids of groups.values()) {
-        const survivorId = ids[0];
-        if (survivorId === undefined) {
-            continue;
+
+    for (const items of groups.values()) {
+        const byId = new Map(items.map(item => [item.id, item]));
+        const adjacency = new Map<number, Set<number>>();
+        for (const item of items) {
+            const neighbors = adjacency.get(item.id) ?? new Set<number>();
+            adjacency.set(item.id, neighbors);
+            for (const edge of item.edges ?? []) {
+                if (!byId.has(edge.to) || edge.to === item.id) {
+                    continue;
+                }
+                neighbors.add(edge.to);
+                const reverse = adjacency.get(edge.to) ?? new Set<number>();
+                reverse.add(item.id);
+                adjacency.set(edge.to, reverse);
+            }
         }
-        survivorIds.push(survivorId);
-        for (const id of ids.slice(1)) {
-            replacements[id] = survivorId;
+
+        const remaining = new Map(byId);
+        while (remaining.size > 0) {
+            const survivor = Array.from(remaining.values()).sort((a, b) =>
+                (b.mass ?? 0) - (a.mass ?? 0) || a.id - b.id
+            )[0];
+            remaining.delete(survivor.id);
+            const cluster = [survivor];
+            let expanded = true;
+            while (expanded) {
+                expanded = false;
+                const candidates = Array.from(remaining.values())
+                    .filter(candidate => cluster.some(item =>
+                        adjacency.get(item.id)?.has(candidate.id)
+                    ))
+                    .sort((a, b) => (b.mass ?? 0) - (a.mass ?? 0) || a.id - b.id);
+                for (const candidate of candidates) {
+                    if (!isSafeProvinceMergeCluster([...cluster, candidate])) {
+                        continue;
+                    }
+                    cluster.push(candidate);
+                    remaining.delete(candidate.id);
+                    expanded = true;
+                }
+            }
+
+            survivorIds.push(survivor.id);
+            for (const item of cluster) {
+                if (item.id !== survivor.id) {
+                    replacements[item.id] = survivor.id;
+                }
+            }
         }
     }
+    survivorIds.sort((a, b) => a - b);
     return { survivorIds, replacements };
+}
+
+function isSafeProvinceMergeCluster(items: ReadonlyArray<ProvinceTypeMergeItem>): boolean {
+    if (items.length < 2 || items.some(item =>
+        !Number.isFinite(item.mass) || item.mass! <= 0 ||
+        !item.boundingBox ||
+        !Number.isFinite(item.boundingBox.x) || !Number.isFinite(item.boundingBox.y) ||
+        !Number.isFinite(item.boundingBox.w) || !Number.isFinite(item.boundingBox.h) ||
+        item.boundingBox.w <= 0 || item.boundingBox.h <= 0
+    )) {
+        return false;
+    }
+
+    const boxes = items.map(item => item.boundingBox!);
+    const left = Math.min(...boxes.map(box => box.x));
+    const top = Math.min(...boxes.map(box => box.y));
+    const right = Math.max(...boxes.map(box => box.x + box.w));
+    const bottom = Math.max(...boxes.map(box => box.y + box.h));
+    const width = right - left;
+    const height = bottom - top;
+    if (width > MAX_PROVINCE_MERGE_SPAN || height > MAX_PROVINCE_MERGE_SPAN) {
+        return false;
+    }
+
+    const unionArea = width * height;
+    const largestMemberArea = Math.max(...boxes.map(box => box.w * box.h));
+    const totalMass = items.reduce((sum, item) => sum + item.mass!, 0);
+    return unionArea <= largestMemberArea * MAX_PROVINCE_MERGE_AREA_FACTOR &&
+        unionArea <= totalMass * MAX_PROVINCE_MERGE_EMPTY_SPACE_FACTOR;
 }
 
 /**
@@ -372,11 +451,11 @@ export function clearSupplyHubs(text: string, provinceIds: ReadonlySet<number>):
     return { text: keepTrailingEol(text, lines), changed };
 }
 
-export function clearMapBuildings(text: string, provinceIds: ReadonlySet<number>): TextTransformResult {
+export function clearMapBuildings(text: string, provinceIds?: ReadonlySet<number>): TextTransformResult {
     let changed = 0;
     const lines = text.split(/\r?\n/).filter(line => {
         const id = Number.parseInt(line.trim().split(/[;\s]/)[0], 10);
-        const remove = Number.isInteger(id) && provinceIds.has(id);
+        const remove = Number.isInteger(id) && (!provinceIds || provinceIds.has(id));
         if (remove) {changed++;}
         return !remove;
     });

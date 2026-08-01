@@ -3,7 +3,8 @@ import { readFileFromModOrHOI4 } from "../../../util/fileloader";
 import { localize } from "../../../util/i18n";
 import { BMP, parseBmp } from "../../../util/image/bmp/bmpparser";
 import { Point, ProgressReporter, ProvinceBmp, ProvinceEdgeGraph, ProvinceGraph, Region, WorldMapWarning, Zone } from "../definitions";
-import { FileLoader, LoadResult, LoadResultOD, mergeRegions, pointEqual } from "./common";
+import { FileLoader, LoadResult, LoadResultOD, mergeRegions } from "./common";
+import { concatEdges } from "./edgeutils";
 
 export class ProvinceBmpLoader extends FileLoader<ProvinceBmp> {
     protected async loadFromFile(): Promise<LoadResultOD<ProvinceBmp>> {
@@ -58,13 +59,13 @@ async function loadProvincesBmp(provincesFile: string, progressReporter: Progres
 }
 
 type ColorContainer = { color: number, warnings: [] };
-function getProvincesByPosition(provinceMapImage: BMP): { colorByPosition: number[], provinces: ColorContainer[], colorToProvince: Record<number, ColorContainer> } {
+function getProvincesByPosition(provinceMapImage: BMP): { colorByPosition: Uint32Array, provinces: ColorContainer[], colorToProvince: Record<number, ColorContainer> } {
     if (provinceMapImage.width % 256 !== 0 || provinceMapImage.height % 256 !== 0) {
         throw new UserError(localize('worldmap.error.multiply256', 'Height and width of map image must be multiply of 256: {0}x{1}.',
             provinceMapImage.width, provinceMapImage.height));
     }
 
-    const colorByPosition: number[] = new Array(provinceMapImage.width * provinceMapImage.height);
+    const colorByPosition = new Uint32Array(provinceMapImage.width * provinceMapImage.height);
     const bitmapData = provinceMapImage.data;
     const provinces: ColorContainer[] = [];
     const colorToProvince: Record<number, ColorContainer> = {};
@@ -98,7 +99,7 @@ type ProvinceZoneDef = { coverZones: Zone[] } & Region;
 function fillProvinceZones<T extends ColorContainer>(
     provincesWithoutCoverZones: (T & Partial<ProvinceZoneDef>)[],
     colorToProvince: Record<number, T & Partial<ProvinceZoneDef>>,
-    colorByPosition: number[],
+    colorByPosition: Uint32Array,
     width: number,
     height: number,
     file: string,
@@ -167,7 +168,7 @@ type EdgeDef = { edges: ProvinceEdgeGraph[] };
 function fillEdges<T extends ColorContainer>(
     provincesWithoutEdges: (T & Partial<EdgeDef>)[],
     colorToProvinceWithoutEdges: Record<number, T & Partial<EdgeDef>>,
-    colorByPosition: number[],
+    colorByPosition: Uint32Array,
     width: number,
     height: number
 ): (T & EdgeDef)[] {
@@ -196,7 +197,7 @@ function fillEdges<T extends ColorContainer>(
 function fillEdgesOfProvince<T extends EdgeDef>(
     index: number,
     colorToProvince: Record<number, T>,
-    colorByPosition: number[],
+    colorByPosition: Uint32Array,
     accessedPixels: boolean[],
     width: number,
     height: number
@@ -213,15 +214,17 @@ function fillEdgesOfProvince<T extends EdgeDef>(
     });
 
     const province = colorToProvince[color]!;
+    const edgeByColor = new Map(province.edges.map(edge => [edge.toColor, edge]));
     for (const [key, value] of Object.entries(edgePixelsByAdjecentProvince)) {
         const numKey = parseInt(key);
-        const edgeSetIndex = province.edges.findIndex(e => e.toColor === numKey);
-        const edgeSet: ProvinceEdgeGraph = edgeSetIndex !== -1 ? province.edges[edgeSetIndex] : { toColor: numKey, path: [] };
-        const concatedEdges = concatEdges(value);
-        edgeSet.path.push(...concatedEdges);
-        if (edgeSetIndex === -1) {
+        let edgeSet = edgeByColor.get(numKey);
+        if (!edgeSet) {
+            edgeSet = { toColor: numKey, path: [] };
+            edgeByColor.set(numKey, edgeSet);
             province.edges.push(edgeSet);
         }
+        const concatedEdges = concatEdges(value);
+        edgeSet.path.push(...concatedEdges);
     }
 }
 
@@ -231,7 +234,7 @@ const indicesToOffset: [number, number][][] = [
     [[1, 0], [1, 1]],
     [[1, 1], [0, 1]],
 ];
-function findEdgePixels(index: number, accessedPixels: boolean[], color: number, colorByPosition: number[], width: number, height: number) {
+function findEdgePixels(index: number, accessedPixels: boolean[], color: number, colorByPosition: Uint32Array, width: number, height: number) {
     const edgePixels: [number, [Point, Point]][] = [];
     const pixelStack: number[] = [ index ];
     const indices: number[] = new Array(4);
@@ -270,55 +273,7 @@ function findEdgePixels(index: number, accessedPixels: boolean[], color: number,
     return edgePixels;
 }
 
-function concatEdges(edges: [Point, Point][]): Point[][] {
-    const result: Point[][] = [];
-    const accessedEdges = new Array<boolean>(edges.length).fill(false);
-    for (let i = 0; i < edges.length; i++) {
-        if (accessedEdges[i]) {
-            continue;
-        }
-
-        const edge: Point[] = edges[i];
-        accessedEdges[i] = true;
-
-        let foundNew = true;
-        while (foundNew) {
-            foundNew = false;
-            const headTail = edges.findIndex((e, i) => !accessedEdges[i] && pointEqual(edge[0], e[1]));
-            if (headTail !== -1) {
-                accessedEdges[headTail] = foundNew = true;
-                edge.unshift(edges[headTail][0]);
-            }
-
-            const tailHead = edges.findIndex((e, i) => !accessedEdges[i] && pointEqual(edge[edge.length - 1], e[0]));
-            if (tailHead !== -1) {
-                accessedEdges[tailHead] = foundNew = true;
-                edge.push(edges[tailHead][1]);
-            }
-        }
-
-        const newEdge: Point[] = [];
-        let lastPoint: Point = edge[0];
-        for (const point of edge) {
-            if (newEdge.length < 2) {
-                newEdge.push(point);
-            } else {
-                if (point.x === lastPoint.x || point.y === lastPoint.y) {
-                    newEdge[newEdge.length - 1] = point;
-                } else {
-                    lastPoint = newEdge[newEdge.length - 1];
-                    newEdge.push(point);
-                }
-            }
-        }
-
-        result.push(newEdge);
-    }
-
-    return result;
-}
-
-function validateProvince(colorByPosition: number[], width: number, height: number, file: string, warnings: WorldMapWarning[]) {
+function validateProvince(colorByPosition: Uint32Array, width: number, height: number, file: string, warnings: WorldMapWarning[]) {
     const i = new Array(4);
     for (let y = 1, y0 = width, index = width; y < height; y++, y0 += width) {
         for (let x = 0; x < width; x++, index++) {

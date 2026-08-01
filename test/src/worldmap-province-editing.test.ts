@@ -67,7 +67,7 @@ function region(id: number, provinces: number[]): StrategicRegion {
     };
 }
 
-function mapFixture() {
+function mapFixture(retainSourceMembership = false) {
     const data: WorldMapData & {
         provincesCount: number;
         statesCount: number;
@@ -75,18 +75,23 @@ function mapFixture() {
         railwaysCount: number;
         supplyNodesCount: number;
     } = {
-        width: 2,
+        width: retainSourceMembership ? 3 : 2,
         height: 1,
-        colorByPosition: [11, 22],
-        provinces: [undefined, province(1, 11, 'sea', 'ocean', 0), province(2, 22, 'sea', 'ocean', 0)],
-        states: [undefined, state(1, [1]), state(2, [2])],
+        colorByPosition: new Uint32Array(retainSourceMembership ? [11, 22, 33] : [11, 22]),
+        provinces: [
+            undefined,
+            province(1, 11, 'sea', 'ocean', 0),
+            province(2, 22, 'sea', 'ocean', 0),
+            ...(retainSourceMembership ? [province(3, 33, 'sea', 'ocean', 0)] : []),
+        ],
+        states: [undefined, state(1, [1]), state(2, retainSourceMembership ? [2, 3] : [2])],
         stateCategories: [],
         countries: [],
-        strategicRegions: [undefined, region(1, [1]), region(2, [2])],
+        strategicRegions: [undefined, region(1, [1]), region(2, retainSourceMembership ? [2, 3] : [2])],
         supplyAreas: [],
         railways: [],
         supplyNodes: [],
-        provincesCount: 3,
+        provincesCount: retainSourceMembership ? 4 : 3,
         statesCount: 3,
         countriesCount: 0,
         strategicRegionsCount: 3,
@@ -127,7 +132,7 @@ describe('world map province editing workflows', () => {
     });
 
     it('converts water to land with complete state and strategic-region membership', () => {
-        const map = mapFixture();
+        const map = mapFixture(true);
         const result = map.convertWaterProvincesToLand([2], 'plains', 1, true, 1, 1);
         assert.ok(result);
         const converted = map.getProvinceById(2);
@@ -136,9 +141,9 @@ describe('world map province editing workflows', () => {
         assert.strictEqual(converted?.continent, 1);
         assert.strictEqual(converted?.coastal, true);
         assert.deepStrictEqual(map.getStateById(1)?.provinces, [1, 2]);
-        assert.deepStrictEqual(map.getStateById(2)?.provinces, []);
+        assert.deepStrictEqual(map.getStateById(2)?.provinces, [3]);
         assert.deepStrictEqual(map.getStrategicRegionById(1)?.provinces, [1, 2]);
-        assert.strictEqual(map.getStrategicRegionById(2), undefined);
-        assert.deepStrictEqual(result.deletedStrategicRegionFiles, ['map/strategicregions/2.txt']);
+        assert.deepStrictEqual(map.getStrategicRegionById(2)?.provinces, [3]);
+        assert.deepStrictEqual(result.deletedStrategicRegionFiles, []);
     });
 });

@@ -7,6 +7,41 @@ import { calculateDropdownMenuPlacement } from './dropdownposition';
 const dropdowns: Dropdown[] = [];
 export const numDropDownOpened$ = new BehaviorSubject<number>(0);
 
+function sizeTopbarTriggerToOptions(control: HTMLElement, labels: readonly string[]): void {
+    const container = control.closest<HTMLElement>('.select-container');
+    if (!container?.closest('.toolbar') || labels.length === 0) {
+        return;
+    }
+
+    const computed = getComputedStyle(control);
+    const measurer = document.createElement('span');
+    Object.assign(measurer.style, {
+        position: 'fixed',
+        left: '-10000px',
+        top: '-10000px',
+        visibility: 'hidden',
+        pointerEvents: 'none',
+        whiteSpace: 'nowrap',
+        font: computed.font,
+    });
+    document.body.appendChild(measurer);
+
+    let widestLabel = 0;
+    for (const label of labels) {
+        measurer.textContent = label;
+        widestLabel = Math.max(widestLabel, measurer.getBoundingClientRect().width);
+    }
+    measurer.remove();
+
+    const horizontalChrome =
+        (Number.parseFloat(computed.paddingLeft) || 0) +
+        (Number.parseFloat(computed.paddingRight) || 0) +
+        (Number.parseFloat(computed.borderLeftWidth) || 0) +
+        (Number.parseFloat(computed.borderRightWidth) || 0);
+    container.style.setProperty('--dropdown-trigger-width', `${Math.ceil(widestLabel + horizontalChrome)}px`);
+    container.classList.add('content-sized-select');
+}
+
 export function enableDropdowns() {
     dropdowns.forEach(s => s.dispose());
     dropdowns.length = 0;
@@ -48,9 +83,22 @@ class Dropdown extends Subscriber {
                 }
             }
         }));
+        const syncWidth = () => sizeTopbarTriggerToOptions(
+            this.select,
+            Array.from(this.select.options).filter(option => !option.hidden).map(option => option.text)
+        );
+        syncWidth();
+        this.addSubscription(fromEvent(window, 'worldmap-interface-change').subscribe(syncWidth));
+        const observer = new MutationObserver(syncWidth);
+        observer.observe(this.select, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
+        this.addSubscription({ dispose: () => observer.disconnect() });
     }
 
     private showSelectionsForDropdown() {
+        sizeTopbarTriggerToOptions(
+            this.select,
+            Array.from(this.select.options).filter(option => !option.hidden).map(option => option.text)
+        );
         this.select.classList.add('dropdown-opened');
         this.select.setAttribute('aria-expanded', 'true');
         const options = this.select.querySelectorAll('option');
@@ -135,6 +183,7 @@ export class DivDropdown extends Subscriber {
             option.textContent = text;
             select.appendChild(option);
         }
+        this.syncTriggerWidth();
     }
 
     private init() {
@@ -164,9 +213,12 @@ export class DivDropdown extends Subscriber {
 
         const options = this.getOptions();
         this.updateSelectedValue(options);
+        this.syncTriggerWidth();
+        this.addSubscription(fromEvent(window, 'worldmap-interface-change').subscribe(() => this.syncTriggerWidth()));
     }
 
     private showSelectionsForDropdown() {
+        this.syncTriggerWidth();
         this.select.classList.add('dropdown-opened');
         this.select.setAttribute('aria-expanded', 'true');
 
@@ -230,6 +282,14 @@ export class DivDropdown extends Subscriber {
             selectedOptions.length === options.length ? feLocalize('combobox.all', '(All)') :
             selectedOptions.length > 1 ? feLocalize('combobox.multiple', '{0} (+{1})', selectedOptions[0].text, selectedOptions.length - 1) :
             selectedOptions[0].text;
+        this.syncTriggerWidth(options, valueSpan.textContent ?? '');
+    }
+
+    private syncTriggerWidth(options = this.getOptions(), selectedLabel = ''): void {
+        sizeTopbarTriggerToOptions(
+            this.select,
+            [...options.map(option => option.text), selectedLabel].filter(Boolean)
+        );
     }
 }
 
@@ -288,15 +348,20 @@ class DropdownMenu extends Subscriber {
 
     private position(host: Element) {
         const bbox = host.getBoundingClientRect();
+        this.list.style.width = 'max-content';
+        this.list.style.maxWidth = 'none';
+        const naturalWidth = Math.max(1, Math.ceil(this.list.getBoundingClientRect().width));
         const placement = calculateDropdownMenuPlacement(
             bbox,
             this.list.offsetHeight,
             window.innerWidth,
             window.innerHeight,
+            naturalWidth,
         );
         this.list.style.left = `${placement.left}px`;
         this.list.style.top = `${placement.top}px`;
         this.list.style.width = `${placement.width}px`;
+        this.list.style.maxWidth = 'none';
     }
 
     private createList(): HTMLUListElement {

@@ -67,41 +67,33 @@ export class WorldMapLoader extends Loader<WorldMapData> {
     public async loadImpl(session: LoaderSession): Promise<LoadResult<WorldMapData>> {
         this.shouldReloadValue = false;
 
-        const provinceMap = await this.defaultMapLoader.load(session);
-        session.throwIfCancelled();
-
-        const bookmarks = await this.bookmarksLoader.load(session);
-        session.throwIfCancelled();
-
-        const stateMap = await this.statesLoader.load(session);
-        session.throwIfCancelled();
-
-        const countries = await this.countriesLoader.load(session);
-        session.throwIfCancelled();
-
-        const countryHistories = await this.countryHistoryLoader.load(session);
-        session.throwIfCancelled();
-
-        const strategicRegions = await this.strategicRegionsLoader.load(session);
-        session.throwIfCancelled();
-
         const enableSupplyArea = getConfiguration().enableSupplyArea;
-        const supplyAreas = enableSupplyArea ?
-            await this.supplyAreasLoader.load(session) :
-            { warnings: [], result: { supplyAreas: [], badSupplyAreasCount: 0 }, dependencies: [] };
-        session.throwIfCancelled();
-        
-        const railways = enableSupplyArea ?
-            { warnings: [], result: { railways: [] }, dependencies: [] } :
-            await this.railwayLoader.load(session);
-        session.throwIfCancelled();
-        
-        const supplyNodes = enableSupplyArea ?
-            { warnings: [], result: { supplyNodes: [] }, dependencies: [] } :
-            await this.supplyNodeLoader.load(session);
-        session.throwIfCancelled();
-
-        const resources = await this.resourcesLoader.load(session);
+        const emptySupplyAreas = { warnings: [], result: { supplyAreas: [], badSupplyAreasCount: 0 }, dependencies: [] };
+        const emptyRailways = { warnings: [], result: { railways: [] }, dependencies: [] };
+        const emptySupplyNodes = { warnings: [], result: { supplyNodes: [] }, dependencies: [] };
+        const [
+            provinceMap,
+            bookmarks,
+            stateMap,
+            countries,
+            countryHistories,
+            strategicRegions,
+            supplyAreas,
+            railways,
+            supplyNodes,
+            resources,
+        ] = await Promise.all([
+            this.defaultMapLoader.load(session),
+            this.bookmarksLoader.load(session),
+            this.statesLoader.load(session),
+            this.countriesLoader.load(session),
+            this.countryHistoryLoader.load(session),
+            this.strategicRegionsLoader.load(session),
+            enableSupplyArea ? this.supplyAreasLoader.load(session) : Promise.resolve(emptySupplyAreas),
+            enableSupplyArea ? Promise.resolve(emptyRailways) : this.railwayLoader.load(session),
+            enableSupplyArea ? Promise.resolve(emptySupplyNodes) : this.supplyNodeLoader.load(session),
+            this.resourcesLoader.load(session),
+        ]);
         session.throwIfCancelled();
 
         const loadedLoaders = Array.from((session as any).loadedLoader).map<string>(v => (v as any).toString());
@@ -109,7 +101,11 @@ export class WorldMapLoader extends Loader<WorldMapData> {
 
         const subLoaderResults = [ provinceMap, bookmarks, stateMap, countries, countryHistories, strategicRegions, supplyAreas, railways, supplyNodes, resources ];
         const warnings = mergeInLoadResult(subLoaderResults, 'warnings');
-        const conditionExprs = mergeInLoadResultUnique(subLoaderResults, 'conditionExprs', isEqual);
+        const conditionExprs = mergeInLoadResultUnique(
+            subLoaderResults as unknown as Array<{ conditionExprs?: any[] }>,
+            'conditionExprs',
+            isEqual
+        );
 
         const worldMap: WorldMapData = {
             ...provinceMap.result,

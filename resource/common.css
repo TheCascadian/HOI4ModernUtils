@@ -117,13 +117,7 @@ ul.select-dropdown li:hover, ul.select-dropdown li:focus {
 }
 
 input[type=checkbox].hidden {
-    display: block;
-    width: 0;
-    max-width: 0;
-    height: 0;
-    max-height: 0;
-    overflow: hidden;
-    margin: 0;
+    display: none;
 }
 
 label.hidden {

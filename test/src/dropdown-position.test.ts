@@ -34,4 +34,27 @@ describe('dropdown menu placement', () => {
             { left: 276, top: 140, width: 120 }
         );
     });
+
+    it('expands to the widest visible option and never narrows the anchor', () => {
+        assert.deepStrictEqual(
+            calculateDropdownMenuPlacement(
+                { left: 40, top: 20, bottom: 46, width: 190 },
+                160,
+                640,
+                480,
+                104,
+            ),
+            { left: 40, top: 46, width: 190 }
+        );
+        assert.deepStrictEqual(
+            calculateDropdownMenuPlacement(
+                { left: 40, top: 20, bottom: 46, width: 120 },
+                160,
+                640,
+                480,
+                240,
+            ),
+            { left: 40, top: 46, width: 240 }
+        );
+    });
 });

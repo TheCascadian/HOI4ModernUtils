@@ -74,11 +74,14 @@ export class ContextMenu {
                 li.setAttribute('aria-disabled', 'true');
             }
 
-            const check = document.createElement('span');
-            check.classList.add('context-menu-check');
-            check.textContent = item.checked ? '\u2713' : '';
-            check.setAttribute('aria-hidden', 'true');
-            li.appendChild(check);
+            if (item.checked !== undefined) {
+                const check = document.createElement('span');
+                check.classList.add('context-menu-check');
+                check.classList.toggle('checked', item.checked === true);
+                check.textContent = item.checked ? '\u2713' : '';
+                check.setAttribute('aria-hidden', 'true');
+                li.appendChild(check);
+            }
 
             const label = document.createElement('span');
             label.classList.add('context-menu-label');
@@ -105,8 +108,7 @@ export class ContextMenu {
                     document.body.appendChild(submenu);
                     this.submenus[depth] = submenu;
 
-                    const bbox = li.getBoundingClientRect();
-                    this.position(submenu, bbox.right, bbox.top);
+                    this.positionSubmenu(submenu, li);
                 });
 
                 if (!item.disabled && item.action) {
@@ -207,6 +209,26 @@ export class ContextMenu {
         if (bbox.bottom > window.innerHeight) {
             list.style.top = Math.max(0, window.innerHeight - bbox.height) + 'px';
         }
+    }
+
+    private positionSubmenu(list: HTMLUListElement, parent: HTMLLIElement): void {
+        const gap = 6;
+        const viewportGap = 8;
+        const parentBounds = parent.getBoundingClientRect();
+        const menuBounds = list.getBoundingClientRect();
+        const fitsRight = parentBounds.right + gap + menuBounds.width <= window.innerWidth - viewportGap;
+        const fitsLeft = parentBounds.left - gap - menuBounds.width >= viewportGap;
+        const left = fitsRight
+            ? parentBounds.right + gap
+            : fitsLeft
+                ? parentBounds.left - menuBounds.width - gap
+                : Math.max(viewportGap, window.innerWidth - menuBounds.width - viewportGap);
+        const top = Math.max(
+            viewportGap,
+            Math.min(parentBounds.top, window.innerHeight - menuBounds.height - viewportGap)
+        );
+        list.style.left = `${left}px`;
+        list.style.top = `${top}px`;
     }
 
     private registerCloseHandlers(): void {

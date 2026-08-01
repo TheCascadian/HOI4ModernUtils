@@ -12,14 +12,16 @@ import { sendEvent } from '../util/telemetry';
 import { getState, setState } from "../util/common";
 import { ConditionItem, conditionItemToStringValue, conditionToString, stringValueToConditionItem } from "../../src/hoiformat/condition";
 import { Zone } from "../../src/previewdef/worldmap/definitions";
-import { applyBrushStroke, getBrushBounds, getInterpolatedBrushPositions } from "./brush";
+import { adjustBrushSizeForWheel, applyBrushStroke, applyLassoAssignment, BrushPoint, getBrushBounds, getInterpolatedBrushPositions, snapLassoPoints } from "./brush";
 import { PaintDraftHistory } from "./paintdraft";
 import { isPersistableProvinceDefinition, normalizeEditableProvinceIds, ProvinceSelectionHistory, ProvinceSelectionSnapshot, selectProvinceIds, selectRiverProvinceIds } from "./selection";
 import { OceanTileReadinessIssue, verifyOceanTileReadiness } from "../../src/previewdef/worldmap/areaoperations";
+import { calculateProvinceIdCap } from "../../src/previewdef/worldmap/maplimits";
 
 export type ViewMode = 'province' | 'state' | 'strategicregion' | 'supplyarea' | 'warnings' | 'country';
 export type ColorSet = 'provinceid' | 'provincetype' | 'terrain' | 'owner' | 'controller' | 'stateid' | 'manpower' |
     'victorypoint' | 'continent' | 'warnings' | 'strategicregionid' | 'supplyareaid' | 'supplyvalue' | 'resources' | 'statecategory';
+type ActiveTool = 'none' | 'paint' | 'transferWand' | 'select';
 
 export const topBarHeight = 68;
 
@@ -120,17 +122,39 @@ function parseShortcut(value: string | undefined): ShortcutSpec | undefined {
     return { key, ctrl, shift, alt, label: value };
 }
 
+function shortcutSignature(shortcut: ShortcutSpec): string {
+    return `${shortcut.ctrl ? '1' : '0'}${shortcut.shift ? '1' : '0'}${shortcut.alt ? '1' : '0'}:${shortcut.key}`;
+}
+
 function getWorldMapKeybinds(): WorldMapKeybindSpec {
     const source = ((window as any)['__worldMapKeybinds'] ?? {}) as Partial<Record<keyof WorldMapKeybindSpec, string>>;
-    return {
-        selectionUndo: parseShortcutOrDefault(source.selectionUndo, defaultKeybindLabels.selectionUndo),
-        selectionRedo: parseShortcutOrDefault(source.selectionRedo, defaultKeybindLabels.selectionRedo),
-        mapUndo: parseShortcutOrDefault(source.mapUndo, defaultKeybindLabels.mapUndo),
-        mapRedo: parseShortcutOrDefault(source.mapRedo, defaultKeybindLabels.mapRedo),
-        createStateFromSelection: parseShortcutOrDefault(source.createStateFromSelection, defaultKeybindLabels.createStateFromSelection),
-        assignSelectionToState: parseShortcutOrDefault(source.assignSelectionToState, defaultKeybindLabels.assignSelectionToState),
-        assignSelectionToStrategicRegion: parseShortcutOrDefault(source.assignSelectionToStrategicRegion, defaultKeybindLabels.assignSelectionToStrategicRegion),
-    };
+    const actionNames = Object.keys(defaultKeybindLabels) as Array<keyof WorldMapKeybindSpec>;
+    const defaults = Object.fromEntries(actionNames.map(name => [
+        name,
+        parseShortcutOrDefault(undefined, defaultKeybindLabels[name]),
+    ])) as unknown as WorldMapKeybindSpec;
+    const protectedDefaults = new Set(actionNames.map(name => shortcutSignature(defaults[name])));
+    const reservedShortcuts = [
+        'P', 'E', 'F', 'L', 'W',
+        'Ctrl+Alt+I', 'Ctrl+Alt+A', 'Ctrl+Alt+P', 'Ctrl+Alt+Shift+P',
+    ].map(value => parseShortcut(value)).filter((value): value is ShortcutSpec => value !== undefined);
+    const used = new Set(reservedShortcuts.map(shortcutSignature));
+    const resolved = {} as WorldMapKeybindSpec;
+
+    for (const name of actionNames) {
+        const fallback = defaults[name];
+        let candidate = parseShortcutOrDefault(source[name], defaultKeybindLabels[name]);
+        const candidateSignature = shortcutSignature(candidate);
+        const fallbackSignature = shortcutSignature(fallback);
+        const stealsAnotherDefault = protectedDefaults.has(candidateSignature) && candidateSignature !== fallbackSignature;
+        if (used.has(candidateSignature) || stealsAnotherDefault) {
+            candidate = fallback;
+        }
+        used.add(shortcutSignature(candidate));
+        resolved[name] = candidate;
+    }
+
+    return resolved;
 }
 
 function getConfirmNewProvinceCreation(): boolean {
@@ -176,10 +200,15 @@ export class TopBar extends Subscriber {
     public paintbrushColor$: BehaviorSubject<number>;
     /** Set of painted pixel coords "x,y" -> new color (for rendering overlay) */
     public paintedPixels$: BehaviorSubject<Map<string, number>>;
+    public paintedPixelDelta$: BehaviorSubject<ReadonlyMap<string, number | undefined>>;
     /** Current province draft (non-null when paintbrush is active) */
     public provinceDraft$: BehaviorSubject<ProvinceDraft | undefined>;
     /** Brush radius in pixels (1 = single pixel) */
     public brushSize$: BehaviorSubject<number>;
+    /** Freehand map-space polygon currently being drawn by the lasso tool. */
+    public lassoPoints$: BehaviorSubject<readonly BrushPoint[]>;
+    public lassoSnapping$: BehaviorSubject<boolean>;
+    public lassoSnapRadius$: BehaviorSubject<number>;
     /** Current hover map X coordinate (for brush cursor) */
     public hoverMapX$: BehaviorSubject<number>;
     /** Current hover map Y coordinate (for brush cursor) */
@@ -201,6 +230,10 @@ export class TopBar extends Subscriber {
     /** Whether to refresh after the pending paintbrush save completes */
     private refreshAfterPaintbrushSave = false;
     private mergeRequestSequence = 0;
+    private operationRequestSequence = 0;
+    private pendingRequests = new Map<string, string>();
+    private pendingPersistenceRequests = new Map<string, string>();
+    private requestTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
     private pendingStateMerge: {
         requestId: string;
         targetId: number;
@@ -213,7 +246,6 @@ export class TopBar extends Subscriber {
 
     public warningsVisible: boolean = false;
     private warningsFilterByViewMode: boolean = false;
-    private warningsFilterByColorSet: boolean = false;
     private exportIncludeBorder: boolean = true;
     private pendingExport: { bbox: Zone; includeBorder: boolean } | undefined;
     private contextMenu: ContextMenu = new ContextMenu();
@@ -236,15 +268,17 @@ export class TopBar extends Subscriber {
         stateIds: number[];
         perContinent: boolean;
         reindexAfter: boolean;
+        entireMap: boolean;
         riverIds: number[];
     } | undefined;
     private pendingConfirmedAction: (() => void) | undefined;
-    private paintTool: 'brush' | 'fill' | 'erase' = 'brush';
+    private paintTool: 'brush' | 'fill' | 'erase' | 'lasso' = 'brush';
     private paintDraftHistory = new PaintDraftHistory();
     private paintStrokeHistoryRecorded = false;
     private paintDraftCanUndo$ = new BehaviorSubject<boolean>(false);
     private paintDraftCanRedo$ = new BehaviorSubject<boolean>(false);
     private paintAllowedProvinceIds: Set<number> | undefined;
+    public activeTool$: BehaviorSubject<ActiveTool>;
     private transferWandActive = false;
     private transferWandTargetStateId: number | undefined;
     private transferWandOwner: string | undefined;
@@ -254,6 +288,94 @@ export class TopBar extends Subscriber {
     private confirmNewProvinceCreation: boolean = getConfirmNewProvinceCreation();
     /** Last map position painted during the current stroke, used to interpolate a continuous line between mousemove events. */
     private lastPaintMapPosition: { x: number; y: number } | undefined;
+
+    private beginRequest(operation: string): string {
+        const previousRequestId = this.pendingRequests.get(operation);
+        if (previousRequestId) {
+            this.clearRequestTimeout(previousRequestId);
+        }
+        const requestId = `${operation}-${Date.now()}-${++this.operationRequestSequence}`;
+        this.pendingRequests.set(operation, requestId);
+        this.startRequestTimeout(requestId, operation);
+        return requestId;
+    }
+
+    private completeRequest(operation: string, requestId: string): boolean {
+        if (this.pendingRequests.get(operation) !== requestId) {
+            return false;
+        }
+        this.pendingRequests.delete(operation);
+        this.clearRequestTimeout(requestId);
+        return true;
+    }
+
+    private beginPersistence(operation: string): string {
+        const requestId = `${operation}-${Date.now()}-${++this.operationRequestSequence}`;
+        this.trackPersistenceRequest(requestId, operation);
+        return requestId;
+    }
+
+    private trackPersistenceRequest(requestId: string, operation: string): void {
+        this.pendingPersistenceRequests.set(requestId, operation);
+        this.startRequestTimeout(requestId, operation);
+    }
+
+    private startRequestTimeout(requestId: string, operation: string): void {
+        this.requestTimeouts.set(requestId, setTimeout(() => {
+            this.requestTimeouts.delete(requestId);
+            const isPersistence = this.pendingPersistenceRequests.delete(requestId);
+            for (const [key, value] of this.pendingRequests) {
+                if (value === requestId) {
+                    this.pendingRequests.delete(key);
+                }
+            }
+            if (this.pendingStateMerge?.requestId === requestId) {
+                this.loader.worldMap.restoreStates(this.pendingStateMerge.before);
+                this.pendingStateMerge = undefined;
+            }
+            this.paintbrushSavePending = false;
+            this.pendingProvinceMerge = undefined;
+            this.pendingWaterToLand = undefined;
+            this.areaOperationPending = false;
+            this.continentPipelinePending = false;
+            this.continentPipelineQueue = [];
+            this.removeAllCoresPending = false;
+            this.reindexPending = false;
+            this.pendingPuppetWrite = false;
+            for (const id of [
+                'country-puppet-apply',
+                'country-puppet-cancel',
+                'create-country-apply',
+                'create-country-cancel',
+                'merge-states-apply',
+                'merge-states-cancel',
+                'north-america-pipeline-apply',
+                'north-america-pipeline-cancel',
+            ]) {
+                const control = document.getElementById(id) as HTMLButtonElement | null;
+                if (control) {
+                    control.disabled = false;
+                }
+            }
+            if (isPersistence) {
+                this.mapUndoStack.length = 0;
+                this.mapRedoStack.length = 0;
+            }
+            this.showActionStatus(
+                `The ${operation} operation did not return a completion result. The authoritative map is being reloaded.`,
+                'warn'
+            );
+            this.loader.refresh();
+        }, 300000));
+    }
+
+    private clearRequestTimeout(requestId: string): void {
+        const timeout = this.requestTimeouts.get(requestId);
+        if (timeout !== undefined) {
+            clearTimeout(timeout);
+            this.requestTimeouts.delete(requestId);
+        }
+    }
 
     private searchBox: HTMLInputElement;
     private dragProcessedProvinceIds: Set<number>;
@@ -344,10 +466,17 @@ export class TopBar extends Subscriber {
         this.selectedCountryTag$ = new BehaviorSubject<string | undefined>(state.selectedCountryTag ?? undefined);
         this.mapMutation$ = new BehaviorSubject<number>(0);
         this.paintbrushActive$ = new BehaviorSubject<boolean>(false);
+        this.activeTool$ = new BehaviorSubject<ActiveTool>('none');
         this.paintbrushColor$ = new BehaviorSubject<number>(0);
         this.paintedPixels$ = new BehaviorSubject<Map<string, number>>(new Map());
+        this.paintedPixelDelta$ = new BehaviorSubject<ReadonlyMap<string, number | undefined>>(new Map());
         this.provinceDraft$ = new BehaviorSubject<ProvinceDraft | undefined>(undefined);
         this.brushSize$ = new BehaviorSubject<number>(1);
+        this.lassoPoints$ = new BehaviorSubject<readonly BrushPoint[]>([]);
+        this.lassoSnapping$ = new BehaviorSubject<boolean>(state.lassoSnapping !== false);
+        this.lassoSnapRadius$ = new BehaviorSubject<number>(
+            Math.max(1, Math.min(64, Math.floor(state.lassoSnapRadius ?? 6)))
+        );
         this.hoverMapX$ = new BehaviorSubject<number>(0);
         this.hoverMapY$ = new BehaviorSubject<number>(0);
         this.paintbrushCanUndo$ = new BehaviorSubject<boolean>(false);
@@ -402,11 +531,13 @@ export class TopBar extends Subscriber {
         }));
 
         // Wire brush size dropdown
-        const brushSizeSelect = document.getElementById('brushsize') as HTMLSelectElement;
+        const brushSizeSelect = document.getElementById('brushsize') as HTMLInputElement;
         if (brushSizeSelect) {
             this.brushSize$.next(getBrushBounds(parseInt(brushSizeSelect.value, 10)).size);
             this.addSubscription(fromEvent(brushSizeSelect, 'change').subscribe(() => {
-                this.brushSize$.next(getBrushBounds(parseInt(brushSizeSelect.value, 10)).size);
+                const size = getBrushBounds(parseInt(brushSizeSelect.value, 10)).size;
+                brushSizeSelect.value = String(size);
+                this.brushSize$.next(size);
             }));
         }
 
@@ -415,11 +546,13 @@ export class TopBar extends Subscriber {
             const message = event.data as WorldMapMessage;
 
             if (message.command === 'provincebmpupdated') {
-                const data = JSON.parse(
-                    (message as any).data ?? '{}'
-                );
+                if (!this.pendingPersistenceRequests.has(message.requestId)) {
+                    return;
+                }
+                this.pendingPersistenceRequests.delete(message.requestId);
+                this.clearRequestTimeout(message.requestId);
 
-                if (data.success === false) {
+                if (!message.success) {
                     this.paintbrushSavePending = false;
                     this.pendingProvinceMerge = undefined;
                     this.pendingWaterToLand = undefined;
@@ -427,10 +560,10 @@ export class TopBar extends Subscriber {
 
                     console.error(
                         'Province BMP persistence failed:',
-                        data.error
+                        message.error
                     );
                     this.showActionStatus(
-                        data.error ?? feLocalize('worldmap.action.mergeprovinces.savefailed', 'Province changes could not be saved. The map was reloaded without the merge.'),
+                        message.error ?? feLocalize('worldmap.action.mergeprovinces.savefailed', 'Province changes could not be saved. The map was reloaded without the merge.'),
                         'warn'
                     );
 
@@ -442,16 +575,16 @@ export class TopBar extends Subscriber {
                 }
 
                 this.paintbrushCanUndo$.next(
-                    data.canUndo ?? false
+                    message.canUndo
                 );
 
                 this.paintbrushCanRedo$.next(
-                    data.canRedo ?? false
+                    message.canRedo
                 );
 
                 const shouldRefresh =
                     this.refreshAfterPaintbrushSave ||
-                    data.forceReload === true;
+                    message.forceReload;
                 this.refreshAfterPaintbrushSave = false;
 
                 if (this.paintbrushSavePending) {
@@ -491,17 +624,19 @@ export class TopBar extends Subscriber {
             }
 
             if (message.command === 'provincebmpdata') {
-                const bmpMessage = message as any;
+                if (!this.completeRequest('provincebmpdata', message.requestId)) {
+                    return;
+                }
 
                 if (
-                    bmpMessage.colorByPosition &&
-                    bmpMessage.width ===
+                    message.colorByPosition &&
+                    message.width ===
                         this.loader.worldMap.width &&
-                    bmpMessage.height ===
+                    message.height ===
                         this.loader.worldMap.height
                 ) {
                     this.loader.worldMap.setColorByPosition(
-                        bmpMessage.colorByPosition
+                        message.colorByPosition
                     );
                 }
             }
@@ -533,7 +668,43 @@ export class TopBar extends Subscriber {
             groupElement.hidden = worldMap.conditionExprs.length === 0;
             window.dispatchEvent(new Event('resize'));
         }
+        this.updateProvinceLimitTooltips(worldMap);
+        this.viewPoint.setWheelActionHandler(event => this.handleToolWheel(event));
     };
+
+    private updateProvinceLimitTooltips(worldMap: FEWorldMap): void {
+        const cap = calculateProvinceIdCap(worldMap.width, worldMap.height);
+        const newProvinceButton = document.getElementById('new-province');
+        const paintbrushButton = document.getElementById('toggle-paintbrush');
+        if (newProvinceButton) {
+            newProvinceButton.title = feLocalize(
+                'worldmap.topbar.newprovince.limit.title',
+                'Create new province from selected (Ctrl+Alt+P). On this {0}x{1} map, province IDs may not exceed {2}: 1/8 of {3} total map pixels.',
+                cap.width,
+                cap.height,
+                cap.maxProvinceId,
+                cap.totalPixels
+            );
+        }
+        if (paintbrushButton) {
+            paintbrushButton.title = feLocalize(
+                'worldmap.topbar.paintbrush.limit.title',
+                'Toggle paintbrush mode (P). New province IDs on this map may not exceed {0}, calculated dynamically as 1/8 of {1} total map pixels.',
+                cap.maxProvinceId,
+                cap.totalPixels
+            );
+        }
+    }
+
+    public isLassoToolActive(): boolean {
+        return this.paintbrushActive$.value && this.paintTool === 'lasso';
+    }
+
+    public getLassoRenderPoints(): readonly BrushPoint[] {
+        return this.lassoSnapping$.value
+            ? snapLassoPoints(this.lassoPoints$.value, this.lassoSnapRadius$.value, this.loader.worldMap.width)
+            : this.lassoPoints$.value;
+    }
 
     private onViewModeChange() {
         document.querySelectorAll('#colorset > option[viewmode]').forEach(v => {
@@ -582,25 +753,62 @@ export class TopBar extends Subscriber {
         this.loadSearchBox();
         this.loadRefreshButton();
         this.loadOpenButton();
-        this.loadStrategicRegionEditButtons();
         this.loadNewProvinceButton();
         this.loadPaintbrushToggleButton();
         this.loadFillBucketButton();
+        this.loadLassoButton();
         this.loadTransferWandButton();
+        this.loadProvinceEditToolsMenu();
         this.loadPaintbrushPanel();
         this.loadNewProvinceConfirmModal();
         this.loadAccessibilityControls();
         this.loadRenderOptimizationControls();
+        this.loadInterfaceToolsMenu();
         this.loadResponsiveTopbar();
+        this.loadMenuKeyboardNavigation();
         this.loadCountryPuppetModal();
         this.loadCreateCountryModal();
         this.loadMergeStatesModal();
+        this.loadPersistenceResults();
         this.loadResolveProvinceWarnings();
         this.loadAreaOperationResults();
         this.loadNorthAmericaPipelineModal();
         this.loadOceanReadinessModal();
         this.loadWaterToLandModal();
         this.initExportMapMessageListener();
+    }
+
+    private loadPersistenceResults() {
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'persiststatesresult' &&
+                message.command !== 'persiststrategicregionsresult' &&
+                message.command !== 'persistprovincesresult' &&
+                message.command !== 'persistvictorypointlocalisationresult') {
+                return;
+            }
+
+            const operation = this.pendingPersistenceRequests.get(message.requestId);
+            if (!operation) {
+                return;
+            }
+            this.pendingPersistenceRequests.delete(message.requestId);
+            this.clearRequestTimeout(message.requestId);
+            if (operation === 'state merge') {
+                return;
+            }
+            if (message.success) {
+                return;
+            }
+
+            this.mapUndoStack.length = 0;
+            this.mapRedoStack.length = 0;
+            this.showActionStatus(
+                message.error ?? `The ${operation} write failed. The authoritative map is being reloaded.`,
+                'warn'
+            );
+            this.loader.refresh();
+        }));
     }
 
     private loadOceanReadinessModal() {
@@ -802,6 +1010,7 @@ export class TopBar extends Subscriber {
         this.mapMutation$.next(this.mapMutation$.value + 1);
         vscode.postMessage<WorldMapMessage>({
             command: 'persistprovincebmp',
+            requestId: this.beginPersistence('province BMP'),
             paintedPixels: [],
             width: this.loader.worldMap.width,
             height: this.loader.worldMap.height,
@@ -821,6 +1030,156 @@ export class TopBar extends Subscriber {
         return true;
     }
 
+    private loadInterfaceToolsMenu(): void {
+        const button = document.getElementById('interface-tools-button') as HTMLButtonElement | null;
+        const menu = document.getElementById('interface-tools-menu') as HTMLDivElement | null;
+        if (!button || !menu) return;
+        document.body.appendChild(menu);
+
+        const close = () => {
+            menu.hidden = true;
+            button.setAttribute('aria-expanded', 'false');
+        };
+        const position = () => {
+            if (menu.hidden) return;
+            const anchor = button.getBoundingClientRect();
+            const bounds = menu.getBoundingClientRect();
+            const gap = 8;
+            menu.style.left = `${Math.max(gap, Math.min(anchor.right - bounds.width, window.innerWidth - bounds.width - gap))}px`;
+            const top = Math.max(gap, Math.min(anchor.bottom + gap, window.innerHeight - bounds.height - gap));
+            menu.style.top = `${top}px`;
+            menu.style.maxHeight = `${Math.max(72, window.innerHeight - top - gap)}px`;
+        };
+        const toggle = () => {
+            const opening = menu.hidden;
+            menu.hidden = !opening;
+            button.setAttribute('aria-expanded', String(opening));
+            if (opening) {
+                position();
+                menu.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+            }
+        };
+
+        this.addSubscription(fromEvent<MouseEvent>(button, 'click').subscribe(event => {
+            event.preventDefault();
+            event.stopPropagation();
+            toggle();
+        }));
+        this.addSubscription(fromEvent(window, 'resize').subscribe(position));
+        this.addSubscription(fromEvent<PointerEvent>(document, 'pointerdown').subscribe(event => {
+            const target = event.target as Node;
+            const performanceMenu = document.getElementById('render-optimizations-menu');
+            const accessibilityMenu = document.getElementById('accessibility-options-menu');
+            if (!menu.hidden && !this.isNestedMenuInteraction(
+                target,
+                menu,
+                button,
+                performanceMenu,
+                accessibilityMenu
+            )) close();
+        }));
+        this.addSubscription(fromEvent<KeyboardEvent>(document, 'keydown').subscribe(event => {
+            const key = event.key.toLowerCase();
+            if (event.ctrlKey && event.altKey && !event.shiftKey && key === 'i' &&
+                !this.shouldIgnoreGlobalShortcut(event.target)) {
+                event.preventDefault();
+                toggle();
+            } else if (event.ctrlKey && event.altKey && event.shiftKey && key === 'p' &&
+                !this.shouldIgnoreGlobalShortcut(event.target)) {
+                event.preventDefault();
+                close();
+                document.getElementById('render-optimizations-button')?.click();
+            } else if (event.key === 'Escape' && !menu.hidden) {
+                event.preventDefault();
+                close();
+                button.focus();
+            }
+        }));
+    }
+
+    private loadMenuKeyboardNavigation(): void {
+        const menus = Array.from(document.querySelectorAll<HTMLElement>(
+            '.interface-tools-menu, .province-edit-tools-menu, .topbar-overflow-menu, .render-optimizations-menu, .accessibility-options-menu'
+        ));
+        const focusableItems = (menu: HTMLElement) => Array.from(menu.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]'
+        )).filter(item => !item.closest('[hidden]'));
+
+        for (const menu of menus) {
+            this.addSubscription(fromEvent<KeyboardEvent>(menu, 'keydown').subscribe(event => {
+                const target = event.target as HTMLElement;
+                const isFormControl = target instanceof HTMLInputElement || target instanceof HTMLSelectElement;
+                if (isFormControl && ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+                    return;
+                }
+                const items = focusableItems(menu);
+                const index = items.indexOf(target);
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    const direction = event.key === 'ArrowDown' ? 1 : -1;
+                    items[(index + direction + items.length) % items.length]?.focus();
+                } else if (event.key === 'Home' || event.key === 'End') {
+                    event.preventDefault();
+                    items[event.key === 'Home' ? 0 : items.length - 1]?.focus();
+                } else if (event.key === 'ArrowRight') {
+                    const controlled = target.getAttribute('aria-controls');
+                    if (controlled) {
+                        event.preventDefault();
+                        target.click();
+                    }
+                } else if (event.key === 'ArrowLeft') {
+                    const trigger = document.querySelector<HTMLElement>(`[aria-controls="${menu.id}"]`);
+                    if (trigger) {
+                        event.preventDefault();
+                        menu.hidden = true;
+                        trigger.setAttribute('aria-expanded', 'false');
+                        trigger.focus();
+                    }
+                }
+            }));
+        }
+    }
+
+    private positionNestedInterfaceMenu(menu: HTMLElement, button: HTMLElement): void {
+        const gap = 8;
+        const buttonBounds = button.getBoundingClientRect();
+        const menuBounds = menu.getBoundingClientRect();
+        const parent = button.closest<HTMLElement>('.interface-tools-menu');
+        let left: number;
+        let top: number;
+
+        if (parent && !parent.hidden) {
+            const parentBounds = parent.getBoundingClientRect();
+            const fitsRight = parentBounds.right + gap + menuBounds.width <= window.innerWidth - gap;
+            const fitsLeft = parentBounds.left - gap - menuBounds.width >= gap;
+            if (fitsRight || fitsLeft) {
+                left = fitsRight
+                    ? parentBounds.right + gap
+                    : parentBounds.left - menuBounds.width - gap;
+                top = Math.max(gap, Math.min(buttonBounds.top, window.innerHeight - menuBounds.height - gap));
+            } else {
+                left = Math.max(gap, Math.min(parentBounds.left, window.innerWidth - menuBounds.width - gap));
+                top = Math.max(gap, Math.min(parentBounds.bottom + gap, window.innerHeight - menuBounds.height - gap));
+            }
+        } else {
+            left = Math.max(gap, Math.min(buttonBounds.right - menuBounds.width, window.innerWidth - menuBounds.width - gap));
+            top = Math.max(gap, Math.min(buttonBounds.bottom + gap, window.innerHeight - menuBounds.height - gap));
+        }
+
+        menu.style.left = `${left}px`;
+        menu.style.right = 'auto';
+        menu.style.top = `${top}px`;
+        menu.style.maxHeight = `${Math.max(72, window.innerHeight - top - gap)}px`;
+    }
+
+    private isNestedMenuInteraction(target: Node, ...surfaces: Array<Element | null>): boolean {
+        if (surfaces.some(surface => surface?.contains(target))) {
+            return true;
+        }
+        const element = target instanceof Element ? target : target.parentElement;
+        return !!element?.closest('ul.select-dropdown');
+    }
+
     private loadAccessibilityControls() {
         const button = document.getElementById('accessibility-options-button') as HTMLButtonElement | null;
         const menu = document.getElementById('accessibility-options-menu') as HTMLDivElement | null;
@@ -832,30 +1191,81 @@ export class TopBar extends Subscriber {
         // the popup out of the toolbar stacking/clipping context.
         document.body.appendChild(menu);
 
-        type AccessibilityOption = 'reducedMotion' | 'highContrast' | 'largeText' | 'largeTargets';
+        type AccessibilityOption = 'reducedMotion' | 'highContrast' | 'largeTargets';
+        type Typeface = 'system' | 'editor' | 'sans' | 'serif' | 'mono';
+        interface InterfacePreferences {
+            fontSize: number;
+            fontFamily: Typeface;
+            uiScale: number;
+            panelOpacity: number;
+            glassBlur: number;
+        }
         const defaults: Record<AccessibilityOption, boolean> = {
             reducedMotion: false,
             highContrast: false,
-            largeText: false,
             largeTargets: false,
         };
         const saved = getState().accessibilityOptions ?? {};
         const values: Record<AccessibilityOption, boolean> = {
             reducedMotion: saved.reducedMotion === true,
             highContrast: saved.highContrast === true,
-            largeText: saved.largeText === true,
             largeTargets: saved.largeTargets === true,
+        };
+        const preferences: InterfacePreferences = {
+            fontSize: Number.isFinite(saved.fontSize) ? Math.max(10, Math.min(20, saved.fontSize)) : 12,
+            fontFamily: ['system', 'editor', 'sans', 'serif', 'mono'].includes(saved.fontFamily)
+                ? saved.fontFamily as Typeface
+                : 'system',
+            uiScale: Number.isFinite(saved.uiScale)
+                ? Math.max(80, Math.min(150, saved.uiScale))
+                : (saved.largeText === true ? 118 : 100),
+            panelOpacity: Number.isFinite(saved.panelOpacity) ? Math.max(45, Math.min(95, saved.panelOpacity)) : 72,
+            glassBlur: Number.isFinite(saved.glassBlur) ? Math.max(0, Math.min(32, saved.glassBlur)) : 18,
         };
         const checkboxes = Array.from(
             menu.querySelectorAll<HTMLInputElement>('input[data-accessibility-option]')
         );
+        const fontSize = document.getElementById('interface-font-size') as HTMLInputElement | null;
+        const fontFamily = document.getElementById('interface-font-family') as HTMLSelectElement | null;
+        const uiScale = document.getElementById('interface-ui-scale') as HTMLInputElement | null;
+        const panelOpacity = document.getElementById('interface-panel-opacity') as HTMLInputElement | null;
+        const glassBlur = document.getElementById('interface-glass-blur') as HTMLInputElement | null;
+        const fontSizeOutput = document.getElementById('interface-font-size-output') as HTMLOutputElement | null;
+        const uiScaleOutput = document.getElementById('interface-ui-scale-output') as HTMLOutputElement | null;
+        const panelOpacityOutput = document.getElementById('interface-panel-opacity-output') as HTMLOutputElement | null;
+        const glassBlurOutput = document.getElementById('interface-glass-blur-output') as HTMLOutputElement | null;
+        const typefaces: Record<Typeface, string> = {
+            system: 'var(--vscode-font-family, sans-serif)',
+            editor: 'var(--vscode-editor-font-family, monospace)',
+            sans: 'Segoe UI, Arial, sans-serif',
+            serif: 'Georgia, Cambria, serif',
+            mono: 'Consolas, Cascadia Mono, monospace',
+        };
+
+        const save = () => setState({ accessibilityOptions: { ...values, ...preferences } });
 
         const apply = () => {
             document.body.dataset.reducedMotion = String(values.reducedMotion);
             document.body.dataset.highContrast = String(values.highContrast);
-            document.body.dataset.largeText = String(values.largeText);
             document.body.dataset.largeTargets = String(values.largeTargets);
-            const enabled = Object.values(values).filter(Boolean).length;
+            document.body.style.setProperty('--worldmap-font-size', `${preferences.fontSize}px`);
+            document.body.style.setProperty('--worldmap-font-family', typefaces[preferences.fontFamily]);
+            document.body.style.setProperty('--worldmap-ui-scale', String(preferences.uiScale / 100));
+            document.body.style.setProperty('--worldmap-glass-opacity', `${preferences.panelOpacity}%`);
+            document.body.style.setProperty('--worldmap-glass-blur-radius', `${preferences.glassBlur}px`);
+            window.dispatchEvent(new Event('worldmap-interface-change'));
+            if (fontSize) fontSize.value = String(preferences.fontSize);
+            if (fontFamily) fontFamily.value = preferences.fontFamily;
+            if (uiScale) uiScale.value = String(preferences.uiScale);
+            if (panelOpacity) panelOpacity.value = String(preferences.panelOpacity);
+            if (glassBlur) glassBlur.value = String(preferences.glassBlur);
+            if (fontSizeOutput) fontSizeOutput.value = `${preferences.fontSize} px`;
+            if (uiScaleOutput) uiScaleOutput.value = `${preferences.uiScale}%`;
+            if (panelOpacityOutput) panelOpacityOutput.value = `${preferences.panelOpacity}%`;
+            if (glassBlurOutput) glassBlurOutput.value = `${preferences.glassBlur} px`;
+            const customized = preferences.fontSize !== 12 || preferences.fontFamily !== 'system' ||
+                preferences.uiScale !== 100 || preferences.panelOpacity !== 72 || preferences.glassBlur !== 18;
+            const enabled = Object.values(values).filter(Boolean).length + (customized ? 1 : 0);
             button.classList.toggle('active', enabled > 0);
             button.setAttribute('aria-pressed', String(enabled > 0));
             button.setAttribute('aria-label', enabled > 0
@@ -874,18 +1284,7 @@ export class TopBar extends Subscriber {
             if (menu.hidden) {
                 return;
             }
-            const buttonBounds = button.getBoundingClientRect();
-            const menuBounds = menu.getBoundingClientRect();
-            const gap = 8;
-            const left = Math.max(
-                gap,
-                Math.min(buttonBounds.right - menuBounds.width, window.innerWidth - menuBounds.width - gap)
-            );
-            const top = Math.max(8, Math.min(buttonBounds.bottom + 8, window.innerHeight - 80));
-            menu.style.left = `${left}px`;
-            menu.style.right = 'auto';
-            menu.style.top = `${top}px`;
-            menu.style.maxHeight = `${Math.max(72, window.innerHeight - top - 8)}px`;
+            this.positionNestedInterfaceMenu(menu, button);
         };
         const toggleMenu = () => {
             const opening = menu.hidden;
@@ -907,7 +1306,29 @@ export class TopBar extends Subscriber {
             this.addSubscription(fromEvent<Event>(checkbox, 'change').subscribe(() => {
                 const option = checkbox.dataset.accessibilityOption as AccessibilityOption;
                 values[option] = checkbox.checked;
-                setState({ accessibilityOptions: { ...values } });
+                save();
+                apply();
+            }));
+        }
+        const subscribeRange = (
+            input: HTMLInputElement | null,
+            update: (value: number) => void
+        ) => {
+            if (!input) return;
+            this.addSubscription(fromEvent<Event>(input, 'input').subscribe(() => {
+                update(Number(input.value));
+                save();
+                apply();
+            }));
+        };
+        subscribeRange(fontSize, value => preferences.fontSize = value);
+        subscribeRange(uiScale, value => preferences.uiScale = value);
+        subscribeRange(panelOpacity, value => preferences.panelOpacity = value);
+        subscribeRange(glassBlur, value => preferences.glassBlur = value);
+        if (fontFamily) {
+            this.addSubscription(fromEvent<Event>(fontFamily, 'change').subscribe(() => {
+                preferences.fontFamily = fontFamily.value as Typeface;
+                save();
                 apply();
             }));
         }
@@ -917,7 +1338,12 @@ export class TopBar extends Subscriber {
                 for (const option of Object.keys(values) as AccessibilityOption[]) {
                     values[option] = false;
                 }
-                setState({ accessibilityOptions: { ...values } });
+                preferences.fontSize = 12;
+                preferences.fontFamily = 'system';
+                preferences.uiScale = 100;
+                preferences.panelOpacity = 72;
+                preferences.glassBlur = 18;
+                save();
                 apply();
                 checkboxes[0]?.focus();
             }));
@@ -931,7 +1357,9 @@ export class TopBar extends Subscriber {
             if (event.key !== 'Tab') {
                 return;
             }
-            const focusable = [...checkboxes, ...(resetButton ? [resetButton] : [])];
+            const settingsControls = [fontSize, fontFamily, uiScale, panelOpacity, glassBlur]
+                .filter((control): control is HTMLInputElement | HTMLSelectElement => control !== null);
+            const focusable = [...checkboxes, ...settingsControls, ...(resetButton ? [resetButton] : [])];
             if (focusable.length === 0) {
                 return;
             }
@@ -946,12 +1374,13 @@ export class TopBar extends Subscriber {
         }));
         this.addSubscription(fromEvent<PointerEvent>(document, 'pointerdown').subscribe(event => {
             const target = event.target as Node;
-            if (!menu.hidden && !menu.contains(target) && !button.contains(target)) {
+            if (!menu.hidden && !this.isNestedMenuInteraction(target, menu, button)) {
                 close();
             }
         }));
         this.addSubscription(fromEvent<KeyboardEvent>(document, 'keydown').subscribe(event => {
-            if (event.ctrlKey && event.altKey && event.key.toLowerCase() === 'a') {
+            if (event.ctrlKey && event.altKey && event.key.toLowerCase() === 'a' &&
+                !this.shouldIgnoreGlobalShortcut(event.target)) {
                 event.preventDefault();
                 toggleMenu();
             } else if (event.key === 'Escape' && !menu.hidden) {
@@ -1013,18 +1442,7 @@ export class TopBar extends Subscriber {
             if (menu.hidden) {
                 return;
             }
-            const buttonBounds = button.getBoundingClientRect();
-            const menuBounds = menu.getBoundingClientRect();
-            const gap = 8;
-            const left = Math.max(
-                gap,
-                Math.min(buttonBounds.right - menuBounds.width, window.innerWidth - menuBounds.width - gap)
-            );
-            const top = Math.max(gap, Math.min(buttonBounds.bottom + gap, window.innerHeight - 80));
-            menu.style.left = `${left}px`;
-            menu.style.right = 'auto';
-            menu.style.top = `${top}px`;
-            menu.style.maxHeight = `${Math.max(72, window.innerHeight - top - gap)}px`;
+            this.positionNestedInterfaceMenu(menu, button);
         };
 
         const closeModal = () => {
@@ -1122,7 +1540,7 @@ export class TopBar extends Subscriber {
 
         this.addSubscription(fromEvent<PointerEvent>(document, 'pointerdown').subscribe(event => {
             const target = event.target as Node;
-            if (!menu.hidden && !menu.contains(target) && !button.contains(target)) {
+            if (!menu.hidden && !this.isNestedMenuInteraction(target, menu, button, modal)) {
                 closeMenu();
             }
         }));
@@ -1195,6 +1613,8 @@ export class TopBar extends Subscriber {
             close();
             restoreCandidates();
             overflowGroup.hidden = true;
+            button.disabled = true;
+            button.setAttribute('aria-disabled', 'true');
             if (toolbar.scrollWidth <= toolbar.clientWidth + 1) {
                 return;
             }
@@ -1209,7 +1629,15 @@ export class TopBar extends Subscriber {
                     break;
                 }
             }
-            overflowGroup.hidden = menu.childElementCount === 0;
+            const hasVisibleItems = Array.from(menu.children).some(child =>
+                window.getComputedStyle(child).display !== 'none'
+            );
+            overflowGroup.hidden = !hasVisibleItems;
+            button.disabled = !hasVisibleItems;
+            button.setAttribute('aria-disabled', String(!hasVisibleItems));
+            if (!hasVisibleItems) {
+                close();
+            }
         };
         let layoutFrame: number | undefined;
         const scheduleRelayout = () => {
@@ -1225,6 +1653,10 @@ export class TopBar extends Subscriber {
         this.addSubscription(fromEvent<MouseEvent>(button, 'click').subscribe(event => {
             event.preventDefault();
             event.stopPropagation();
+            if (button.disabled || menu.childElementCount === 0) {
+                close();
+                return;
+            }
             const opening = menu.hidden;
             menu.hidden = !opening;
             button.setAttribute('aria-expanded', String(opening));
@@ -1235,7 +1667,7 @@ export class TopBar extends Subscriber {
         }));
         this.addSubscription(fromEvent<PointerEvent>(document, 'pointerdown').subscribe(event => {
             const target = event.target as Node;
-            if (!menu.hidden && !menu.contains(target) && !button.contains(target)) {
+            if (!menu.hidden && !this.isNestedMenuInteraction(target, menu, button)) {
                 close();
             }
         }));
@@ -1253,6 +1685,69 @@ export class TopBar extends Subscriber {
         scheduleRelayout();
     }
 
+    private loadProvinceEditToolsMenu(): void {
+        const button = document.getElementById('province-edit-tools-button') as HTMLButtonElement | null;
+        const menu = document.getElementById('province-edit-tools-menu') as HTMLDivElement | null;
+        if (!button || !menu) {
+            return;
+        }
+
+        document.body.appendChild(menu);
+        const close = () => {
+            menu.hidden = true;
+            button.setAttribute('aria-expanded', 'false');
+        };
+        const position = () => {
+            if (menu.hidden) {
+                return;
+            }
+            const anchor = button.getBoundingClientRect();
+            const menuBounds = menu.getBoundingClientRect();
+            const gap = 6;
+            menu.style.left = `${Math.max(
+                gap,
+                Math.min(anchor.left, window.innerWidth - menuBounds.width - gap)
+            )}px`;
+            menu.style.top = `${Math.min(anchor.bottom + gap, window.innerHeight - menuBounds.height - gap)}px`;
+        };
+
+        this.addSubscription(fromEvent<MouseEvent>(button, 'click').subscribe(event => {
+            event.preventDefault();
+            event.stopPropagation();
+            const opening = menu.hidden;
+            menu.hidden = !opening;
+            button.setAttribute('aria-expanded', String(opening));
+            if (opening) {
+                position();
+                menu.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+            }
+        }));
+        this.addSubscription(fromEvent<MouseEvent>(menu, 'click').subscribe(event => {
+            if ((event.target as HTMLElement).closest('button')) {
+                close();
+                button.focus();
+            }
+        }));
+        this.addSubscription(fromEvent<PointerEvent>(document, 'pointerdown').subscribe(event => {
+            const target = event.target as Node;
+            if (!menu.hidden && !menu.contains(target) && !button.contains(target)) {
+                close();
+            }
+        }));
+        this.addSubscription(fromEvent<KeyboardEvent>(document, 'keydown').subscribe(event => {
+            if (event.key === 'Escape' && !menu.hidden) {
+                event.preventDefault();
+                close();
+                button.focus();
+            }
+        }));
+        this.addSubscription(fromEvent(window, 'resize').subscribe(position));
+        const toolbarOuter = document.querySelector('.toolbar-outer');
+        if (toolbarOuter) {
+            this.addSubscription(fromEvent(toolbarOuter, 'scroll').subscribe(position));
+        }
+    }
+
     /**
      * Wire the floating paintbrush confirmation panel.
      */
@@ -1263,68 +1758,107 @@ export class TopBar extends Subscriber {
         const applyBtn = document.getElementById('paintbrush-apply') as HTMLButtonElement;
         const cancelBtn = document.getElementById('paintbrush-cancel') as HTMLButtonElement;
         const pixelCountEl = document.getElementById('paintbrush-pixel-count') as HTMLSpanElement;
-        const colorPreviewEl = document.getElementById('paintbrush-color-preview') as HTMLSpanElement;
-        const provinceInfoEl = document.getElementById('paintbrush-province-info') as HTMLSpanElement;
-        const draftTypeEl = document.getElementById('paintbrush-draft-type') as HTMLSpanElement;
-        const draftTerrainEl = document.getElementById('paintbrush-draft-terrain') as HTMLSpanElement;
-        const draftCoastalEl = document.getElementById('paintbrush-draft-coastal') as HTMLSpanElement;
-        const draftContinentEl = document.getElementById('paintbrush-draft-continent') as HTMLSpanElement;
+        const workflowTitleEl = document.getElementById('paintbrush-workflow-title') as HTMLDivElement;
+        const workflowInstructionEl = document.getElementById('paintbrush-workflow-instruction') as HTMLDivElement;
+        const applyLabelEl = document.getElementById('paintbrush-apply-label') as HTMLSpanElement;
         const draftErrorsEl = document.getElementById('paintbrush-draft-errors') as HTMLDivElement;
+        const brushBtn = document.getElementById('paintbrush-tool-brush') as HTMLButtonElement | null;
         const eraseBtn = document.getElementById('paintbrush-erase') as HTMLButtonElement | null;
+        const fillBtn = document.getElementById('paintbrush-tool-fill') as HTMLButtonElement | null;
+        const lassoBtn = document.getElementById('paintbrush-tool-lasso') as HTMLButtonElement | null;
+        const brushOptions = document.getElementById('paintbrush-brush-options') as HTMLDivElement | null;
+        const lassoOptions = document.getElementById('paintbrush-lasso-options') as HTMLDivElement | null;
+        const lassoInverted = document.getElementById('paintbrush-lasso-inverted') as HTMLInputElement | null;
+        const lassoSnap = document.getElementById('paintbrush-lasso-snap') as HTMLInputElement | null;
+        const lassoSnapRadius = document.getElementById('paintbrush-lasso-snap-radius') as HTMLInputElement | null;
         const draftUndoBtn = document.getElementById('paintbrush-draft-undo') as HTMLButtonElement | null;
         const draftRedoBtn = document.getElementById('paintbrush-draft-redo') as HTMLButtonElement | null;
+        if (draftUndoBtn) {
+            const title = `Restore the previous painted region (${this.keybinds.selectionUndo.label})`;
+            draftUndoBtn.title = title;
+            draftUndoBtn.setAttribute('aria-label', title);
+        }
+        if (draftRedoBtn) {
+            const title = `Reapply the next painted region (${this.keybinds.selectionRedo.label})`;
+            draftRedoBtn.title = title;
+            draftRedoBtn.setAttribute('aria-label', title);
+        }
 
         // Show/hide panel with paintbrush active state
         this.addSubscription(this.paintbrushActive$.subscribe(active => {
             panel.hidden = !active;
             panel.style.display = active ? 'block' : 'none';
             if (!active && applyBtn) applyBtn.disabled = false;
-        }));
-
-        // Update pixel count from paintedPixels$
-        this.addSubscription(this.paintedPixels$.subscribe(pixels => {
-            if (pixelCountEl) {
-                pixelCountEl.textContent = `${pixels.size} pixels`;
+            if (lassoOptions) {
+                const lassoActive = active && this.paintTool === 'lasso';
+                lassoOptions.hidden = !lassoActive;
+                lassoOptions.style.removeProperty('display');
+                if (lassoActive) {
+                    requestAnimationFrame(() => {
+                        lassoOptions.scrollIntoView({ block: 'nearest' });
+                    });
+                }
+            }
+            if (brushOptions) {
+                brushOptions.hidden = !active || (this.paintTool !== 'brush' && this.paintTool !== 'erase');
+            }
+            brushBtn?.setAttribute('aria-pressed', String(active && this.paintTool === 'brush'));
+            eraseBtn?.setAttribute('aria-pressed', String(active && this.paintTool === 'erase'));
+            fillBtn?.setAttribute('aria-pressed', String(active && this.paintTool === 'fill'));
+            lassoBtn?.setAttribute('aria-pressed', String(active && this.paintTool === 'lasso'));
+            if (!active && lassoInverted) {
+                lassoInverted.checked = false;
             }
         }));
 
-        // Update color preview swatch
-        this.addSubscription(this.paintbrushColor$.subscribe(color => {
-            if (colorPreviewEl) {
-                const r = (color >> 16) & 0xFF;
-                const g = (color >> 8) & 0xFF;
-                const b = color & 0xFF;
-                colorPreviewEl.style.backgroundColor = `rgb(${r},${g},${b})`;
+        const updateWorkflow = () => {
+            const draft = this.provinceDraft$.value;
+            const pixelCount = this.paintedPixels$.value.size;
+            const creating = draft?.isNewProvince === true;
+            workflowTitleEl.textContent = creating
+                ? feLocalize('worldmap.paintbrush.create.title', 'Create new province')
+                : feLocalize('worldmap.paintbrush.edit.title', 'Edit province boundary');
+            pixelCountEl.textContent = feLocalize('worldmap.paintbrush.staged', '{0} staged', pixelCount);
+            applyLabelEl.textContent = creating
+                ? feLocalize('worldmap.paintbrush.create.action', 'Create')
+                : feLocalize('worldmap.paintbrush.edit.action', 'Apply');
+            applyBtn.title = creating
+                ? feLocalize('worldmap.paintbrush.create.tooltip', 'Create the new province from the staged pixels')
+                : feLocalize('worldmap.paintbrush.edit.tooltip', 'Apply the staged boundary changes');
+            applyBtn.setAttribute('aria-label', applyBtn.title);
+
+            if (!draft) {
+                return;
             }
-        }));
+            if (!draft.valid) {
+                workflowInstructionEl.textContent = feLocalize(
+                    'worldmap.paintbrush.resolve',
+                    'Resolve the issue below before continuing.'
+                );
+            } else if (pixelCount === 0) {
+                workflowInstructionEl.textContent = creating
+                    ? feLocalize('worldmap.paintbrush.create.start', 'Paint on the map to define the new province.')
+                    : feLocalize('worldmap.paintbrush.edit.start', 'Paint pixels on the map to change the selected province boundary.');
+            } else {
+                workflowInstructionEl.textContent = creating
+                    ? feLocalize('worldmap.paintbrush.create.ready', 'Review the staged area, then select Create.')
+                    : feLocalize('worldmap.paintbrush.edit.ready', 'Review the staged boundary changes, then select Apply.');
+            }
+            panel.dataset.workflow = creating ? 'create' : 'edit';
+            panel.dataset.ready = String(pixelCount > 0 && draft.valid);
+        };
+
+        this.addSubscription(this.paintedPixels$.subscribe(() => updateWorkflow()));
 
         // Update panel from the ProvinceDraft
         this.addSubscription(this.provinceDraft$.subscribe(draft => {
+            updateWorkflow();
             if (!draft) return;
-
-            // Province info
-            if (provinceInfoEl) {
-                if (draft.sourceProvinceId > 0) {
-                    provinceInfoEl.textContent = `Source: Province #${draft.sourceProvinceId}`;
-                } else {
-                    provinceInfoEl.textContent = 'New province';
-                }
-            }
-
-            // Draft details
-            if (draftTypeEl) draftTypeEl.textContent = `Type: ${draft.type}  `;
-            if (draftTerrainEl) draftTerrainEl.textContent = `Terrain: ${draft.terrain || '(none)'}  `;
-            if (draftCoastalEl) draftCoastalEl.textContent = `Coastal: ${draft.coastal}  `;
-            if (draftContinentEl) draftContinentEl.textContent = `Continent: ${draft.continent}`;
 
             // Validation errors
             if (draftErrorsEl) {
-                if (draft.errors.length > 0) {
-                    draftErrorsEl.style.display = 'block';
-                    draftErrorsEl.textContent = draft.errors.join('; ');
-                } else {
-                    draftErrorsEl.style.display = 'none';
-                }
+                draftErrorsEl.hidden = draft.errors.length === 0;
+                draftErrorsEl.textContent = draft.errors.join('; ');
             }
 
             // Apply button enabled only when draft is valid with pixels
@@ -1375,6 +1909,46 @@ export class TopBar extends Subscriber {
                 const erasing = active && this.paintTool === 'erase';
                 eraseBtn.setAttribute('aria-pressed', String(erasing));
                 eraseBtn.disabled = !active || this.paintbrushSavePending;
+            }));
+        }
+        if (brushBtn) {
+            this.addSubscription(fromEvent<MouseEvent>(brushBtn, 'click').subscribe(e => {
+                e.preventDefault();
+                this.paintTool = 'brush';
+                this.isPainting = false;
+                this.lassoPoints$.next([]);
+                this.paintbrushActive$.next(true);
+            }));
+        }
+        if (fillBtn) {
+            this.addSubscription(fromEvent<MouseEvent>(fillBtn, 'click').subscribe(e => {
+                e.preventDefault();
+                this.toggleFillBucketMode();
+            }));
+        }
+        if (lassoBtn) {
+            this.addSubscription(fromEvent<MouseEvent>(lassoBtn, 'click').subscribe(e => {
+                e.preventDefault();
+                this.toggleLassoMode();
+            }));
+        }
+        if (lassoSnap) {
+            lassoSnap.checked = this.lassoSnapping$.value;
+            this.addSubscription(fromEvent<Event>(lassoSnap, 'change').subscribe(() => {
+                this.lassoSnapping$.next(lassoSnap.checked);
+                setState({ lassoSnapping: lassoSnap.checked });
+            }));
+        }
+        if (lassoSnapRadius) {
+            lassoSnapRadius.value = String(this.lassoSnapRadius$.value);
+            this.addSubscription(fromEvent<Event>(lassoSnapRadius, 'change').subscribe(() => {
+                const radius = Math.max(1, Math.min(64, Math.floor(Number(lassoSnapRadius.value) || 1)));
+                lassoSnapRadius.value = String(radius);
+                this.lassoSnapRadius$.next(radius);
+                setState({ lassoSnapRadius: radius });
+            }));
+            this.addSubscription(this.lassoSnapping$.subscribe(enabled => {
+                lassoSnapRadius.disabled = !enabled;
             }));
         }
         if (draftUndoBtn) {
@@ -1453,16 +2027,11 @@ export class TopBar extends Subscriber {
         }
 
         if (summary) {
-            const r = (draft.color >> 16) & 0xFF;
-            const g = (draft.color >> 8) & 0xFF;
-            const b = draft.color & 0xFF;
-            summary.innerHTML =
-                `<div>Pixels: ${draft.pixels.size}</div>` +
-                `<div>Colour: rgb(${r}, ${g}, ${b})</div>` +
-                `<div>Type: ${draft.type}</div>` +
-                `<div>Terrain: ${draft.terrain || '(none)'}</div>` +
-                `<div>Coastal: ${draft.coastal}</div>` +
-                `<div>Continent: ${draft.continent}</div>`;
+            summary.textContent = feLocalize(
+                'worldmap.paintbrush.confirm.summary',
+                'Create one new province from {0} staged pixels and save the map changes?',
+                draft.pixels.size
+            );
         }
 
         modal.hidden = false;
@@ -1510,6 +2079,9 @@ export class TopBar extends Subscriber {
         this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
             const message = event.data as WorldMapMessage;
             if (message.command !== 'countrydiplomacyupdated') {
+                return;
+            }
+            if (!this.completeRequest('countrydiplomacy', message.requestId)) {
                 return;
             }
 
@@ -1640,6 +2212,7 @@ export class TopBar extends Subscriber {
         this.setCountryPuppetError('');
         vscode.postMessage<WorldMapMessage>({
             command: 'persistcountrydiplomacy',
+            requestId: this.beginRequest('countrydiplomacy'),
             action: 'puppet',
             file,
             overlord,
@@ -1660,8 +2233,14 @@ export class TopBar extends Subscriber {
             return;
         }
 
+        const apply = document.getElementById('country-puppet-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('country-puppet-cancel') as HTMLButtonElement | null;
+        this.pendingPuppetWrite = true;
+        if (apply) apply.disabled = true;
+        if (cancel) cancel.disabled = true;
         vscode.postMessage<WorldMapMessage>({
             command: 'persistcountrydiplomacy',
+            requestId: this.beginRequest('countrydiplomacy'),
             action: 'end_puppet',
             file,
             overlord: relation.overlord,
@@ -1780,6 +2359,7 @@ export class TopBar extends Subscriber {
             cancel.disabled = true;
             vscode.postMessage<WorldMapMessage>({
                 command: 'createcountry',
+                requestId: this.beginRequest('createcountry'),
                 tag: tag.value,
                 localizedName: name.value.trim(),
                 capitalStateId: selected[0],
@@ -1788,6 +2368,7 @@ export class TopBar extends Subscriber {
         this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
             const message = event.data as WorldMapMessage;
             if (message.command !== 'createcountryresult') return;
+            if (!this.completeRequest('createcountry', message.requestId)) return;
             apply.disabled = false;
             cancel.disabled = false;
             if (!message.success || !message.tag) {
@@ -1856,6 +2437,7 @@ export class TopBar extends Subscriber {
             }
             const pending = this.pendingStateMerge;
             this.pendingStateMerge = undefined;
+            this.clearRequestTimeout(message.requestId);
             apply.disabled = false;
             cancel.disabled = false;
             if (!message.success) {
@@ -1963,7 +2545,10 @@ export class TopBar extends Subscriber {
             'worldmap.province.resolve.confirm',
             'Remove invalid province references from adjacencies, railways, and supply nodes, then reload the map?'
         ))) return;
-        vscode.postMessage<WorldMapMessage>({ command: 'resolveprovincewarnings' });
+        vscode.postMessage<WorldMapMessage>({
+            command: 'resolveprovincewarnings',
+            requestId: this.beginRequest('resolveprovincewarnings'),
+        });
         this.showActionStatus(feLocalize('worldmap.province.resolve.pending', 'Resolving province warnings...'));
     }
 
@@ -1971,6 +2556,7 @@ export class TopBar extends Subscriber {
         this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
             const message = event.data as WorldMapMessage;
             if (message.command !== 'resolveprovincewarningsresult') return;
+            if (!this.completeRequest('resolveprovincewarnings', message.requestId)) return;
             if (!message.success) {
                 this.showActionStatus(message.error ?? feLocalize('worldmap.province.resolve.failed', 'Province warning repair failed.'), 'warn');
                 return;
@@ -1982,6 +2568,7 @@ export class TopBar extends Subscriber {
         this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
             const message = event.data as WorldMapMessage;
             if (message.command !== 'reindexmapresult') return;
+            if (!this.completeRequest('reindexmap', message.requestId)) return;
             this.reindexPending = false;
             if (!message.success) {
                 this.showActionStatus(message.error ?? feLocalize('worldmap.reindex.failed', 'Sequential reindexing failed.'), 'warn');
@@ -2041,7 +2628,7 @@ export class TopBar extends Subscriber {
         );
     }
 
-    private runGlobalAreaOperation(operation: 'clear-water-crossings' | 'clear-resources') {
+    private runGlobalAreaOperation(operation: 'clear-water-crossings' | 'clear-resources' | 'clear-buildings') {
         const worldMap = this.loader.worldMap;
         const provinceIds: number[] = [];
         worldMap.forEachProvince(province => {provinceIds.push(province.id);});
@@ -2049,8 +2636,23 @@ export class TopBar extends Subscriber {
         worldMap.forEachState(state => {stateIds.push(state.id);});
         const description = operation === 'clear-water-crossings'
             ? 'remove every strait, canal, and water-based crossing from the loaded map'
-            : 'remove every resource block from every loaded state';
-        this.showAreaOperationConfirmation(operation, provinceIds, stateIds, false, true, description, 'the entire loaded map');
+            : operation === 'clear-resources'
+                ? 'remove every resource block from every loaded state'
+                : 'remove every province and state building from the loaded map';
+        const scope = operation === 'clear-buildings'
+            ? `${provinceIds.length} provinces and ${stateIds.length} states across the entire loaded map`
+            : 'the entire loaded map';
+        this.showAreaOperationConfirmation(
+            operation,
+            provinceIds,
+            stateIds,
+            false,
+            operation !== 'clear-buildings',
+            description,
+            scope,
+            [],
+            true
+        );
     }
 
     private showAreaOperationConfirmation(
@@ -2061,7 +2663,8 @@ export class TopBar extends Subscriber {
         reindexAfter: boolean,
         description: string,
         scope: string,
-        riverIds: number[] = []
+        riverIds: number[] = [],
+        entireMap = false
     ) {
         const modal = document.getElementById('north-america-pipeline-modal') as HTMLDivElement | null;
         const target = document.getElementById('north-america-pipeline-target') as HTMLSelectElement | null;
@@ -2077,6 +2680,7 @@ export class TopBar extends Subscriber {
             stateIds,
             perContinent,
             reindexAfter,
+            entireMap,
             riverIds,
         };
         modal.dataset.mode = 'area-operation';
@@ -2107,12 +2711,14 @@ export class TopBar extends Subscriber {
         this.areaOperationPending = true;
         vscode.postMessage<WorldMapMessage>({
             command: 'runareaoperation',
+            requestId: this.beginRequest('areaoperation'),
             operation: pending.operation,
             provinceIds: pending.provinceIds,
             stateIds: pending.stateIds,
             perContinent: pending.perContinent,
             includeWasteland: this.areaIncludeWasteland,
             reindexAfter: pending.reindexAfter,
+            entireMap: pending.entireMap,
             riverIds: pending.riverIds,
         });
         this.hideNorthAmericaPipelineModal();
@@ -2123,6 +2729,7 @@ export class TopBar extends Subscriber {
         this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
             const message = event.data as WorldMapMessage;
             if (message.command !== 'areaoperationresult') return;
+            if (!this.completeRequest('areaoperation', message.requestId)) return;
             this.areaOperationPending = false;
             if (!message.success) {
                 this.showActionStatus(message.error ?? feLocalize('worldmap.area.failed', 'Area operation failed.'), 'warn');
@@ -2176,6 +2783,7 @@ export class TopBar extends Subscriber {
         this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
             const message = event.data as WorldMapMessage;
             if (message.command !== 'continentpipelineresult') return;
+            if (!this.completeRequest('continentpipeline', message.requestId)) return;
             if (!message.success) {
                 this.continentPipelinePending = false;
                 this.continentPipelineQueue = [];
@@ -2213,6 +2821,7 @@ export class TopBar extends Subscriber {
         this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
             const message = event.data as WorldMapMessage;
             if (message.command !== 'removeallcoresresult') return;
+            if (!this.completeRequest('removeallcores', message.requestId)) return;
             this.removeAllCoresPending = false;
             apply.disabled = false;
             cancel.disabled = false;
@@ -2412,6 +3021,7 @@ export class TopBar extends Subscriber {
         this.setNorthAmericaPipelineError(feLocalize('worldmap.continent.pending', 'Running {0} consolidation for {1}...', name, next.targetCountryTag));
         vscode.postMessage<WorldMapMessage>({
             command: 'runcontinentpipeline',
+            requestId: this.beginRequest('continentpipeline'),
             continentId: next.continentId,
             targetCountryTag: next.targetCountryTag,
         });
@@ -2479,7 +3089,10 @@ export class TopBar extends Subscriber {
         if (apply) apply.disabled = true;
         if (cancel) cancel.disabled = true;
         this.setNorthAmericaPipelineError(feLocalize('worldmap.cores.pending', 'Removing all core records...'));
-        vscode.postMessage<WorldMapMessage>({ command: 'removeallcores' });
+        vscode.postMessage<WorldMapMessage>({
+            command: 'removeallcores',
+            requestId: this.beginRequest('removeallcores'),
+        });
     }
 
     private confirmSequentialReindex() {
@@ -2532,20 +3145,6 @@ export class TopBar extends Subscriber {
     private toggleAreaIncludeWasteland() {
         this.areaIncludeWasteland = !this.areaIncludeWasteland;
         setState({ areaIncludeWasteland: this.areaIncludeWasteland });
-    }
-
-    private loadStrategicRegionEditButtons() {
-        const assignToSRButton = document.getElementById('assign-to-strategicregion') as HTMLButtonElement;
-
-        this.addSubscription(fromEvent<MouseEvent>(assignToSRButton, 'click').subscribe(e => {
-            e.preventDefault();
-            e.stopPropagation();
-            this.assignSelectionToStrategicRegion();
-        }));
-
-        this.addSubscription(combineLatest([this.selectedProvinceIds$, this.selectedStrategicRegionId$]).subscribe(([selectedProvinceIds, selectedSRId]) => {
-            assignToSRButton.disabled = selectedProvinceIds.size === 0 || selectedSRId === undefined;
-        }));
     }
 
     private loadNewProvinceButton() {
@@ -2638,11 +3237,6 @@ export class TopBar extends Subscriber {
         this.refreshWarningsDisplay();
     }
 
-    private toggleWarningsFilterByColorSet() {
-        this.warningsFilterByColorSet = !this.warningsFilterByColorSet;
-        this.refreshWarningsDisplay();
-    }
-
     private refreshWarningsDisplay() {
         const worldMap = this.loader.worldMap;
         const warnings = document.getElementById('warnings') as HTMLTextAreaElement;
@@ -2659,26 +3253,12 @@ export class TopBar extends Subscriber {
     }
 
     private filterWarnings(warnings: WorldMapWarning[]): WorldMapWarning[] {
-        if (!this.warningsFilterByViewMode && !this.warningsFilterByColorSet) {
+        if (!this.warningsFilterByViewMode) {
             return warnings;
         }
 
-        const allowedTypes = new Set<string>();
-        if (this.warningsFilterByViewMode) {
-            allowedTypes.add(this.viewMode$.value);
-        }
-        if (this.warningsFilterByColorSet) {
-            const type = colorSetToWarningSourceType(this.colorSet$.value);
-            if (type) {
-                allowedTypes.add(type);
-            }
-        }
-
-        if (allowedTypes.size === 0) {
-            return warnings;
-        }
-
-        return warnings.filter(w => w.source.some(s => allowedTypes.has(s.type)));
+        const activeViewMode = this.viewMode$.value;
+        return warnings.filter(warning => warning.source.some(source => source.type === activeViewMode));
     }
 
     private getSelectedRegionBoundingBox(): Zone | undefined {
@@ -2927,11 +3507,6 @@ export class TopBar extends Subscriber {
                         checked: this.warningsFilterByViewMode,
                         action: () => this.toggleWarningsFilterByViewMode(),
                     },
-                    {
-                        label: feLocalize('worldmap.contextmenu.warnings.bycolorset', 'Only show warnings for current color set'),
-                        checked: this.warningsFilterByColorSet,
-                        action: () => this.toggleWarningsFilterByColorSet(),
-                    },
                 ],
             },
             {
@@ -3034,6 +3609,12 @@ export class TopBar extends Subscriber {
                         action: () => this.runGlobalAreaOperation('clear-resources'),
                     },
                     {
+                        label: feLocalize('worldmap.contextmenu.removeallbuildings', 'REMOVE ALL PROVINCE BUILDINGS (ENTIRE MAP)'),
+                        tooltip: feLocalize('worldmap.contextmenu.removeallbuildings.tooltip', 'Remove every state buildings block and every province building record from the entire loaded map.'),
+                        disabled: this.areaOperationPending,
+                        action: () => this.runGlobalAreaOperation('clear-buildings'),
+                    },
+                    {
                         label: feLocalize('worldmap.contextmenu.reindexall', 'REINDEX ALL PROVINCES AND STATES'),
                         tooltip: feLocalize('worldmap.contextmenu.reindexall.tooltip', 'Renumber all loaded provinces and states sequentially from 1 and rewrite map, state, strategic-region, supply-area, capital, railway, supply-node, adjacency, and building references.'),
                         disabled: this.areaOperationPending || this.continentPipelinePending || this.reindexPending,
@@ -3115,6 +3696,18 @@ export class TopBar extends Subscriber {
                         label: feLocalize('worldmap.contextmenu.provincetools.createstrategic', 'New Strat Region from Selected Provinces'),
                         disabled: selectedProvinceIds.size === 0,
                         action: () => this.createStrategicRegionFromSelectedProvinces(),
+                    },
+                    {
+                        label: feLocalize(
+                            'TODO',
+                            'Assign Selected Provinces to Selected Strategic Region'
+                        ),
+                        tooltip: feLocalize(
+                            'TODO',
+                            'Move the selected provinces into the currently selected strategic region (Ctrl+Shift+G).'
+                        ),
+                        disabled: selectedProvinceIds.size === 0 || selectedStrategicRegionId === undefined,
+                        action: () => this.assignSelectionToStrategicRegion(),
                     },
                     {
                         label: feLocalize('worldmap.contextmenu.provincetools.verifyocean', 'Verify Ocean-Tile Readiness'),
@@ -3355,7 +3948,11 @@ export class TopBar extends Subscriber {
                     mapY >= 0 &&
                     mapY < worldMap.height
                 ) {
-                    this.paintLineTo(mapX, mapY);
+                    if (this.paintTool === 'lasso') {
+                        this.appendLassoPoint(mapX, mapY);
+                    } else {
+                        this.paintLineTo(mapX, mapY);
+                    }
                 }
 
                 const province = worldMap.getProvinceByPosition(mapX, mapY);
@@ -3397,6 +3994,7 @@ export class TopBar extends Subscriber {
 
                 this.isPainting = false;
                 this.lastPaintMapPosition = undefined;
+                this.lassoPoints$.next([]);
             })
         );
 
@@ -3409,35 +4007,46 @@ export class TopBar extends Subscriber {
 
         this.addSubscription(fromEvent<MouseEvent>(canvas, 'mousedown').subscribe((e) => {
             if (e.button === 0) {
-                // Paintbrush mode: start painting
-                if (this.paintbrushActive$.value) {
-                    if (this.paintbrushSavePending) {
+                switch (this.activeTool$.value) {
+                    case 'paint': {
+                        if (this.paintbrushSavePending) {
+                            e.preventDefault();
+                            return;
+                        }
+                        this.paintStrokeHistoryRecorded = false;
+                        const position = this.eventToMapPosition(canvas, e);
+
+                        if (
+                            position &&
+                            position.y >= 0 &&
+                            position.y < this.loader.worldMap!.height
+                        ) {
+                            this.hoverMapX$.next(position.x);
+                            this.hoverMapY$.next(position.y);
+                            if (this.paintTool === 'fill') {
+                                this.isPainting = false;
+                                this.lastPaintMapPosition = undefined;
+                                this.fillAtPosition(position.x, position.y);
+                            } else if (this.paintTool === 'lasso') {
+                                this.isPainting = true;
+                                this.lastPaintMapPosition = undefined;
+                                this.lassoPoints$.next([{ x: position.x, y: position.y }]);
+                            } else {
+                                this.isPainting = true;
+                                this.lastPaintMapPosition = { x: position.x, y: position.y };
+                                this.paintAtPosition(position.x, position.y);
+                            }
+                        }
+
                         e.preventDefault();
                         return;
                     }
-                    this.paintStrokeHistoryRecorded = false;
-                    const position = this.eventToMapPosition(canvas, e);
-
-                    if (
-                        position &&
-                        position.y >= 0 &&
-                        position.y < this.loader.worldMap!.height
-                    ) {
-                        this.hoverMapX$.next(position.x);
-                        this.hoverMapY$.next(position.y);
-                        if (this.paintTool === 'fill') {
-                            this.isPainting = false;
-                            this.lastPaintMapPosition = undefined;
-                            this.fillAtPosition(position.x, position.y);
-                        } else {
-                            this.isPainting = true;
-                            this.lastPaintMapPosition = { x: position.x, y: position.y };
-                            this.paintAtPosition(position.x, position.y);
-                        }
-                    }
-
-                    e.preventDefault();
-                    return;
+                    case 'transferWand':
+                        e.preventDefault();
+                        return;
+                    case 'none':
+                    case 'select':
+                        break;
                 }
 
                 dragMoved = false;
@@ -3453,6 +4062,7 @@ export class TopBar extends Subscriber {
                             this.toggleSelectedProvince(prov);
                         } else if (e.shiftKey) {
                             // Shift+mousedown starts drag-selection and adds the hovered province.
+                            this.activeTool$.next('select');
                             pressedLeft = true;
                             dragStarted = true;
                             const next = new Set(this.selectedProvinceIds$.value);
@@ -3464,6 +4074,9 @@ export class TopBar extends Subscriber {
                         this.dragProcessedProvinceIds.add(prov);
                     } else {
                         pressedLeft = e.shiftKey;
+                        if (pressedLeft) {
+                            this.activeTool$.next('select');
+                        }
                     }
                 } else if (this.viewMode$.value === 'state') {
                     const st = this.hoverStateId$.value;
@@ -3473,6 +4086,7 @@ export class TopBar extends Subscriber {
                             this.toggleSelectedState(st);
                         } else if (e.shiftKey) {
                             // Shift+mousedown starts drag-selection and adds the hovered state.
+                            this.activeTool$.next('select');
                             pressedLeft = true;
                             dragStarted = true;
                             const next = new Set(this.selectedStateIds$.value);
@@ -3484,6 +4098,9 @@ export class TopBar extends Subscriber {
                         this.dragProcessedStateIds.add(st);
                     } else {
                         pressedLeft = e.shiftKey;
+                        if (pressedLeft) {
+                            this.activeTool$.next('select');
+                        }
                     }
                 } else {
                     pressedLeft = false;
@@ -3519,6 +4136,9 @@ export class TopBar extends Subscriber {
             // Paintbrush: stop painting but keep the panel open for confirmation.
             // The user must explicitly click Apply or Cancel.
             if (this.isPainting) {
+                if (this.paintTool === 'lasso') {
+                    this.finishLassoAssignment();
+                }
                 this.isPainting = false;
                 this.lastPaintMapPosition = undefined;
                 return;
@@ -3533,20 +4153,28 @@ export class TopBar extends Subscriber {
                 this.selectionRedoStackStates.length = 0;
             }
             dragStarted = false;
+            if (this.activeTool$.value === 'select') {
+                this.activeTool$.next('none');
+            }
         }));
 
         this.addSubscription(fromEvent<MouseEvent>(canvas, 'click').subscribe((e) => {
-            if (this.paintbrushActive$.value) {
-                return;
+            switch (this.activeTool$.value) {
+                case 'paint':
+                    return;
+                case 'transferWand':
+                    if (this.viewMode$.value === 'province' || this.viewMode$.value === 'state') {
+                        e.preventDefault();
+                        this.applyTransferWand(e.shiftKey);
+                    }
+                    return;
+                case 'none':
+                case 'select':
+                    break;
             }
             if (dragMoved) {
                 dragMoved = false;
                 return; // already handled by drag
-            }
-            if (this.transferWandActive && (this.viewMode$.value === 'province' || this.viewMode$.value === 'state')) {
-                e.preventDefault();
-                this.applyTransferWand(e.shiftKey);
-                return;
             }
             switch (this.viewMode$.value) {
                 case 'province':
@@ -3622,8 +4250,8 @@ export class TopBar extends Subscriber {
             this.setSearchBoxPlaceHolder(wm);
         }));
 
-        this.addSubscription(combineLatest([this.viewMode$, this.colorSet$]).subscribe(() => {
-            if (this.warningsFilterByViewMode || this.warningsFilterByColorSet) {
+        this.addSubscription(this.viewMode$.subscribe(() => {
+            if (this.warningsFilterByViewMode) {
                 this.refreshWarningsDisplay();
             }
         }));
@@ -3697,27 +4325,33 @@ export class TopBar extends Subscriber {
             }
 
             // P toggles paintbrush mode (when not in an input)
-            if (key === 'p' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            if (key === 'p' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
                 e.preventDefault();
                 this.paintTool = 'brush';
                 this.togglePaintbrushMode();
                 return;
             }
 
-            if (key === 'e' && !e.ctrlKey && !e.altKey && !e.metaKey &&
+            if (key === 'e' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey &&
                 this.paintbrushActive$.value) {
                 e.preventDefault();
                 this.togglePaintEraser();
                 return;
             }
 
-            if (key === 'f' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            if (key === 'f' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
                 e.preventDefault();
                 this.toggleFillBucketMode();
                 return;
             }
 
-            if (key === 'w' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            if (key === 'l' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+                e.preventDefault();
+                this.toggleLassoMode();
+                return;
+            }
+
+            if (key === 'w' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
                 e.preventDefault();
                 this.toggleTransferWand();
                 return;
@@ -3927,8 +4561,9 @@ export class TopBar extends Subscriber {
             return false;
         }
 
-        const tag = target.tagName;
-        return tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable;
+        return target.isContentEditable || target.closest(
+            'input, textarea, select, button, a, [role="combobox"], [role="menuitem"], [role="menuitemcheckbox"], [role="option"]'
+        ) !== null;
     }
 
     private applyTransferWand(forceRetarget: boolean) {
@@ -4089,6 +4724,28 @@ export class TopBar extends Subscriber {
         }, 3200);
     }
 
+    private handleToolWheel(event: WheelEvent): boolean {
+        if (!event.altKey || this.activeTool$.value !== 'paint' || !this.paintbrushActive$.value) {
+            return false;
+        }
+        if (event.deltaY === 0) {
+            return true;
+        }
+
+        const nextSize = adjustBrushSizeForWheel(this.brushSize$.value, event.deltaY);
+        this.brushSize$.next(nextSize);
+        const brushSizeSelect = document.getElementById('brushsize') as HTMLInputElement | null;
+        if (brushSizeSelect) {
+            brushSizeSelect.value = String(nextSize);
+        }
+        this.showActionStatus(feLocalize(
+            'worldmap.paintbrush.size',
+            'Brush size: {0} px',
+            nextSize
+        ));
+        return true;
+    }
+
     private toggleVictoryPoint(provinceId: number) {
         const worldMap = this.loader.worldMap;
         const state = worldMap.getStateByProvinceId(provinceId);
@@ -4116,6 +4773,7 @@ export class TopBar extends Subscriber {
             const localisationKey = `VICTORY_POINT_${state.id}`;
             vscode.postMessage<WorldMapMessage>({
                 command: 'persistvictorypointlocalisation',
+                requestId: this.beginPersistence('victory point localisation'),
                 key: localisationKey,
                 value: `Victory Point ${state.id}`,
                 stateId: state.id,
@@ -4144,9 +4802,26 @@ export class TopBar extends Subscriber {
         if (created !== undefined) {
             const after = this.loader.worldMap.snapshotStates(created.changedStateIds);
             this.recordMapEdit(before, after);
-            this.persistStates(created.changedStateIds);
+            this.persistStates(
+                created.changedStateIds,
+                created.deletedFiles,
+                created.deletedStates,
+                undefined,
+                created.stateReplacements
+            );
             this.selectedStateId$.next(created.newStateId);
             this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.showActionStatus(feLocalize(
+                'TODO',
+                'Created state {0} from {1} selected provinces.',
+                created.newStateId,
+                selectedProvinceIds.length
+            ));
+        } else {
+            this.showActionStatus(feLocalize(
+                'TODO',
+                'No state was created from the selected provinces.'
+            ), 'warn');
         }
     }
 
@@ -4218,7 +4893,74 @@ export class TopBar extends Subscriber {
         }));
     }
 
+    private loadLassoButton() {
+        const button = document.getElementById('toggle-lasso') as HTMLButtonElement | null;
+        if (!button) return;
+
+        this.addSubscription(fromEvent<MouseEvent>(button, 'click').subscribe(event => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.toggleLassoMode();
+        }));
+        this.addSubscription(combineLatest([
+            this.selectedProvinceIds$,
+            this.paintbrushActive$,
+            this.loader.loading$,
+        ]).subscribe(([selected, active, loading]) => {
+            button.disabled = loading || this.paintbrushSavePending || (!active && selected.size !== 1);
+            button.classList.toggle('active', active && this.paintTool === 'lasso');
+            button.setAttribute('aria-pressed', String(active && this.paintTool === 'lasso'));
+        }));
+    }
+
+    private toggleLassoMode() {
+        if (this.activeTool$.value === 'transferWand') {
+            this.showActionStatus(feLocalize(
+                'worldmap.paintbrush.wandactive',
+                'Disable the Transfer Wand before entering paintbrush mode.'
+            ), 'warn');
+            return;
+        }
+
+        if (this.paintbrushActive$.value) {
+            this.paintTool = this.paintTool === 'lasso' ? 'brush' : 'lasso';
+            this.isPainting = false;
+            this.lastPaintMapPosition = undefined;
+            this.lassoPoints$.next([]);
+            this.paintbrushActive$.next(true);
+            this.showActionStatus(this.paintTool === 'lasso'
+                ? feLocalize('worldmap.lasso.active', 'Lasso active. Drag a closed region; same-type pixels are staged for the selected target province.')
+                : feLocalize('worldmap.paintbrush.active', 'Paintbrush active. Drag to transfer pixels, then Apply.'));
+            return;
+        }
+
+        const selected = Array.from(this.selectedProvinceIds$.value);
+        const target = selected.length === 1
+            ? this.loader.worldMap.getProvinceById(selected[0])
+            : undefined;
+        if (!target) {
+            this.showActionStatus(feLocalize(
+                'worldmap.lasso.target',
+                'Select exactly one existing land or sea target province before using Lasso.'
+            ), 'warn');
+            return;
+        }
+        this.paintTool = 'lasso';
+        this.enterPaintbrushMode(target, true);
+        this.showActionStatus(feLocalize(
+            'worldmap.lasso.active',
+            'Lasso active. Drag a closed region; same-type pixels are staged for the selected target province.'
+        ));
+    }
+
     private toggleFillBucketMode() {
+        if (this.activeTool$.value === 'transferWand') {
+            this.showActionStatus(feLocalize(
+                'worldmap.paintbrush.wandactive',
+                'Disable the Transfer Wand before entering paintbrush mode.'
+            ), 'warn');
+            return;
+        }
         if (this.paintbrushActive$.value) {
             this.paintTool = this.paintTool === 'fill' ? 'brush' : 'fill';
             this.paintbrushActive$.next(true);
@@ -4249,6 +4991,11 @@ export class TopBar extends Subscriber {
             this.toggleTransferWand();
         }));
         this.addSubscription(combineLatest([this.viewMode$, this.loader.loading$]).subscribe(([mode, loading]) => {
+            if (mode !== 'province' && mode !== 'state' && this.transferWandActive) {
+                this.transferWandActive = false;
+                this.activeTool$.next('none');
+                this.resetTransferWandTarget();
+            }
             button.disabled = loading || (mode !== 'province' && mode !== 'state');
             button.classList.toggle('active', this.transferWandActive);
             button.setAttribute('aria-pressed', String(this.transferWandActive));
@@ -4256,7 +5003,15 @@ export class TopBar extends Subscriber {
     }
 
     private toggleTransferWand() {
+        if (!this.transferWandActive && this.activeTool$.value === 'paint') {
+            this.showActionStatus(feLocalize(
+                'worldmap.wand.paintactive',
+                'Finish or cancel the active paintbrush edit before enabling the Transfer Wand.'
+            ), 'warn');
+            return;
+        }
         this.transferWandActive = !this.transferWandActive;
+        this.activeTool$.next(this.transferWandActive ? 'transferWand' : 'none');
         this.resetTransferWandTarget();
         const button = document.getElementById('toggle-transfer-wand') as HTMLButtonElement | null;
         button?.classList.toggle('active', this.transferWandActive);
@@ -4410,6 +5165,7 @@ export class TopBar extends Subscriber {
 
         vscode.postMessage<WorldMapMessage>({
             command: 'persistprovincebmp',
+            requestId: this.beginPersistence('province BMP'),
             paintedPixels: Array.from(result.paintedPixels.entries()).map(([key, color]) => {
                 const [x, y] = key.split(',').map(Number);
                 return [x, y, color];
@@ -4435,7 +5191,10 @@ export class TopBar extends Subscriber {
     private requestDestructiveReindex() {
         if (this.reindexPending) return;
         this.reindexPending = true;
-        vscode.postMessage<WorldMapMessage>({ command: 'reindexmap' });
+        vscode.postMessage<WorldMapMessage>({
+            command: 'reindexmap',
+            requestId: this.beginRequest('reindexmap'),
+        });
     }
 
     /**
@@ -4446,6 +5205,13 @@ export class TopBar extends Subscriber {
      *   (create a brand-new province).
      */
     private enterPaintbrushMode(targetProvince?: any, useExistingColor = true) {
+        if (this.activeTool$.value === 'transferWand') {
+            this.showActionStatus(feLocalize(
+                'worldmap.paintbrush.wandactive',
+                'Disable the Transfer Wand before entering paintbrush mode.'
+            ), 'warn');
+            return;
+        }
         let nextColor: number | undefined;
 
         if (targetProvince && useExistingColor) {
@@ -4508,8 +5274,10 @@ export class TopBar extends Subscriber {
         // Set paintbrush state
         this.paintbrushColor$.next(nextColor);
         this.paintedPixels$.next(new Map());
+        this.lassoPoints$.next([]);
         this.provinceDraft$.next(draft);
         this.paintbrushActive$.next(true);
+        this.activeTool$.next('paint');
         this.paintbrushCanUndo$.next(false);
         this.paintbrushCanRedo$.next(false);
         this.paintDraftHistory.clear();
@@ -4551,12 +5319,133 @@ export class TopBar extends Subscriber {
             return;
         }
 
+        let newProvinceSourceStateId: number | undefined;
+        let newProvinceSourceStrategicRegionId: number | undefined;
+        if (draft.isNewProvince) {
+            if (this.loader.worldMap.getProvinceByColor(draft.color)) {
+                const message = feLocalize(
+                    'TODO',
+                    'New province creation was refused because its allocated colour is already in use. No map files were changed.'
+                );
+                this.provinceDraft$.next({
+                    ...draft,
+                    valid: false,
+                    errors: [...draft.errors, message],
+                });
+                this.showActionStatus(message, 'warn');
+                return;
+            }
+            const sourceProvince = this.loader.worldMap.getProvinceById(draft.sourceProvinceId);
+            const sourceState = sourceProvince
+                ? this.loader.worldMap.getStateByProvinceId(sourceProvince.id)
+                : undefined;
+            const sourceRegion = sourceProvince
+                ? this.loader.worldMap.getStrategicRegionByProvinceId(sourceProvince.id)
+                : undefined;
+            const missingMembership: string[] = [];
+            if (!sourceProvince) {
+                missingMembership.push('source province');
+            }
+            if (draft.type === 'land' && !sourceState) {
+                missingMembership.push('source state');
+            }
+            if (!sourceRegion) {
+                missingMembership.push('source strategic region');
+            }
+            if (missingMembership.length > 0) {
+                const message = feLocalize(
+                    'TODO',
+                    'New province creation was refused because the {0} membership is missing. No map files were changed.',
+                    missingMembership.join(', ')
+                );
+                this.provinceDraft$.next({
+                    ...draft,
+                    valid: false,
+                    errors: [...draft.errors, message],
+                });
+                this.showActionStatus(message, 'warn');
+                return;
+            }
+            newProvinceSourceStateId = sourceState?.id;
+            newProvinceSourceStrategicRegionId = sourceRegion!.id;
+        }
+
         // Apply the draft pixels to the live map and rebuild data structures.
         const { affectedProvinceIds, newProvinceId } =
             this.loader.worldMap.applyPaintbrushEdits(
                 draft.pixels,
                 draft.sourceProvinceId || undefined
             );
+        const targetProvinceId = newProvinceId ?? (draft.sourceProvinceId || 0);
+        const membershipStateIds = new Set<number>();
+        const membershipStrategicRegionIds = new Set<number>();
+        if (newProvinceId !== undefined && draft.isNewProvince) {
+            if (draft.type === 'land') {
+                const changedStateIds = this.loader.worldMap.assignProvincesToState(
+                    [newProvinceId],
+                    newProvinceSourceStateId!
+                );
+                if (!changedStateIds) {
+                    this.loader.refresh();
+                    this.finishPaintbrushSession();
+                    this.showActionStatus(
+                        feLocalize(
+                            'TODO',
+                            'New province creation was reverted because state membership could not be applied.'
+                        ),
+                        'warn'
+                    );
+                    return;
+                }
+                changedStateIds.forEach(id => membershipStateIds.add(id));
+            }
+            const changedRegionIds = this.loader.worldMap.assignProvincesToStrategicRegion(
+                [newProvinceId],
+                newProvinceSourceStrategicRegionId!
+            );
+            if (!changedRegionIds) {
+                this.loader.refresh();
+                this.finishPaintbrushSession();
+                this.showActionStatus(
+                    feLocalize(
+                        'TODO',
+                        'New province creation was reverted because strategic-region membership could not be applied.'
+                    ),
+                    'warn'
+                );
+                return;
+            }
+            changedRegionIds.forEach(id => membershipStrategicRegionIds.add(id));
+        }
+        const emptiedDonorIds = affectedProvinceIds.filter(id => {
+            if (id === targetProvinceId) {
+                return false;
+            }
+            const province = this.loader.worldMap.getProvinceById(id);
+            return !!province && province.mass === 0;
+        });
+        const emptiedDonorRepair = emptiedDonorIds.length > 0
+            ? this.loader.worldMap.mergeProvinces(targetProvinceId, emptiedDonorIds)
+            : undefined;
+        const targetStateId = this.loader.worldMap.getStateByProvinceId(targetProvinceId)?.id;
+        const emptiedStateIds = emptiedDonorRepair
+            ? emptiedDonorRepair.changedStateIds.filter(id => {
+                const state = this.loader.worldMap.getStateById(id);
+                return !!state && state.provinces.length === 0 && id !== targetStateId;
+            })
+            : [];
+        const emptiedStateRepair = targetStateId !== undefined && emptiedStateIds.length > 0
+            ? this.loader.worldMap.mergeStates(targetStateId, emptiedStateIds)
+            : undefined;
+        for (const id of emptiedDonorRepair?.changedStateIds ?? []) {
+            membershipStateIds.add(id);
+        }
+        for (const id of emptiedStateRepair?.changedStateIds ?? []) {
+            membershipStateIds.add(id);
+        }
+        for (const id of emptiedDonorRepair?.changedStrategicRegionIds ?? []) {
+            membershipStrategicRegionIds.add(id);
+        }
 
         const provinces = Array.from(new Set(affectedProvinceIds))
             .map(id => this.loader.worldMap.getProvinceById(id))
@@ -4587,15 +5476,37 @@ export class TopBar extends Subscriber {
         this.paintDraftHistory.clear();
         this.syncPaintDraftHistoryAvailability();
 
-        vscode.postMessage({
+        vscode.postMessage<WorldMapMessage>({
             command: 'persistprovincebmp',
+            requestId: this.beginPersistence('province BMP'),
             paintedPixels: pixelArray,
             width: this.loader.worldMap.width,
             height: this.loader.worldMap.height,
             provinces,
             previousProvinces: undoBaseline,
-            targetProvinceId: draft.sourceProvinceId || 0,
-        } as any);
+            deletedProvinceIds: emptiedDonorRepair?.deletedProvinceIds,
+            provinceReplacements: emptiedDonorRepair
+                ? Object.fromEntries(emptiedDonorRepair.deletedProvinceIds.map(id => [id, targetProvinceId]))
+                : undefined,
+            // A new-province stroke inherits its metadata from sourceProvinceId,
+            // but its pixels belong to the newly-created province. The backend
+            // validates every pixel against targetProvinceId, so sending the
+            // source here rejected every automatically allocated colour.
+            targetProvinceId,
+            states: membershipStateIds.size > 0
+                ? this.collectPersistedStates(Array.from(membershipStateIds))
+                : undefined,
+            deletedStateFiles: emptiedStateRepair?.deletedFiles,
+            deletedStates: emptiedStateRepair?.deletedStates,
+            stateReplacements: emptiedStateRepair && targetStateId !== undefined
+                ? Object.fromEntries(emptiedStateIds.map(id => [id, targetStateId]))
+                : undefined,
+            strategicRegions: membershipStrategicRegionIds.size > 0
+                ? this.collectPersistedStrategicRegions(Array.from(membershipStrategicRegionIds))
+                : undefined,
+            deletedStrategicRegionFiles: emptiedDonorRepair?.deletedStrategicRegionFiles,
+            deletedStrategicRegions: emptiedDonorRepair?.deletedStrategicRegions,
+        });
 
         // Clear draft pixels; the draft itself stays until finishPaintbrushSession.
         this.paintedPixels$.next(new Map());
@@ -4605,6 +5516,9 @@ export class TopBar extends Subscriber {
 
         if (newProvinceId !== undefined) {
             this.selectedProvinceIds$.next(new Set([newProvinceId]));
+        }
+        if (emptiedDonorRepair) {
+            this.refreshAfterPaintbrushSave = true;
         }
 
         sendEvent('worldmap.paintbrush.commit', {
@@ -4625,10 +5539,16 @@ export class TopBar extends Subscriber {
      */
     private finishPaintbrushSession(): void {
         this.paintbrushActive$.next(false);
+        this.activeTool$.next('none');
         this.paintbrushColor$.next(0);
         this.paintedPixels$.next(new Map());
+        this.lassoPoints$.next([]);
         this.provinceDraft$.next(undefined);
         this.brushSize$.next(1);
+        const brushSizeSelect = document.getElementById('brushsize') as HTMLInputElement | null;
+        if (brushSizeSelect) {
+            brushSizeSelect.value = '1';
+        }
 
         this.paintbrushPreviousProvinces = null;
         this.sourceProvinceType = 'land';
@@ -4662,10 +5582,16 @@ export class TopBar extends Subscriber {
         }
 
         this.paintbrushActive$.next(false);
+        this.activeTool$.next('none');
         this.paintbrushColor$.next(0);
         this.paintedPixels$.next(new Map());
+        this.lassoPoints$.next([]);
         this.provinceDraft$.next(undefined);
         this.brushSize$.next(1);
+        const brushSizeSelect = document.getElementById('brushsize') as HTMLInputElement | null;
+        if (brushSizeSelect) {
+            brushSizeSelect.value = '1';
+        }
         this.paintbrushPreviousProvinces = null;
         this.sourceProvinceType = 'land';
         this.paintAllowedProvinceIds = undefined;
@@ -4770,6 +5696,7 @@ export class TopBar extends Subscriber {
         this.lastPaintMapPosition = undefined;
         this.paintStrokeHistoryRecorded = false;
         this.paintbrushActive$.next(true);
+        this.activeTool$.next('paint');
         this.showActionStatus(this.paintTool === 'erase'
             ? feLocalize(
                 'worldmap.paintbrush.eraseractive',
@@ -4808,6 +5735,68 @@ export class TopBar extends Subscriber {
         this.paintAtPositions([{ x: mapX, y: mapY }]);
     }
 
+    private appendLassoPoint(mapX: number, mapY: number): void {
+        const points = this.lassoPoints$.value;
+        const previous = points[points.length - 1];
+        if (previous?.x === mapX && previous?.y === mapY) {
+            return;
+        }
+        this.lassoPoints$.next([...points, { x: mapX, y: mapY }]);
+    }
+
+    private finishLassoAssignment(): void {
+        const draft = this.provinceDraft$.value;
+        const points = this.lassoSnapping$.value
+            ? snapLassoPoints(this.lassoPoints$.value, this.lassoSnapRadius$.value, this.loader.worldMap.width)
+            : this.lassoPoints$.value;
+        this.lassoPoints$.next([]);
+        if (!this.paintbrushActive$.value || !draft || points.length < 3) {
+            this.showActionStatus(feLocalize(
+                'worldmap.lasso.toosmall',
+                'Draw a lasso with at least three distinct map points.'
+            ), 'warn');
+            return;
+        }
+
+        const worldMap = this.loader.worldMap;
+        const inverted = (document.getElementById('paintbrush-lasso-inverted') as HTMLInputElement | null)?.checked === true;
+        const result = applyLassoAssignment(
+            draft.pixels,
+            {
+                width: worldMap.width,
+                height: worldMap.height,
+                getColorAt: (x, y) => worldMap.getColorAt(x, y),
+                getProvinceIdAt: (x, y) => worldMap.getProvinceByPosition(x, y)?.id,
+                getProvinceTypeAt: (x, y) => worldMap.getProvinceTypeAt(x, y),
+            },
+            {
+                points,
+                color: this.paintbrushColor$.value,
+                sourceProvinceType: this.sourceProvinceType,
+                inverted,
+                allowedProvinceIds: this.paintAllowedProvinceIds,
+            }
+        );
+
+        if (!result.changed) {
+            this.showActionStatus(feLocalize(
+                'worldmap.lasso.noeligiblepixels',
+                'The lasso contained no eligible {0} pixels outside the target province.',
+                this.sourceProvinceType
+            ), 'warn');
+            return;
+        }
+
+        this.recordPaintDraftHistoryBeforeMutation(draft.pixels);
+        this.provinceDraft$.next({ ...draft, pixels: result.pixels });
+        this.paintedPixels$.next(result.pixels);
+        this.showActionStatus(feLocalize(
+            'worldmap.lasso.staged',
+            'Lasso staged {0} same-type pixels for the target province. Review them, then Apply.',
+            result.pixels.size
+        ));
+    }
+
     /**
      * Apply all dabs produced by one sampled pointer event as one transaction.
      * This keeps stroke interpolation exact without cloning and rendering the
@@ -4820,6 +5809,7 @@ export class TopBar extends Subscriber {
         }
 
         const worldMap = this.loader.worldMap;
+        const historySnapshot = this.paintStrokeHistoryRecorded ? undefined : new Map(draft.pixels);
         const result = applyBrushStroke(
             draft.pixels,
             {
@@ -4840,8 +5830,11 @@ export class TopBar extends Subscriber {
         );
 
         if (result.changed) {
-            this.recordPaintDraftHistoryBeforeMutation(draft.pixels);
+            if (historySnapshot) {
+                this.recordPaintDraftHistoryBeforeMutation(historySnapshot);
+            }
             this.provinceDraft$.next({ ...draft, pixels: result.pixels });
+            this.paintedPixelDelta$.next(result.delta!);
             this.paintedPixels$.next(result.pixels);
         }
     }
@@ -4979,7 +5972,10 @@ export class TopBar extends Subscriber {
      * Undo the last paintbrush BMP edit via the backend.
      */
     private undoPaintbrushEdit() {
-        vscode.postMessage({ command: 'undoprovincebmp' } as any);
+        vscode.postMessage<WorldMapMessage>({
+            command: 'undoprovincebmp',
+            requestId: this.beginPersistence('province BMP undo'),
+        });
         this.paintbrushCanUndo$.next(false);
     }
 
@@ -4987,7 +5983,10 @@ export class TopBar extends Subscriber {
      * Redo the last undone paintbrush BMP edit via the backend.
      */
     private redoPaintbrushEdit() {
-        vscode.postMessage({ command: 'redoprovincebmp' } as any);
+        vscode.postMessage<WorldMapMessage>({
+            command: 'redoprovincebmp',
+            requestId: this.beginPersistence('province BMP redo'),
+        });
         this.paintbrushCanRedo$.next(false);
     }
 
@@ -5001,10 +6000,11 @@ export class TopBar extends Subscriber {
         if (payload.length > 0 || deletedFiles.length > 0 || deletedRegions.length > 0) {
             vscode.postMessage<WorldMapMessage>({
                 command: 'persiststrategicregions',
+                requestId: this.beginPersistence('strategic region'),
                 strategicRegions: payload,
                 deletedFiles: Array.from(new Set(deletedFiles)),
                 deletedRegions,
-            } as any);
+            });
         }
     }
 
@@ -5040,9 +6040,10 @@ export class TopBar extends Subscriber {
         if (payload.length > 0 || deletedFiles.length > 0) {
             vscode.postMessage<WorldMapMessage>({
                 command: 'persistprovinces',
+                requestId: this.beginPersistence('province definition'),
                 provinces: payload,
                 deletedFiles: Array.from(new Set(deletedFiles)),
-            } as any);
+            });
         }
     }
 
@@ -5269,12 +6270,16 @@ export class TopBar extends Subscriber {
         const payload = this.collectPersistedStates(stateIds);
 
         if (payload.length > 0 || deletedFiles.length > 0 || deletedStates.length > 0) {
+            const correlatedRequestId = requestId ?? this.beginPersistence('state');
+            if (requestId) {
+                this.trackPersistenceRequest(requestId, 'state merge');
+            }
             vscode.postMessage<WorldMapMessage>({
                 command: 'persiststates',
                 states: payload,
                 deletedFiles: Array.from(new Set(deletedFiles)),
                 deletedStates,
-                requestId,
+                requestId: correlatedRequestId,
                 stateReplacements,
             });
         }
@@ -5378,9 +6383,14 @@ export class TopBar extends Subscriber {
         }
 
         const affectedRegionIds = new Set<number>([selectedStrategicRegionId]);
-        for (const provinceId of selectedProvinceIds) {
-            const src = this.loader.worldMap.getStrategicRegionByProvinceId(provinceId);
-            if (src) affectedRegionIds.add(src.id);
+        for (const stateId of selectedStateIds) {
+            const selectedState = this.loader.worldMap.getStateById(stateId);
+            for (const provinceId of selectedState?.provinces ?? []) {
+                const sourceRegion = this.loader.worldMap.getStrategicRegionByProvinceId(provinceId);
+                if (sourceRegion) {
+                    affectedRegionIds.add(sourceRegion.id);
+                }
+            }
         }
 
         const before = this.loader.worldMap.snapshotStrategicRegions(Array.from(affectedRegionIds.values()));
@@ -5584,26 +6594,40 @@ export class TopBar extends Subscriber {
             worldMap = this.loader.worldMap;
         }
 
-        let placeholder = '';
+        let label = '';
+        let count = 0;
         switch (this.viewMode$.value) {
-            case 'province':
-                placeholder = worldMap.provincesCount > 1 ? `1-${worldMap.provincesCount - 1}` : '';
+            case 'province': {
+                label = feLocalize('worldmap.topbar.viewmode.province', 'Province');
+                worldMap.forEachProvince(() => { count++; });
                 break;
-            case 'state':
-                placeholder = worldMap.statesCount > 1 ? `1-${worldMap.statesCount - 1}` : '';
+            }
+            case 'state': {
+                label = feLocalize('worldmap.topbar.viewmode.state', 'State');
+                worldMap.forEachState(() => { count++; });
                 break;
-            case 'strategicregion':
-                placeholder = worldMap.strategicRegionsCount > 1 ? `1-${worldMap.strategicRegionsCount - 1}` : '';
+            }
+            case 'strategicregion': {
+                label = feLocalize('worldmap.topbar.viewmode.strategicregion', 'Strategic Region');
+                worldMap.forEachStrategicRegion(() => { count++; });
                 break;
-            case 'supplyarea':
-                placeholder = worldMap.supplyAreasCount > 1 ? `1-${worldMap.supplyAreasCount - 1}` : '';
+            }
+            case 'supplyarea': {
+                label = feLocalize('worldmap.topbar.viewmode.supplyarea', 'Supply Area');
+                worldMap.forEachSupplyArea(() => { count++; });
                 break;
+            }
             default:
                 break;
         }
 
-        if (placeholder) {
-            this.searchBox.placeholder = feLocalize('worldmap.topbar.search.placeholder', 'Range: {0}', placeholder);
+        if (label) {
+            this.searchBox.placeholder = feLocalize(
+                'worldmap.topbar.search.placeholder',
+                '{0}: {1}',
+                label,
+                count.toLocaleString()
+            );
         } else {
             this.searchBox.placeholder = '';
         }
@@ -5632,29 +6656,4 @@ function unionZones(zones: Zone[]): Zone | undefined {
     }
 
     return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
-}
-
-function colorSetToWarningSourceType(colorSet: ColorSet): string | undefined {
-    switch (colorSet) {
-        case 'provinceid':
-        case 'provincetype':
-        case 'terrain':
-        case 'continent':
-            return 'province';
-        case 'stateid':
-        case 'statecategory':
-        case 'manpower':
-        case 'victorypoint':
-        case 'resources':
-        case 'owner':
-        case 'controller':
-            return 'state';
-        case 'strategicregionid':
-            return 'strategicregion';
-        case 'supplyareaid':
-        case 'supplyvalue':
-            return 'supplyarea';
-        default:
-            return undefined;
-    }
 }

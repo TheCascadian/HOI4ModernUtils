@@ -83,6 +83,7 @@ export class Renderer extends Subscriber {
     private paintOverlayCanvasContext: CanvasRenderingContext2D;
     private paintOverlayState: {
         pixels: ReadonlyMap<string, number>;
+        delta: ReadonlyMap<string, number | undefined>;
         color: number;
         x: number;
         y: number;
@@ -144,7 +145,11 @@ export class Renderer extends Subscriber {
                 topBar.display.selectedValues$,
                 topBar.paintbrushActive$,
                 topBar.paintedPixels$,
+                topBar.paintedPixelDelta$,
                 topBar.brushSize$,
+                topBar.lassoPoints$,
+                topBar.lassoSnapping$,
+                topBar.lassoSnapRadius$,
                 topBar.hoverMapX$,
                 topBar.hoverMapY$,
                 topBar.selectedConditions$,
@@ -270,6 +275,7 @@ export class Renderer extends Subscriber {
         if (this.oldMapState !== undefined && Object.keys(newMapState).every(k => this.oldMapState[k] === (newMapState as any)[k])) {
             return { redrawn: false, durationMs: 0 };
         }
+        const previousMapState = this.oldMapState;
         this.oldMapState = newMapState;
         const started = performance.now();
         performance.mark('hoi4mu.worldmap.render.start');
@@ -296,6 +302,15 @@ export class Renderer extends Subscriber {
                     newMapState.selectedConditions,
                     newMapState.mapMutation,
                 ].join('|'),
+                previousMapState &&
+                    previousMapState.worldMap === worldMap &&
+                    previousMapState.colorSet === 'warnings' &&
+                    newMapState.colorSet === 'warnings' &&
+                    previousMapState.warningFilter !== newMapState.warningFilter &&
+                    previousMapState.selectedConditions === newMapState.selectedConditions &&
+                    previousMapState.mapMutation === newMapState.mapMutation
+                    ? Renderer.getWarningAffectedProvinceIds(worldMap)
+                    : undefined,
             );
             this.renderGpuForeground(worldMap, gpuResult, renderContext);
         } else {
@@ -558,48 +573,25 @@ export class Renderer extends Subscriber {
         renderContext.renderedProvincesByOffset[xOffset] = renderedProvinces;
         const edgeVisible = Renderer.isEdgeVisible(topBar, viewPoint);
 
-        worldMap.forEachProvince(province => {
-            if (renderContext.viewPoint.bboxInView(province.boundingBox, xOffset)) {
-                const color = getColorByColorSet(topBar.colorSet$.value, province, worldMap, renderContext);
-                context.fillStyle = toColor(color);
-                Renderer.renderProvince(
-                    viewPoint,
-                    context,
-                    province,
-                    scale,
-                    xOffset,
-                    overwriteRenderPrecision,
-                    renderContext.renderPrecisionBase,
-                );
-                renderedProvinces.push(province);
-                renderedProvincesById[province.id] = province;
-            }
+        for (const province of worldMap.getProvincesInArea(viewPoint.getViewZone(xOffset))) {
+            const color = getColorByColorSet(topBar.colorSet$.value, province, worldMap, renderContext);
+            context.fillStyle = toColor(color);
+            Renderer.renderProvince(
+                viewPoint,
+                context,
+                province,
+                scale,
+                xOffset,
+                overwriteRenderPrecision,
+                renderContext.renderPrecisionBase,
+            );
+            renderedProvinces.push(province);
+            renderedProvincesById[province.id] = province;
+        }
 
-            if (edgeVisible) {
-                for (const edge of province.edges) {
-                    if (edge.path.length > 0) {
-                        continue;
-                    }
-
-                    const toProvince = worldMap.getProvinceById(edge.to);
-                    if (!toProvince) {
-                        continue;
-                    }
-
-                    const [startPoint, endPoint] = findNearestPoints(edge.start, edge.stop, province, toProvince);
-                    if (renderContext.viewPoint.lineInView(startPoint, endPoint, xOffset)) {
-                        if (!(province.id in renderedProvincesById)) {
-                            renderedProvinces.push(province);
-                            renderedProvincesById[province.id] = province;
-                        }
-                        if (!(edge.to in renderedProvincesById)) {
-                            renderedProvinces.push(toProvince);
-                            renderedProvincesById[edge.to] = toProvince;
-                        }
-                    }
-                }
-            }
-        });
+        if (edgeVisible) {
+            Renderer.addVisibleSyntheticEdges(worldMap, xOffset, renderContext, renderedProvinces);
+        }
     }
 
     private static renderMapForeground(worldMap: FEWorldMap, xOffset: number, renderContext: RenderContext) {
@@ -670,9 +662,11 @@ export class Renderer extends Subscriber {
     private renderPaintbrushOverlay(_worldMap: FEWorldMap): void {
         const context = this.backCanvasContext;
         const paintedPixels = this.topBar.paintedPixels$.value;
+        const paintedPixelDelta = this.topBar.paintedPixelDelta$.value;
         const brushColor = this.topBar.paintbrushColor$.value;
         const paintOverlayState = {
             pixels: paintedPixels,
+            delta: paintedPixelDelta,
             color: brushColor,
             x: this.viewPoint.x,
             y: this.viewPoint.y,
@@ -684,9 +678,15 @@ export class Renderer extends Subscriber {
         context.save();
         context.imageSmoothingEnabled = false;
 
-        if (!this.paintOverlayState ||
-            Object.keys(paintOverlayState).some(key =>
-                (this.paintOverlayState as any)[key] !== (paintOverlayState as any)[key])) {
+        const requiresFullRebuild = !this.paintOverlayState ||
+            this.paintOverlayState.pixels !== paintedPixels ||
+            this.paintOverlayState.color !== brushColor ||
+            this.paintOverlayState.x !== this.viewPoint.x ||
+            this.paintOverlayState.y !== this.viewPoint.y ||
+            this.paintOverlayState.scale !== this.viewPoint.scale ||
+            this.paintOverlayState.width !== this.canvasWidth ||
+            this.paintOverlayState.height !== this.canvasHeight;
+        if (requiresFullRebuild) {
             const overlayContext = this.paintOverlayCanvasContext;
             overlayContext.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
             overlayContext.fillStyle = toColorWithAlpha(brushColor, 0.5);
@@ -696,12 +696,55 @@ export class Renderer extends Subscriber {
                 const mapY = Number(key.substring(separator + 1));
                 this.fillMapPixel(overlayContext, mapX, mapY);
             }
-            this.paintOverlayState = paintOverlayState;
+        } else if (this.paintOverlayState && this.paintOverlayState.delta !== paintedPixelDelta) {
+            const overlayContext = this.paintOverlayCanvasContext;
+            overlayContext.fillStyle = toColorWithAlpha(brushColor, 0.5);
+            for (const [key, color] of paintedPixelDelta) {
+                const separator = key.indexOf(',');
+                const mapX = Number(key.substring(0, separator));
+                const mapY = Number(key.substring(separator + 1));
+                if (color === undefined) {
+                    this.clearMapPixel(overlayContext, mapX, mapY);
+                } else {
+                    this.fillMapPixel(overlayContext, mapX, mapY);
+                }
+            }
         }
+        this.paintOverlayState = paintOverlayState;
         context.drawImage(this.paintOverlayCanvas, 0, 0);
 
+        if (this.topBar.isLassoToolActive()) {
+            const points = this.topBar.getLassoRenderPoints();
+            if (points.length > 0) {
+                context.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+                context.lineWidth = 2;
+                context.setLineDash([6, 4]);
+                context.beginPath();
+                let previous = points[0];
+                context.moveTo(
+                    (previous.x + 0.5 - this.viewPoint.x) * this.viewPoint.scale,
+                    (previous.y + 0.5 - this.viewPoint.y) * this.viewPoint.scale
+                );
+                for (let i = 1; i < points.length; i++) {
+                    const point = points[i];
+                    if (Math.abs(point.x - previous.x) > _worldMap.width / 2) {
+                        context.moveTo(
+                            (point.x + 0.5 - this.viewPoint.x) * this.viewPoint.scale,
+                            (point.y + 0.5 - this.viewPoint.y) * this.viewPoint.scale
+                        );
+                    } else {
+                        context.lineTo(
+                            (point.x + 0.5 - this.viewPoint.x) * this.viewPoint.scale,
+                            (point.y + 0.5 - this.viewPoint.y) * this.viewPoint.scale
+                        );
+                    }
+                    previous = point;
+                }
+                context.stroke();
+                context.setLineDash([]);
+            }
         // Render the brush cursor from the exact same map-pixel bounds.
-        if (this.topBar.paintbrushActive$.value) {
+        } else if (this.topBar.paintbrushActive$.value) {
             const centerX = this.topBar.hoverMapX$.value;
             const centerY = this.topBar.hoverMapY$.value;
             const brushBounds = getBrushBounds(this.topBar.brushSize$.value);
@@ -760,6 +803,18 @@ export class Renderer extends Subscriber {
             Math.max(1, x2 - x1),
             Math.max(1, y2 - y1)
         );
+    }
+
+    private clearMapPixel(
+        context: CanvasRenderingContext2D,
+        mapX: number,
+        mapY: number
+    ): void {
+        const x1 = Math.round((mapX - this.viewPoint.x) * this.viewPoint.scale);
+        const y1 = Math.round((mapY - this.viewPoint.y) * this.viewPoint.scale);
+        const x2 = Math.round((mapX + 1 - this.viewPoint.x) * this.viewPoint.scale);
+        const y2 = Math.round((mapY + 1 - this.viewPoint.y) * this.viewPoint.scale);
+        context.clearRect(x1, y1, Math.max(1, x2 - x1), Math.max(1, y2 - y1));
     }
 
     private mapRectToCanvasBounds(
@@ -919,6 +974,35 @@ export class Renderer extends Subscriber {
             }
         }
         return index;
+    }
+
+    private static getWarningAffectedProvinceIds(worldMap: FEWorldMap): Set<number> {
+        const index = Renderer.buildWarningIndex(worldMap);
+        const result = new Set(index.provinceIds);
+        for (const color of index.provinceColors) {
+            const province = worldMap.getProvinceByColor(color);
+            if (province) {
+                result.add(province.id);
+            }
+        }
+        for (const stateId of index.stateIds) {
+            for (const provinceId of worldMap.getStateById(stateId)?.provinces ?? []) {
+                result.add(provinceId);
+            }
+        }
+        for (const regionId of index.strategicRegionIds) {
+            for (const provinceId of worldMap.getStrategicRegionById(regionId)?.provinces ?? []) {
+                result.add(provinceId);
+            }
+        }
+        for (const supplyAreaId of index.supplyAreaIds) {
+            for (const stateId of worldMap.getSupplyAreaById(supplyAreaId)?.states ?? []) {
+                for (const provinceId of worldMap.getStateById(stateId)?.provinces ?? []) {
+                    result.add(provinceId);
+                }
+            }
+        }
+        return result;
     }
 
     private static renderMapLabels(renderContext: RenderContext, worldMap: FEWorldMap, context: CanvasRenderingContext2D, xOffset: number) {
@@ -1303,10 +1387,17 @@ export class Renderer extends Subscriber {
             this.renderProvince(this.backCanvasContext, province, this.viewPoint.scale, xOffset));
     }
 
-    private renderProvinceTooltip(province: Province, worldMap: FEWorldMap, selectedConditions: ConditionItem[]) {
-        const stateObject = worldMap.getStateByProvinceId(province.id);
-        const strategicRegion = worldMap.getStrategicRegionByProvinceId(province.id);
-        const supplyArea = stateObject ? worldMap.getSupplyAreaByStateId(stateObject.id) : undefined;
+    private renderProvinceTooltip(
+        province: Province,
+        worldMap: FEWorldMap,
+        selectedConditions: ConditionItem[],
+        hoveredStateId?: number,
+        hoveredStrategicRegionId?: number,
+        hoveredSupplyAreaId?: number,
+    ) {
+        const stateObject = worldMap.getStateById(hoveredStateId);
+        const strategicRegion = worldMap.getStrategicRegionById(hoveredStrategicRegionId);
+        const supplyArea = worldMap.getSupplyAreaById(hoveredSupplyAreaId);
         const railwayLevel = worldMap.getRailwayLevelByProvinceId(province.id);
         const supplyNode = worldMap.getSupplyNodeByProvinceId(province.id);
         const vp = stateObject?.victoryPoints[province.id];
@@ -1392,7 +1483,14 @@ ${formatTooltipWarnings(
                 this.renderHoverProvince(province, worldMap);
             }
             if (this.isTooltipVisible()) {
-                this.renderProvinceTooltip(province, worldMap, this.topBar.selectedConditions$.value);
+                this.renderProvinceTooltip(
+                    province,
+                    worldMap,
+                    this.topBar.selectedConditions$.value,
+                    this.topBar.hoverStateId$.value,
+                    this.topBar.hoverStrategicRegionId$.value,
+                    this.topBar.hoverSupplyAreaId$.value,
+                );
             }
         }
     }

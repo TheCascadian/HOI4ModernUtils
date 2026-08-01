@@ -11,6 +11,7 @@ import { AdjacenciesLoader } from "./adjacencies";
 import { ContinentsLoader } from "./continents";
 import { ProvinceBmpLoader } from "./provincebmp";
 import { RiverLoader } from "./river";
+import { calculateProvinceIdCap } from "../maplimits";
 
 interface DefaultMap {
     definitions: string;
@@ -62,22 +63,19 @@ export class DefaultMapLoader extends FileLoader<ProvinceMap> {
         const defaultMap = await loadDefaultMap(e => this.fireOnProgressEvent(e));
         session.throwIfCancelled();
 
-        const provinceDefinitions = await (this.definitionsLoader = this.checkAndCreateLoader(this.definitionsLoader, 'map/' + defaultMap.definitions, DefinitionsLoader)).load(session);
-        session.throwIfCancelled();
-
-        const provinceBmp = await (this.provinceBmpLoader = this.checkAndCreateLoader(this.provinceBmpLoader, 'map/' + defaultMap.provinces, ProvinceBmpLoader)).load(session);
-        session.throwIfCancelled();
-
-        const adjacencies = await (this.adjacenciesLoader = this.checkAndCreateLoader(this.adjacenciesLoader, 'map/' + defaultMap.adjacencies, AdjacenciesLoader)).load(session);
-        session.throwIfCancelled();
-
-        const continents = await (this.continentsLoader = this.checkAndCreateLoader(this.continentsLoader, 'map/' + defaultMap.continent, ContinentsLoader)).load(session);
-        session.throwIfCancelled();
-
-        const terrains = await this.terrainDefinitionLoader.load(session);
-        session.throwIfCancelled();
-
-        const rivers = await (this.riverLoader = this.checkAndCreateLoader(this.riverLoader, 'map/' + defaultMap.rivers, RiverLoader)).load(session);
+        this.definitionsLoader = this.checkAndCreateLoader(this.definitionsLoader, 'map/' + defaultMap.definitions, DefinitionsLoader);
+        this.provinceBmpLoader = this.checkAndCreateLoader(this.provinceBmpLoader, 'map/' + defaultMap.provinces, ProvinceBmpLoader);
+        this.adjacenciesLoader = this.checkAndCreateLoader(this.adjacenciesLoader, 'map/' + defaultMap.adjacencies, AdjacenciesLoader);
+        this.continentsLoader = this.checkAndCreateLoader(this.continentsLoader, 'map/' + defaultMap.continent, ContinentsLoader);
+        this.riverLoader = this.checkAndCreateLoader(this.riverLoader, 'map/' + defaultMap.rivers, RiverLoader);
+        const [provinceDefinitions, provinceBmp, adjacencies, continents, terrains, rivers] = await Promise.all([
+            this.definitionsLoader.load(session),
+            this.provinceBmpLoader.load(session),
+            this.adjacenciesLoader.load(session),
+            this.continentsLoader.load(session),
+            this.terrainDefinitionLoader.load(session),
+            this.riverLoader.load(session),
+        ]);
         session.throwIfCancelled();
 
         const subLoaderResults = [ provinceDefinitions, provinceBmp, adjacencies, continents, terrains, rivers ];
@@ -94,7 +92,14 @@ export class DefaultMapLoader extends FileLoader<ProvinceMap> {
 
         fillAdjacencyEdges(provinces, adjacencies.result, provinceBmp.result.height, ['map/' + defaultMap.provinces, 'map/' + defaultMap.definitions], warnings);
     
-        const { sortedProvinces, badProvinceId } = sortProvinces(provinces, badProvinceIdForMerge, ['map/' + defaultMap.definitions], warnings);
+        const { sortedProvinces, badProvinceId } = sortProvinces(
+            provinces,
+            badProvinceIdForMerge,
+            ['map/' + defaultMap.definitions],
+            warnings,
+            provinceBmp.result.width,
+            provinceBmp.result.height
+        );
     
         if (rivers.result.width !== provinceBmp.result.width || rivers.result.height !== provinceBmp.result.height) {
             warnings.push({
@@ -163,11 +168,29 @@ async function loadDefaultMap(progressReporter: ProgressReporter): Promise<Defau
     return defaultMap as DefaultMap;
 }
 
-function sortProvinces(provinces: Province[], badProvinceId: number, relatedFiles: string[], warnings: WorldMapWarning[]): { sortedProvinces: (Province | undefined)[], badProvinceId: number } {
+function sortProvinces(
+    provinces: Province[],
+    badProvinceId: number,
+    relatedFiles: string[],
+    warnings: WorldMapWarning[],
+    mapWidth: number,
+    mapHeight: number
+): { sortedProvinces: (Province | undefined)[], badProvinceId: number } {
+    const cap = calculateProvinceIdCap(mapWidth, mapHeight);
     const { sorted, badId } = sortItems(
         provinces,
-        200000,
-        (maxId) => { throw new UserError(localize('worldmap.error.provinceidtoolarge', 'Max province id is too large: {0}.', maxId)); },
+        cap.maxProvinceId,
+        (maxId) => {
+            throw new UserError(localize(
+                'worldmap.error.provinceidtoolarge',
+                'Province ID {0} exceeds the dynamic cap of {1}. For this {2}x{3} province map ({4} total pixels), the cap is 1/8 of the total map pixels.',
+                maxId,
+                cap.maxProvinceId,
+                cap.width,
+                cap.height,
+                cap.totalPixels
+            ));
+        },
         (newProvince, existingProvince, badId) => warnings.push({
                 source: [{ type: 'province', id: badId, color: existingProvince.color }],
                 relatedFiles,
@@ -320,6 +343,9 @@ function validateProvinceTerrains(provinces: Province[], terrains: Terrain[], re
 }
 
 function fillAdjacencyEdges(provinces: (Province | undefined)[], adjacencies: ProvinceEdgeAdjacency[], height: number, relatedFiles: string[], warnings: WorldMapWarning[]) {
+    const edgeByTarget = provinces.map(province =>
+        province ? new Map(province.edges.map(edge => [edge.to, edge])) : undefined
+    );
     for (const { row, from, to, through, start: saveStart, stop: saveStop, rule, type } of adjacencies) {
 
         if (!provinces[from] || !provinces[to]) {
@@ -344,18 +370,22 @@ function fillAdjacencyEdges(provinces: (Province | undefined)[], adjacencies: Pr
         const start = saveStart ? { ...saveStart, y: height - saveStart.y } : undefined;
         const stop = saveStop ? { ...saveStop, y: height - saveStop.y } : undefined;
 
-        const existingEdgeInFrom = provinces[from]!.edges.find(e => e.to === to);
+        const existingEdgeInFrom = edgeByTarget[from]!.get(to);
         if (existingEdgeInFrom) {
             Object.assign<ProvinceEdge, Partial<ProvinceEdge>>(existingEdgeInFrom, { through: resultThrough, start, stop, rule, type });
         } else {
-            provinces[from]!.edges.push({ to, through: resultThrough, start, stop, rule, type, path: [] });
+            const edge = { to, through: resultThrough, start, stop, rule, type, path: [] };
+            provinces[from]!.edges.push(edge);
+            edgeByTarget[from]!.set(to, edge);
         }
         
-        const existingEdgeInTo = provinces[to]!.edges.find(e => e.to === from);
+        const existingEdgeInTo = edgeByTarget[to]!.get(from);
         if (existingEdgeInTo) {
             Object.assign<ProvinceEdge, Partial<ProvinceEdge>>(existingEdgeInTo, { through: resultThrough, start, stop, rule, type });
         } else {
-            provinces[to]!.edges.push({ to: from, through: resultThrough, start: stop, stop: start, rule, type, path: [] });
+            const edge = { to: from, through: resultThrough, start: stop, stop: start, rule, type, path: [] };
+            provinces[to]!.edges.push(edge);
+            edgeByTarget[to]!.set(from, edge);
         }
     }
 }

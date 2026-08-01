@@ -30,7 +30,7 @@ interface RiverPixelGroup {
 export function buildClippedRiverOceanEdit(
     width: number,
     height: number,
-    colorByPosition: readonly number[],
+    colorByPosition: ArrayLike<number>,
     provinces: ReadonlyArray<Province | undefined | null>,
     rivers: readonly River[],
     selectedRiverIds: ReadonlySet<number>,

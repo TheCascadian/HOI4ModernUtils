@@ -1,5 +1,46 @@
 import * as assert from 'assert';
-import { repairAdjacencies, repairRailways, repairSupplyNodes, validateProvinceBmpEdit } from '../../src/previewdef/worldmap/provincefixes';
+import {
+    extractProvinceBmpColors,
+    repairAdjacencies,
+    repairRailways,
+    repairSupplyNodes,
+    validateNewProvinceMembership,
+    validateProvinceBmpEdit,
+} from '../../src/previewdef/worldmap/provincefixes';
+
+function makeBmp(
+    rows: number[][],
+    bitsPerPixel: 24 | 32,
+    topDown: boolean
+): Buffer {
+    const width = rows[0].length;
+    const height = rows.length;
+    const bytesPerPixel = bitsPerPixel / 8;
+    const rowSize = Math.ceil(width * bytesPerPixel / 4) * 4;
+    const dataOffset = 54;
+    const result = Buffer.alloc(dataOffset + rowSize * height, 0xee);
+    result.write('BM', 0, 'ascii');
+    result.writeUInt32LE(result.length, 2);
+    result.writeUInt32LE(dataOffset, 10);
+    result.writeUInt32LE(40, 14);
+    result.writeInt32LE(width, 18);
+    result.writeInt32LE(topDown ? -height : height, 22);
+    result.writeUInt16LE(1, 26);
+    result.writeUInt16LE(bitsPerPixel, 28);
+    result.writeUInt32LE(0, 30);
+    result.writeUInt32LE(rowSize * height, 34);
+    const storedRows = topDown ? rows : [...rows].reverse();
+    storedRows.forEach((row, y) => row.forEach((color, x) => {
+        const offset = dataOffset + y * rowSize + x * bytesPerPixel;
+        result[offset] = color & 0xff;
+        result[offset + 1] = color >>> 8 & 0xff;
+        result[offset + 2] = color >>> 16 & 0xff;
+        if (bitsPerPixel === 32) {
+            result[offset + 3] = 0x7f;
+        }
+    }));
+    return result;
+}
 
 describe('province reference repairs', () => {
     it('rejects destructive edits targeting a synthetic black province', () => {
@@ -26,6 +67,53 @@ describe('province reference repairs', () => {
         );
     });
 
+    it('accepts an automatically allocated new-province color when it targets the new definition', () => {
+        const definitions = [
+            { id: 7, color: 0x112233, terrain: 'plains' },
+            { id: 8, color: 0x112234, terrain: 'plains' },
+        ];
+
+        assert.doesNotThrow(() => validateProvinceBmpEdit(
+            definitions,
+            [[2, 3, 0x112234]],
+            8
+        ));
+    });
+
+    it('requires new land-province memberships in the same transaction', () => {
+        const definitions = [
+            { id: 1, color: 0x112233, terrain: 'plains', type: 'land' },
+            { id: 2, color: 0x445566, terrain: 'plains', type: 'land' },
+        ];
+        assert.throws(
+            () => validateNewProvinceMembership([1], definitions, [{ provinces: [1, 2] }], []),
+            /strategic region in the same transaction/
+        );
+        assert.throws(
+            () => validateNewProvinceMembership([1], definitions, [], [{ provinces: [1, 2] }]),
+            /state in the same transaction/
+        );
+        assert.doesNotThrow(() => validateNewProvinceMembership(
+            [1],
+            definitions,
+            [{ provinces: [1, 2] }],
+            [{ provinces: [1, 2] }]
+        ));
+    });
+
+    it('requires a new sea province only in a strategic region', () => {
+        const definitions = [
+            { id: 1, color: 0x112233, terrain: 'ocean', type: 'sea' },
+            { id: 2, color: 0x445566, terrain: 'ocean', type: 'sea' },
+        ];
+        assert.doesNotThrow(() => validateNewProvinceMembership(
+            [1],
+            definitions,
+            [],
+            [{ provinces: [1, 2] }]
+        ));
+    });
+
     it('accepts an atomic edit that paints multiple retained target provinces', () => {
         const definitions = [
             { id: 1, color: 0x112233, terrain: 'ocean' },
@@ -38,6 +126,73 @@ describe('province reference repairs', () => {
             [],
             [1, 2]
         ));
+    });
+
+    it('rejects deleted colors remaining anywhere in the complete final raster', () => {
+        const definitions = [{ id: 1, color: 0x112233, terrain: 'plains' }];
+        assert.throws(
+            () => validateProvinceBmpEdit(
+                definitions,
+                [[0, 0, 0x112233]],
+                1,
+                [2],
+                [1],
+                new Set([0x112233, 0x445566])
+            ),
+            /color 4478310 without a retained definition/
+        );
+    });
+
+    it('rejects retained definitions missing from the complete final raster', () => {
+        const definitions = [
+            { id: 1, color: 0x112233, terrain: 'plains' },
+            { id: 2, color: 0x445566, terrain: 'ocean' },
+        ];
+        assert.throws(
+            () => validateProvinceBmpEdit(
+                definitions,
+                [[0, 0, 0x112233]],
+                1,
+                [],
+                [1],
+                new Set([0x112233])
+            ),
+            /definition color 4478310 has no pixels/
+        );
+        assert.doesNotThrow(() => validateProvinceBmpEdit(
+            definitions,
+            [[0, 0, 0x112233]],
+            1,
+            [],
+            [1],
+            new Set([0x112233, 0x445566])
+        ));
+    });
+
+    it('extracts only 24-bit pixel colors across bottom-up rows and padding', () => {
+        const bmp = makeBmp([[0x112233], [0x445566]], 24, false);
+        assert.deepStrictEqual(
+            Array.from(extractProvinceBmpColors(bmp, 1, 2)).sort((a, b) => a - b),
+            [0x112233, 0x445566].sort((a, b) => a - b)
+        );
+        assert.ok(!extractProvinceBmpColors(bmp).has(0xeeeeee));
+    });
+
+    it('extracts top-down 32-bit colors while ignoring alpha bytes', () => {
+        const bmp = makeBmp([[0x102030, 0xa0b0c0], [0x010203, 0xf0e0d0]], 32, true);
+        assert.deepStrictEqual(
+            Array.from(extractProvinceBmpColors(bmp, 2, 2)).sort((a, b) => a - b),
+            [0x010203, 0x102030, 0xa0b0c0, 0xf0e0d0].sort((a, b) => a - b)
+        );
+        assert.ok(!extractProvinceBmpColors(bmp).has(0x7f7f7f));
+    });
+
+    it('rejects truncated BMP pixel arrays before validation', () => {
+        const bmp = makeBmp([[0x112233]], 24, false);
+        assert.throws(
+            () => extractProvinceBmpColors(bmp.subarray(0, bmp.length - 1)),
+            /pixel array is truncated/
+        );
     });
 
     it('rewrites adjacency endpoints and removes collapsed and duplicate rows', () => {

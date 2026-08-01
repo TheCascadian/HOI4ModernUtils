@@ -25,6 +25,7 @@
 	"activationEvents": [
 		"onCommand:hoi4modernutils.preview",
 		"onCommand:hoi4modernutils.previewworld",
+		"onCommand:hoi4modernutils.scanAndLogErrors",
 		"onCommand:hoi4modernutils.scanreferences",
 		"onCommand:hoi4modernutils.selectmodfile",
 		"onCommand:hoi4modernutils.selecthoifolder",
@@ -237,6 +238,12 @@
 				"category": "%hoi4modernutils.category%"
 			},
 			{
+				"command": "hoi4modernutils.scanAndLogErrors",
+				"title": "%hoi4modernutils.scanAndLogErrors.title%",
+				"icon": "$(warning)",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
 				"command": "hoi4modernutils.selecthoifolder",
 				"title": "%hoi4modernutils.selecthoifolder.title%",
 				"category": "%hoi4modernutils.category%"
@@ -288,6 +295,9 @@
 				{
 					"command": "hoi4modernutils.scanreferences",
 					"when": "!hoi4MULoaded || hoi4PreviewType == event"
+				},
+				{
+					"command": "hoi4modernutils.scanAndLogErrors"
 				},
 				{
 					"command": "hoi4modernutils.selectmodfile"

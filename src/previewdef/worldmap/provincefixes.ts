@@ -9,6 +9,84 @@ export interface ProvinceBmpEditDefinition {
     id: number;
     color: number;
     terrain: string;
+    type?: string;
+}
+
+export function validateNewProvinceMembership(
+    existingProvinceIds: Iterable<number>,
+    provinces: ReadonlyArray<ProvinceBmpEditDefinition>,
+    states: ReadonlyArray<{ provinces: readonly number[] }> = [],
+    strategicRegions: ReadonlyArray<{ provinces: readonly number[] }> = []
+): void {
+    const existingIds = new Set(existingProvinceIds);
+    for (const province of provinces) {
+        if (existingIds.has(province.id)) {
+            continue;
+        }
+        if (!strategicRegions.some(region => region.provinces.includes(province.id))) {
+            throw new Error(
+                `New province ${province.id} must be assigned to a strategic region in the same transaction.`
+            );
+        }
+        if (province.type === 'land' && !states.some(state => state.provinces.includes(province.id))) {
+            throw new Error(
+                `New land province ${province.id} must be assigned to a state in the same transaction.`
+            );
+        }
+    }
+}
+
+/** Extracts unique BGR colors from the actual pixel array of a 24/32-bit BI_RGB BMP. */
+export function extractProvinceBmpColors(
+    bmpBytes: Uint8Array,
+    expectedWidth?: number,
+    expectedHeight?: number
+): Set<number> {
+    const bmp = Buffer.from(bmpBytes.buffer, bmpBytes.byteOffset, bmpBytes.byteLength);
+    if (bmp.length < 54 || bmp[0] !== 0x42 || bmp[1] !== 0x4d) {
+        throw new Error('Invalid provinces BMP header.');
+    }
+    const dataOffset = bmp.readUInt32LE(10);
+    const dibHeaderSize = bmp.readUInt32LE(14);
+    const width = bmp.readInt32LE(18);
+    const height = bmp.readInt32LE(22);
+    const planes = bmp.readUInt16LE(26);
+    const bitsPerPixel = bmp.readUInt16LE(28);
+    const compression = bmp.readUInt32LE(30);
+    const absoluteWidth = Math.abs(width);
+    const absoluteHeight = Math.abs(height);
+    if (dibHeaderSize < 40 || width === 0 || height === 0 || planes !== 1 ||
+        (bitsPerPixel !== 24 && bitsPerPixel !== 32) || compression !== 0) {
+        throw new Error('Unsupported provinces BMP format; expected uncompressed 24-bit or 32-bit pixels.');
+    }
+    if ((expectedWidth !== undefined && absoluteWidth !== expectedWidth) ||
+        (expectedHeight !== undefined && absoluteHeight !== expectedHeight)) {
+        throw new Error(
+            `Province BMP dimensions ${absoluteWidth}x${absoluteHeight} do not match ${expectedWidth}x${expectedHeight}.`
+        );
+    }
+
+    const bytesPerPixel = bitsPerPixel / 8;
+    const rowSize = Math.ceil(absoluteWidth * bytesPerPixel / 4) * 4;
+    const requiredLength = dataOffset + rowSize * absoluteHeight;
+    if (dataOffset < 14 + dibHeaderSize || requiredLength > bmp.length) {
+        throw new Error('Province BMP pixel array is truncated or has an invalid offset.');
+    }
+
+    const colors = new Set<number>();
+    for (let y = 0; y < absoluteHeight; y++) {
+        const sourceRow = height > 0 ? absoluteHeight - 1 - y : y;
+        const rowOffset = dataOffset + sourceRow * rowSize;
+        for (let x = 0; x < absoluteWidth; x++) {
+            const pixelOffset = rowOffset + x * bytesPerPixel;
+            colors.add(
+                (bmp[pixelOffset + 2] << 16) |
+                (bmp[pixelOffset + 1] << 8) |
+                bmp[pixelOffset]
+            );
+        }
+    }
+    return colors;
 }
 
 /**
@@ -20,7 +98,8 @@ export function validateProvinceBmpEdit(
     paintedPixels: ReadonlyArray<ReadonlyArray<number>>,
     targetProvinceId: number,
     deletedProvinceIds: ReadonlyArray<number> = [],
-    targetProvinceIds: ReadonlyArray<number> = [targetProvinceId]
+    targetProvinceIds: ReadonlyArray<number> = [targetProvinceId],
+    finalRasterColors?: Iterable<number>
 ): void {
     if (!Number.isInteger(targetProvinceId) || targetProvinceId <= 0) {
         throw new Error(`Refusing to paint to invalid province ID ${targetProvinceId}.`);
@@ -63,6 +142,24 @@ export function validateProvinceBmpEdit(
         if (pixel.length < 3 || !Number.isInteger(pixel[0]) || !Number.isInteger(pixel[1]) ||
             !Number.isInteger(pixel[2]) || !targetColors.has(pixel[2] >>> 0)) {
             throw new Error('Province pixel edit does not use an allowed target province color.');
+        }
+    }
+
+    if (finalRasterColors) {
+        const rasterColors = new Set(Array.from(finalRasterColors, color => color >>> 0));
+        for (const color of rasterColors) {
+            if (!colors.has(color)) {
+                throw new Error(
+                    `Final provinces BMP contains color ${color} without a retained definition.`
+                );
+            }
+        }
+        for (const color of colors) {
+            if (!rasterColors.has(color)) {
+                throw new Error(
+                    `Province definition color ${color} has no pixels in the final provinces BMP.`
+                );
+            }
         }
     }
 }

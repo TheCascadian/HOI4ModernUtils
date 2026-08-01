@@ -32,23 +32,30 @@ export interface Token<T extends string = string> {
     type: T;
 }
 
-function tokenizer<T extends string>(input: string, tokenRegexStrings: Record<T, [string, number]>, errorMessagePrefix: string = ''): Tokenizer<T> {
-    const types = Object.keys(tokenRegexStrings);
-    const typeEntries = Object.entries<[string, number]>(tokenRegexStrings);
-    typeEntries.sort((a, b) => a[1][1] - b[1][1]);
+const tokenizerRegexCache = new WeakMap<object, { types: string[]; regex: RegExp }>();
 
-    const regex = new RegExp(
-        '\\s*(?<result>' +
-            typeEntries.map(([n, [s]]) => `(?<${n}>${s})`).join('|')
-            + ')',
-        'y');
+function tokenizer<T extends string>(input: string, tokenRegexStrings: Record<T, [string, number]>, errorMessagePrefix: string = ''): Tokenizer<T> {
+    let cached = tokenizerRegexCache.get(tokenRegexStrings);
+    if (!cached) {
+        const types = Object.keys(tokenRegexStrings);
+        const typeEntries = Object.entries<[string, number]>(tokenRegexStrings);
+        typeEntries.sort((a, b) => a[1][1] - b[1][1]);
+        cached = {
+            types,
+            regex: new RegExp(
+                '\\s*(?<result>' +
+                    typeEntries.map(([n, [s]]) => `(?<${n}>${s})`).join('|')
+                    + ')',
+                'y'),
+        };
+        tokenizerRegexCache.set(tokenRegexStrings, cached);
+    }
+    const { types, regex } = cached;
+    regex.lastIndex = 0;
     let prevPos = 0;
     let pos = 0;
     let token: Token<T> | null = null;
     let groups: RegExpExecArray | null = null;
-
-    let sum = 0;
-    const lineLengthSums = input.split('\n').map(v => v.length).map(v => sum = (sum+ v + 1));
 
     function nextGroups() {
         prevPos = pos;
@@ -84,6 +91,8 @@ function tokenizer<T extends string>(input: string, tokenRegexStrings: Record<T,
     }
 
     function throwError(message: string, prev: boolean = false): never {
+        let sum = 0;
+        const lineLengthSums = input.split('\n').map(v => v.length).map(v => sum = (sum + v + 1));
         const calculatePos = prev ? prevPos : pos;
         const line = lineLengthSums.findIndex(v => v > calculatePos);
         const column = line > 0 ? calculatePos - lineLengthSums[line - 1] : calculatePos;

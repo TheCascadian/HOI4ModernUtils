@@ -3,7 +3,7 @@ import * as path from 'path';
 import { chain } from 'lodash';
 import { getLanguageIdInYml } from '../util/vsccommon';
 import { forEachConcurrent, IndexBase } from './indexbase';
-import { indexManager, IndexType } from './indexmanager';
+import type { IndexType } from './indexmanager';
 import { listFilesFromModOrHOI4, readFileFromModOrHOI4 } from '../util/fileloader';
 import { localize } from '../util/i18n';
 import { ConfigurationKey } from '../constants';
@@ -93,7 +93,11 @@ class LocalisationIndex extends IndexBase<LocalisationEntry> {
 
     private onChangeConfiguration(e: vscode.ConfigurationChangeEvent): void {
         if (e.affectsConfiguration(`${ConfigurationKey}.previewLocalisation`)) {
-            indexManager.rebuildIndex(this);
+            // Loading IndexManager here would create an eager cycle:
+            // IndexManager -> LocalisationIndex -> IndexManager. This module is
+            // also pulled in by the lazily loaded world-map preview, where that
+            // cycle can leave the IndexManager binding uninitialized.
+            void import('./indexmanager').then(({ indexManager }) => indexManager.rebuildIndex(this));
         }
     }
 

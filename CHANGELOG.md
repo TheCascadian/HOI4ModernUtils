@@ -14,13 +14,39 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Added read-only ocean-tile readiness verification for definition fields, pixel presence, state and strategic-region membership, railways, and supply hubs.
 * Added a guarded ocean consolidation action that merges selected sea provinces into one canonical ocean tile across strategic-region boundaries, removes state membership, and deletes emptied source regions.
 * Added water-to-land conversion with explicit land terrain, continent, destination state, destination strategic region, and coastal metadata.
+* Added freehand and inverted lasso tools for assigning exact same-type pixels to an existing province, with optional point snapping, staged previews, and paint-draft undo/redo.
+* Added a workspace command that runs the full World Map loader and writes all detected warnings to a timestamped report.
+* Added guarded whole-map province-building removal, including state building blocks and individual province building records.
+* Added persisted World Map accessibility and appearance controls for typography, interface scale, motion, contrast, color adjustments, and province overlays.
+* Added corner-snapped Performance diagnostics and expanded synthetic profiling for parser, directory, brush, edge, paint-payload, and visible-candidate hotspots.
+* Added transactional persistence regression coverage for state, strategic-region, province-definition, victory-point localisation, BMP, undo, redo, and destructive-operation request acknowledgements.
 
 ### Changed
 * Province-to-ocean conversion no longer forces a global province/state reindex. Existing IDs remain stable so users can rebuild strategic-region membership explicitly and verify readiness afterward.
+* Province ID limits are now calculated from the active map dimensions using HOI4's one-eighth-of-total-pixels rule instead of a fixed ceiling, with the current cap shown in creation tooltips and validation errors.
+* New land and sea provinces now persist their required state and strategic-region memberships in the same transaction as `provinces.bmp` and `definition.csv`.
+* Province BMP undo and redo now snapshot and restore every related file touched by the transaction, including state and strategic-region membership changes.
+* Reindexing now rewrites `map/unitstacks.txt`, validates malformed rows before writing, and removes references to invalid province IDs.
+* World Map persistence messages now use correlated request IDs, explicit success or failure results, timeout handling, rollback, and authoritative reloads after failed writes.
+* World Map file and folder reads now honor the selected external `.mod` descriptor before falling back to vanilla, matching the existing write-target resolution.
+* Map color buffers and paint payloads now use compact typed arrays, while province lookup, edge stitching, visible-candidate selection, directory deduplication, and repeated parser work use indexed or cached paths.
+* The World Map toolbar, nested menus, dropdowns, editor panes, search field, warnings control, and modal surfaces were reorganized for denser layouts, consistent existing styling, reliable sizing, and keyboard-safe shortcuts.
+* Search now reports the actual loaded item count for the active view rather than presenting sparse array ID bounds.
+* Paint, lasso, selection, and Transfer Wand interactions now use one explicit active-tool state so their pointer handlers cannot interfere with each other.
 
 ### Fixed
 * Fixed every manual province merge being rejected when loader recovery province `0` or color `0` was included in the selection or definition persistence payload.
 * Province merges now accept orphaned source definitions with no remaining BMP pixels and transactionally remove strategic-region records that the merge empties.
+* Fixed **State from Selected Provinces** silently doing nothing when the selection contained every province in a source state. Emptied source states are now removed transactionally, supply-area references are redirected, and victory points move to the new state.
+* Fixed newly allocated province colors being rejected because paint persistence validated the pixels against the source province instead of the new province definition.
+* Fixed province merges reappearing after reload by resolving reads through the selected descriptor mod and reloading authoritative persisted geometry.
+* Fixed destructive World Map actions appearing successful before extension-host persistence completed, including stale or missing acknowledgements across all operational write routes.
+* Fixed standalone state and strategic-region writes failing to create or update the required `replace_path` entries for the selected mod.
+* Fixed paint strokes cloning and publishing the entire staged map for every interpolated dab; each sampled pointer event now produces one exact draft update.
+* Fixed province merge and paint transactions leaving emptied donor provinces, state membership, strategic-region membership, victory points, or dependent references behind.
+* Fixed lasso and paint controls retaining stale brush size, polygon, or active-tool state after apply or cancellation.
+* Fixed renderer edge lookup and river clipping hotspots without changing default pixel output; visually lossy optimizations remain explicitly opt-in.
+* Fixed parser and localisation-index repeated-work paths that scaled poorly on large mods.
 
 ## [0.4.4] - 2026-07-28
 
