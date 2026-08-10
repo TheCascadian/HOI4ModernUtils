@@ -43,4 +43,4 @@ The project does not declare one universal HOI4 game-version guarantee. Validate
 
 Install a newer VSIX with the same command and reload VS Code when prompted. Confirm the installed version in the Extensions view before trusting new map-editing behavior.
 
-Version 0.4.4 does not introduce a new project file format. Saved world-map Performance selections remain per-webview state; WebGL2 and fidelity-affecting controls remain opt-in.
+Version 0.4.7-pre-release-2 does not introduce a new project file format. Saved world-map Performance selections remain per-webview state; WebGL2 and fidelity-affecting controls remain opt-in.

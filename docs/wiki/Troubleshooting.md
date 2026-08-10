@@ -32,7 +32,7 @@ Disable experimental fidelity-affecting settings. WebGL2 is not pixel-identical 
 
 ## Paintbrush movement is slow
 
-Version 0.4.4 batches interpolated dabs, caches the staged-pixel overlay, and avoids base-map invalidation for draft-only changes. Confirm the installed EXTENSION is 0.4.4 or newer and reload the World Map. The Performance overlay can show whether base-map redraws are still occurring while painting. If the issue persists, report the painted-pixel count, brush size, zoom, active renderer, and total/base-map timing.
+Version 0.4.7-pre-release-2 batches interpolated dabs, caches the staged-pixel overlay, and avoids base-map invalidation for draft-only changes. Confirm the installed EXTENSION is 0.4.7-pre-release-2 or newer and reload the World Map. The Performance overlay can show whether base-map redraws are still occurring while painting. If the issue persists, report the painted-pixel count, brush size, zoom, active renderer, and total/base-map timing.
 
 ## What to include in a bug report
 

@@ -60,22 +60,31 @@ div.select > span.value {
     pointer-events: none;
 }
 
-select, input[type=text], textarea, div.select {
+select, input[type=text], input[type=number], textarea, div.select {
     background: var(--vscode-input-background);
     color: var(--vscode-input-foreground);
     border: 1px solid var(--vscode-settings-textInputBorder);
 }
 
-select:focus, select.dropdown-opened, input[type=text]:focus, textarea:focus, div.select:focus, div.select.dropdown-opened {
+select:focus, select.dropdown-opened, input[type=text]:focus, input[type=number]:focus, textarea:focus, div.select:focus, div.select.dropdown-opened {
     outline: 1px solid var(--vscode-focusBorder);
     outline-offset: -1px;
 }
 
-input[type=text] {
+input[type=text], input[type=number] {
     height: 20px;
     box-sizing: border-box;
     padding: 0 5px;
     vertical-align: middle;
+}
+
+.focusdetails-row {
+    margin-bottom: 10px;
+}
+
+.focusdetails-row label {
+    display: block;
+    margin-bottom: 3px;
 }
 
 input[type=checkbox] {

@@ -6,7 +6,19 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 **Versioning note:** This fork ([TheCascadian/HOI4ModernUtils](https://github.com/TheCascadian/HOI4ModernUtils)) keeps its own `0.x` version line, independent of the upstream project it was forked from. Entries at `[0.4.0]` and above are this fork's own releases. Entries from `[0.15.1]` down to `[0.13.0]` are inherited from upstream (`herbix/hoi4modutilities`) and were merged into this fork's history alongside its own work; older upstream entries have been compressed out of this file -  see the [upstream changelog](https://github.com/herbix/hoi4modutilities/blob/master/CHANGELOG.md) for full history. Because the two projects numbered releases independently, some version numbers (e.g. `0.12.x`, `0.3.2`) appear twice in git history for unrelated changes at different dates; this file only lists one entry per number going forward.
 
-## Unreleased
+## [0.4.7-pre-release-3]
+
+### Added
+* Added native VS Code Problems-panel diagnostics for focus trees, with click-to-navigate, replacing the plain warnings textarea as the primary way to find issues.
+* Added multi-select (Ctrl/Cmd+click) on the focus tree canvas, with batched, atomic delete (Delete/Backspace) and duplicate (Ctrl/Cmd+D) across the whole selection.
+* Added arrow-key nudging of the selected focus/focuses, grid-snapped, with Shift for a larger step.
+* Added align (left/right/top/bottom) and distribute (horizontal/vertical) toolbar tools for multi-selected focuses.
+* Added lossless focus duplication that copies the exact source block (icons, costs, effects, and any unrecognized script survive byte-for-byte) and patches only id/x/y.
+* Added branch duplication: copies a focus and everything downstream of it via `prerequisite`, remapping references within the copy so it is a self-contained, independent branch.
+* Added fit-to-tree and fit-to-selection view controls (toolbar buttons, Ctrl/Cmd+0 for fit-to-tree).
+* Added direct graph editing: Alt+drag from one focus onto another adds a prerequisite; Alt+Shift+drag adds a mutually exclusive relation.
+
+## [0.4.7-pre-release-2]
 
 ### Added
 * Added an exact province-scoped action that moves only the selected provinces into a newly created strategic region and removes source regions that become empty.

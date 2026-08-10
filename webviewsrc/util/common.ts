@@ -66,8 +66,13 @@ export function tryRun<T extends (...args: any[]) => any>(func: T): (...args: Pa
     };
 }
 
+export interface ZoomControl {
+    getScale(): number;
+    setScale(newScale: number): void;
+}
+
 let shouldDisableZoom = false;
-export function enableZoom(contentElement: HTMLDivElement, xOffset: number, yOffset: number, onZoomed?: (scale: number) => void): void {
+export function enableZoom(contentElement: HTMLDivElement, xOffset: number, yOffset: number, onZoomed?: (scale: number) => void): ZoomControl {
     let scale = getState().scale || 1;
     contentElement.style.transform = `scale(${scale})`;
     contentElement.style.transformOrigin = '0 0';
@@ -101,6 +106,18 @@ export function enableZoom(contentElement: HTMLDivElement, xOffset: number, yOff
     {
         passive: false
     });
+
+    return {
+        getScale: () => scale,
+        setScale: (newScale: number) => {
+            scale = newScale;
+            contentElement.style.transform = `scale(${scale})`;
+            setState({ scale });
+            if (onZoomed) {
+                onZoomed(scale);
+            }
+        },
+    };
 }
 
 function navigateText(start: number | undefined, end: number | undefined, file: string | undefined): void {

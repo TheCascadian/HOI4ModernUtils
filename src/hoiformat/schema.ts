@@ -52,7 +52,7 @@ export type HOIPartial<T> =
         T[K] extends CustomMap<infer T1> ? CustomMap<HOIPartial<T1>> :
         T[K] extends DetailValue<infer T1> ? DetailValue<HOIPartial<T1>> | undefined :
         T[K] extends (infer T1)[] ? HOIPartial<T1>[] :
-        K extends ('_token' | '_index') ? T[K] | undefined :
+        K extends ('_token' | '_index' | '_valueStartToken' | '_valueEndToken') ? T[K] | undefined :
         HOIPartial<T[K]> | undefined; };
 
 export type SchemaDef<T> =
@@ -66,7 +66,7 @@ export type SchemaDef<T> =
     T extends CustomMap<infer T1> ? { _innerType: SchemaDef<T1>; _type: 'map'; } :
     T extends DetailValue<infer T1> ? { _innerType: SchemaDef<T1>; _type: 'detailvalue'; } :
     T extends (infer B)[] ? { _innerType: SchemaDef<B>; _type: 'array'; } :
-    { [K in Exclude<keyof T, '_token' | '_index'>]: SchemaDef<T[K]>; };
+    { [K in Exclude<keyof T, '_token' | '_index' | '_valueStartToken' | '_valueEndToken'>]: SchemaDef<T[K]>; };
 
 //#endregion
 

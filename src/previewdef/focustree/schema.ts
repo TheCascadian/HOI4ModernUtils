@@ -7,6 +7,7 @@ import { countryScope } from "../../hoiformat/scope";
 import { isFeatureEnabled } from "../../util/featureflags";
 import { randomString, Warning } from "../../util/common";
 import { localize } from "../../util/i18n";
+import { validateFocusTree } from "./validation";
 
 export interface FocusTree {
     id: string;
@@ -17,6 +18,21 @@ export interface FocusTree {
     continuousFocusPositionX?: number;
     continuousFocusPositionY?: number;
     warnings: FocusWarning[];
+    file: string;
+    /** Byte range of the enclosing `focus_tree = { ... }` block, if any (absent for shared/joint focus pseudo-trees). Used as an insertion anchor when the tree has no focuses yet. */
+    treeRange: TokenRange | undefined;
+}
+
+/** A byte offset span in a source document, used to build surgical (git-friendly) text edits. */
+export interface TokenRange {
+    start: number;
+    end: number;
+}
+
+/** A `prerequisite = { ... }` or `mutually_exclusive = { ... }` block, with the focus IDs it lists and its exact source span. */
+export interface FocusRelationGroup {
+    ids: string[];
+    range: TokenRange;
 }
 
 interface FocusIconWithCondition {
@@ -30,17 +46,29 @@ export interface Focus {
     id: string;
     icon: FocusIconWithCondition[];
     prerequisite: string[][];
+    /** One entry per `prerequisite = { ... }` block, parallel in meaning to `prerequisite` but keeping the block's own span for surgical edits. */
+    prerequisiteGroups: FocusRelationGroup[];
     exclusive: string[];
+    /** One entry per `mutually_exclusive = { ... }` block; a block may list more than one ID. */
+    exclusiveGroups: FocusRelationGroup[];
     hasAllowBranch: boolean;
     inAllowBranch: string[];
     allowBranch: ConditionComplexExpr | undefined;
     relativePositionId: string | undefined;
+    /** Span of the `relative_position_id` value, when it is a single plain identifier (safe to patch in place). */
+    relativePositionIdToken: Token | undefined;
+    /** Span of the whole `relative_position_id = X` statement, for removing it entirely. */
+    relativePositionIdRange: TokenRange | undefined;
     offset: Offset[];
     text: string | undefined;
     overlay: string | undefined;
     token: Token | undefined;
+    /** Span of the focus's own `id` value, when it is a single plain identifier (safe to patch in place for a rename). */
+    idToken: Token | undefined;
     xToken: Token | undefined;
     yToken: Token | undefined;
+    /** Span of the whole `focus = { ... }` block, from the `focus` keyword through the closing brace. */
+    blockRange: TokenRange | undefined;
     file: string;
 }
 
@@ -59,6 +87,76 @@ export interface UpdateFocusPositionsMessage {
     }[];
 }
 
+export interface CreateFocusMessage {
+    command: 'createFocus';
+    lastDocumentChangeTimestamp: number;
+    tree: FocusTree;
+    id: string;
+    x: number;
+    y: number;
+}
+
+export interface DeleteFocusMessage {
+    command: 'deleteFocus';
+    lastDocumentChangeTimestamp: number;
+    tree: FocusTree;
+    focusIds: string[];
+}
+
+export interface DuplicateFocusMessage {
+    command: 'duplicateFocus';
+    lastDocumentChangeTimestamp: number;
+    tree: FocusTree;
+    focusIds: string[];
+}
+
+export interface DuplicateBranchMessage {
+    command: 'duplicateBranch';
+    lastDocumentChangeTimestamp: number;
+    tree: FocusTree;
+    rootFocusId: string;
+}
+
+export interface RenameFocusMessage {
+    command: 'renameFocus';
+    lastDocumentChangeTimestamp: number;
+    tree: FocusTree;
+    oldId: string;
+    newId: string;
+}
+
+export interface SetPrerequisitesMessage {
+    command: 'setPrerequisites';
+    lastDocumentChangeTimestamp: number;
+    focus: Focus;
+    groups: string[][];
+}
+
+export interface SetMutuallyExclusiveMessage {
+    command: 'setMutuallyExclusive';
+    lastDocumentChangeTimestamp: number;
+    focus: Focus;
+    ids: string[];
+}
+
+export interface SetRelativePositionMessage {
+    command: 'setRelativePosition';
+    lastDocumentChangeTimestamp: number;
+    focus: Focus;
+    anchorId: string | undefined;
+}
+
+export type FocusTreeEditorMessage =
+    UpdateFocusPositionsMessage |
+    CreateFocusMessage |
+    DeleteFocusMessage |
+    DuplicateFocusMessage |
+    DuplicateBranchMessage |
+    RenameFocusMessage |
+    SetPrerequisitesMessage |
+    SetMutuallyExclusiveMessage |
+    SetRelativePositionMessage;
+
 interface Offset {
     x: number;
     y: number;
@@ -70,20 +168,25 @@ interface FocusTreeDef {
     shared_focus: string[];
     focus: FocusDef[];
     continuous_focus_position: Position;
+    _token?: Token;
+    _valueStartToken?: Token;
+    _valueEndToken?: Token;
 }
 
 interface FocusDef {
-    id: string;
+    id: Raw;
     alternate_icon: string;
     icon: Raw[];
     x: Raw;
     y: Raw;
     prerequisite: FocusOrORList[];
     mutually_exclusive: FocusOrORList[];
-    relative_position_id: string;
+    relative_position_id: Raw;
     allow_branch: Raw[]; /* FIXME not symbol node */
     offset: OffsetDef[];
     _token: Token;
+    _valueStartToken?: Token;
+    _valueEndToken?: Token;
     text?: string;
     overlay?: string;
 }
@@ -104,6 +207,9 @@ interface OffsetDef {
 interface FocusOrORList {
     focus: string[];
     OR: string[];
+    _token?: Token;
+    _valueStartToken?: Token;
+    _valueEndToken?: Token;
 }
 
 interface FocusFile {
@@ -124,7 +230,7 @@ const focusOrORListSchema: SchemaDef<FocusOrORList> = {
 };
 
 const focusSchema: SchemaDef<FocusDef> = {
-    id: "string",
+    id: "raw",
     alternate_icon: "string",
     icon: {
         _innerType: 'raw',
@@ -140,7 +246,7 @@ const focusSchema: SchemaDef<FocusDef> = {
         _innerType: focusOrORListSchema,
         _type: 'array',
     },
-    relative_position_id: "string",
+    relative_position_id: "raw",
     allow_branch: {
         _innerType: 'raw',
         _type: 'array',
@@ -216,7 +322,11 @@ export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFoc
             conditionExprs,
             isSharedFocues: true,
             warnings,
+            file: filePath,
+            // Shared/joint focuses are top-level blocks with no enclosing container, so there is no anchor to append a brand-new focus against when the tree is empty.
+            treeRange: undefined,
         };
+        warnings.push(...validateFocusTree(sharedFocusTree));
         focusTrees.push(sharedFocusTree);
         sharedFocusTrees = [sharedFocusTree, ...sharedFocusTrees];
     }
@@ -237,7 +347,7 @@ export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFoc
 
         validateRelativePositionId(focuses, warnings);
 
-        focusTrees.push({
+        const tree: FocusTree = {
             id: focusTree.id ?? localize('focustree.ananymous', '<Anonymous focus tree>'),
             focuses,
             allowBranchOptions: getAllowBranchOptions(focuses),
@@ -246,7 +356,12 @@ export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFoc
             conditionExprs,
             isSharedFocues: false,
             warnings,
-        });
+            file: filePath,
+            treeRange: focusTree._token ?
+                { start: focusTree._token.start, end: focusTree._valueEndToken?.end ?? focusTree._token.end } : undefined,
+        };
+        warnings.push(...validateFocusTree(tree));
+        focusTrees.push(tree);
     }
 
     return focusTrees;
@@ -314,9 +429,11 @@ function getFocuses(hoiFocuses: HOIPartial<FocusDef>[], conditionExprs: Conditio
 }
 
 function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[], filePath: string, warnings: FocusWarning[], constants: {}): Focus | null {
-    const id = hoiFocus.id ?? `[missing_id_${randomString(8)}]`;
+    const idValue = hoiFocus.id?._raw ? convertNodeToJson<string>(hoiFocus.id._raw, "string", constants) : undefined;
+    const id = idValue ?? `[missing_id_${randomString(8)}]`;
+    const idToken = hoiFocus.id?._valueStartToken === hoiFocus.id?._valueEndToken ? hoiFocus.id?._valueEndToken : undefined;
 
-    if (!hoiFocus.id) {
+    if (!idValue) {
         warnings.push({
             text: localize('focustree.warnings.focusnoid', "A focus defined in this file don't have ID: {0}.", filePath),
             source: id,
@@ -325,14 +442,22 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
 
     const x = hoiFocus.x?._raw ? convertNodeToJson<number>(hoiFocus.x._raw, "number", constants) ?? 0 : 0;
     const y = hoiFocus.y?._raw ? convertNodeToJson<number>(hoiFocus.y._raw, "number", constants) ?? 0 : 0;
-    const relativePositionId = hoiFocus.relative_position_id;
+    const relativePositionId = hoiFocus.relative_position_id?._raw ? convertNodeToJson<string>(hoiFocus.relative_position_id._raw, "string", constants) : undefined;
+    const relativePositionIdToken = hoiFocus.relative_position_id?._valueStartToken === hoiFocus.relative_position_id?._valueEndToken ?
+        hoiFocus.relative_position_id?._valueEndToken : undefined;
+    const relativePositionIdRange: TokenRange | undefined = hoiFocus.relative_position_id?._token ?
+        { start: hoiFocus.relative_position_id._token.start, end: hoiFocus.relative_position_id._valueEndToken?.end ?? hoiFocus.relative_position_id._token.end } : undefined;
 
     const exclusive = chain(hoiFocus.mutually_exclusive)
         .flatMap(f => f.focus.concat(f.OR))
         .filter((s): s is string => s !== undefined)
         .value();
+    const exclusiveGroups = hoiFocus.mutually_exclusive.map(f => focusRelationGroup(f));
     const prerequisite = hoiFocus.prerequisite
         .map(p => p.focus.concat(p.OR).filter((s): s is string => s !== undefined));
+    const prerequisiteGroups = hoiFocus.prerequisite.map(p => focusRelationGroup(p));
+    const blockRange: TokenRange | undefined = hoiFocus._token ?
+        { start: hoiFocus._token.start, end: hoiFocus._valueEndToken?.end ?? hoiFocus._token.end } : undefined;
     const icon = parseFocusIcon(hoiFocus.icon.filter((v): v is Raw => v !== undefined).map(v => v._raw), constants, conditionExprs);
     if (hoiFocus.alternate_icon) {
         const condition = { scopeName: '', nodeContent: 'Show alternate icon' };
@@ -355,9 +480,14 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
         icon,
         x,
         y,
+        idToken,
         relativePositionId,
+        relativePositionIdToken,
+        relativePositionIdRange,
         prerequisite,
+        prerequisiteGroups,
         exclusive,
+        exclusiveGroups,
         hasAllowBranch,
         inAllowBranch: hasAllowBranch ? [id] : [],
         allowBranch: allowBranchCondition,
@@ -368,7 +498,14 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
         overlay,
         xToken: hoiFocus.x?._valueStartToken === hoiFocus.x?._valueEndToken ? hoiFocus.x?._valueEndToken : undefined,
         yToken: hoiFocus.y?._valueStartToken === hoiFocus.y?._valueEndToken ? hoiFocus.y?._valueEndToken : undefined,
+        blockRange,
     };
+}
+
+function focusRelationGroup(group: HOIPartial<FocusOrORList>): FocusRelationGroup {
+    const ids = group.focus.concat(group.OR).filter((s): s is string => s !== undefined);
+    const range: TokenRange = { start: group._token?.start ?? 0, end: group._valueEndToken?.end ?? group._token?.end ?? 0 };
+    return { ids, range };
 }
 
 function addSharedFocus(focuses: Record<string, Focus>, filePath: string, sharedFocusTrees: FocusTree[], sharedFocusId: string, conditionExprs: ConditionItem[], warnings: FocusWarning[]) {

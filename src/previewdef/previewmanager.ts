@@ -17,6 +17,7 @@ import { sendEvent } from '../util/telemetry';
 import { guiPreviewDef } from './gui';
 import { mioPreviewDef } from './mio';
 import { indexManager } from '../indexing/indexmanager';
+import { registerFocusTreeDiagnostics } from './focustree/diagnostics';
 
 export type PreviewProviderDef = PreviewProviderDefNormal | PreviewProviderDefAlternative;
 
@@ -70,6 +71,7 @@ class PreviewManager implements vscode.WebviewPanelSerializer {
             disposables.push(vscode.window.registerWebviewPanelSerializer(WebviewType.Preview, this));
         }
         disposables.push(indexManager.onUpdated(this.onGfxIndexInitialized, this));
+        disposables.push(registerFocusTreeDiagnostics());
 
         // Trigger context value setting
         this.updateHoi4PreviewContextValue(vscode.window.activeTextEditor);

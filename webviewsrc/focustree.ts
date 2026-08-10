@@ -1,9 +1,13 @@
-import { getState, setState, arrayToMap, subscribeNavigators, scrollToState, tryRun, enableZoom, subscribePreviewLabelToggle, refreshPreviewLabelMode } from "./util/common";
+import { getState, setState, arrayToMap, subscribeNavigators, scrollToState, tryRun, enableZoom, subscribePreviewLabelToggle, refreshPreviewLabelMode, ZoomControl } from "./util/common";
 import { DivDropdown } from "./util/dropdown";
-import { difference, minBy } from "lodash";
+import { difference, flatten, minBy } from "lodash";
 import { renderGridBoxCommon, GridBoxItem, GridBoxConnection } from "../src/util/hoi4gui/gridboxcommon";
 import { StyleTable, normalizeForStyle } from "../src/util/styletable";
-import { FocusTree, Focus, UpdateFocusPositionsMessage } from "../src/previewdef/focustree/schema";
+import {
+    FocusTree, Focus, UpdateFocusPositionsMessage,
+    CreateFocusMessage, DeleteFocusMessage, DuplicateFocusMessage, DuplicateBranchMessage, RenameFocusMessage,
+    SetPrerequisitesMessage, SetMutuallyExclusiveMessage, SetRelativePositionMessage,
+} from "../src/previewdef/focustree/schema";
 import { applyCondition, ConditionItem, conditionItemToStringValue, conditionToString, stringValueToConditionItem } from "../src/hoiformat/condition";
 import { NumberPosition } from "../src/util/common";
 import { GridBoxType } from "../src/hoiformat/gui";
@@ -62,6 +66,7 @@ let allowBranches: DivDropdown | undefined = undefined;
 let conditions: DivDropdown | undefined = undefined;
 let checkedFocuses: Record<string, Checkbox> = {};
 let selectedFocusIds: string[] = getState().selectedFocusIds ?? [];
+let zoomControl: ZoomControl | undefined;
 
 async function buildContent() {
     const focusCheckState = getState().checkedFocuses ?? {};
@@ -362,6 +367,125 @@ function setupCheckedFocuses(focuses: Focus[], focusTree: FocusTree) {
     }
 }
 
+type ConnectionMode = 'prerequisite' | 'mutex';
+
+/**
+ * Alt+drag (Alt+Shift+drag for mutually exclusive) from one focus onto
+ * another draws a live connector and, on drop, adds the relationship --
+ * the canvas equivalent of the inspector's prerequisite/mutex dropdowns.
+ * Existing relationships and self-drops are silently ignored rather than
+ * sent as no-op edits.
+ */
+function startConnectionDrag(sourceFocus: Focus, startEvent: MouseEvent, mode: ConnectionMode): void {
+    const sourceElement = document.getElementById('focus_' + sourceFocus.id) as HTMLDivElement | null;
+    if (!sourceElement) {
+        return;
+    }
+
+    const color = mode === 'mutex' ? '#e33' : '#5af';
+
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.style.position = 'fixed';
+    svg.style.left = '0';
+    svg.style.top = '0';
+    svg.style.width = '100vw';
+    svg.style.height = '100vh';
+    svg.style.pointerEvents = 'none';
+    svg.style.zIndex = '9999';
+
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', '2');
+    if (mode === 'mutex') {
+        line.setAttribute('stroke-dasharray', '5 4');
+    }
+    svg.appendChild(line);
+    document.body.append(svg);
+
+    const sourceRect = sourceElement.getBoundingClientRect();
+    const sourceCenterX = sourceRect.left + sourceRect.width / 2;
+    const sourceCenterY = sourceRect.top + sourceRect.height / 2;
+
+    const updateLine = (x: number, y: number) => {
+        line.setAttribute('x1', String(sourceCenterX));
+        line.setAttribute('y1', String(sourceCenterY));
+        line.setAttribute('x2', String(x));
+        line.setAttribute('y2', String(y));
+    };
+    updateLine(startEvent.clientX, startEvent.clientY);
+
+    let hoveredTarget: HTMLDivElement | null = null;
+    const setHovered = (el: HTMLDivElement | null) => {
+        if (hoveredTarget === el) {
+            return;
+        }
+        if (hoveredTarget) {
+            hoveredTarget.style.outline = '';
+        }
+        hoveredTarget = el;
+        if (hoveredTarget) {
+            hoveredTarget.style.outline = `2px solid ${color}`;
+        }
+    };
+
+    const targetUnderCursor = (x: number, y: number): HTMLDivElement | null => {
+        const el = document.elementFromPoint(x, y);
+        const focusEl = el instanceof HTMLElement ? el.closest<HTMLDivElement>('.focus') : null;
+        return focusEl && focusEl.id !== sourceElement.id ? focusEl : null;
+    };
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+        updateLine(moveEvent.clientX, moveEvent.clientY);
+        setHovered(targetUnderCursor(moveEvent.clientX, moveEvent.clientY));
+    };
+
+    const onMouseUp = (upEvent: MouseEvent) => {
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+        setHovered(null);
+        svg.remove();
+
+        const targetElement = targetUnderCursor(upEvent.clientX, upEvent.clientY);
+        const targetId = targetElement?.id.replace(/^focus_/, '');
+        if (!targetId) {
+            return;
+        }
+
+        const focusTree = focusTrees[selectedFocusTreeIndex];
+        const target = focusTree?.focuses[targetId];
+        if (!target) {
+            return;
+        }
+
+        if (mode === 'prerequisite') {
+            if (flatten(target.prerequisite).includes(sourceFocus.id)) {
+                return;
+            }
+            const message: SetPrerequisitesMessage = {
+                command: 'setPrerequisites',
+                lastDocumentChangeTimestamp: timestamp(),
+                focus: target,
+                groups: [...target.prerequisite, [sourceFocus.id]],
+            };
+            vscode.postMessage(message);
+        } else {
+            if (target.exclusive.includes(sourceFocus.id)) {
+                return;
+            }
+            const message: SetMutuallyExclusiveMessage = {
+                command: 'setMutuallyExclusive',
+                lastDocumentChangeTimestamp: timestamp(),
+                focus: target,
+                ids: [...target.exclusive, sourceFocus.id],
+            };
+            vscode.postMessage(message);
+        }
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+}
+
 function setupFocusDragging(focuses: Focus[]) {
     const xGridSize = (window as any).xGridSize as number;
     const yGridSize = (window as any).yGridSize as number;
@@ -385,6 +509,20 @@ function setupFocusDragging(focuses: Focus[]) {
 
             e.preventDefault();
             e.stopPropagation();
+
+            if (e.altKey) {
+                startConnectionDrag(focus, e, e.shiftKey ? 'mutex' : 'prerequisite');
+                return;
+            }
+
+            if (e.ctrlKey || e.metaKey) {
+                selectedFocusIds = selectedFocusIds.includes(focus.id) ?
+                    selectedFocusIds.filter(id => id !== focus.id) :
+                    [...selectedFocusIds, focus.id];
+                setState({ selectedFocusIds });
+                refreshFocusSelection();
+                return;
+            }
 
             if (!selectedFocusIds.includes(focus.id)) {
                 selectedFocusIds = [focus.id];
@@ -517,6 +655,420 @@ function refreshFocusSelection(): void {
         const selected = selectedFocusIds.includes(focusElement.id.replace(/^focus_/, ''));
         focusElement.style.boxShadow = selected ? '0 0 0 3px var(--vscode-focusBorder)' : '';
     }
+    renderFocusDetails();
+}
+
+function arraysEqualAsSets(a: readonly string[], b: readonly string[]): boolean {
+    if (a.length !== b.length) {
+        return false;
+    }
+    const bSet = new Set(b);
+    return a.every(v => bSet.has(v));
+}
+
+let prereqDropdown: DivDropdown | undefined;
+let mutexDropdown: DivDropdown | undefined;
+let relativeDropdown: DivDropdown | undefined;
+
+const NO_RELATIVE_POSITION = '';
+
+function setButtonDisabled(id: string, disabled: boolean): void {
+    const button = document.getElementById(id) as HTMLButtonElement | null;
+    if (button) {
+        button.disabled = disabled;
+    }
+}
+
+function renderFocusDetails(): void {
+    const container = document.getElementById('focusdetails-container') as HTMLDivElement | null;
+    const content = document.getElementById('focusdetails-content') as HTMLDivElement | null;
+
+    setButtonDisabled('delete-focus-button', selectedFocusIds.length === 0);
+    setButtonDisabled('duplicate-focus-button', selectedFocusIds.length === 0);
+    setButtonDisabled('duplicate-branch-button', selectedFocusIds.length !== 1);
+    setButtonDisabled('align-left-button', selectedFocusIds.length < 2);
+    setButtonDisabled('align-right-button', selectedFocusIds.length < 2);
+    setButtonDisabled('align-top-button', selectedFocusIds.length < 2);
+    setButtonDisabled('align-bottom-button', selectedFocusIds.length < 2);
+    setButtonDisabled('distribute-horizontal-button', selectedFocusIds.length < 3);
+    setButtonDisabled('distribute-vertical-button', selectedFocusIds.length < 3);
+    setButtonDisabled('fit-selection-button', selectedFocusIds.length === 0);
+
+    // The details panel below only supports a single focus at a time; a multi-selection just
+    // updates the buttons above and leaves it hidden, rather than showing stale single-focus fields.
+    if (selectedFocusIds.length !== 1) {
+        if (container) {
+            container.style.display = 'none';
+        }
+        if (content) {
+            content.innerHTML = '';
+        }
+        prereqDropdown = mutexDropdown = relativeDropdown = undefined;
+        return;
+    }
+
+    if (!container || !content) {
+        return;
+    }
+
+    const focusTree = focusTrees[selectedFocusTreeIndex];
+    const focus = selectedFocusIds.length === 1 ? focusTree?.focuses[selectedFocusIds[0]] : undefined;
+
+    prereqDropdown = mutexDropdown = relativeDropdown = undefined;
+    if (!focus) {
+        container.style.display = 'none';
+        content.innerHTML = '';
+        return;
+    }
+
+    container.style.display = 'block';
+    content.innerHTML = `
+        <div class="focusdetails-row"><label for="focusdetails-id">${feLocalize('focustree.details.id', 'ID')}</label>
+            <input type="text" id="focusdetails-id" value="${htmlAttrEscape(focus.id)}" /></div>
+        <div class="focusdetails-row"><label for="focusdetails-x">${feLocalize('focustree.details.x', 'X')}</label>
+            <input type="number" id="focusdetails-x" value="${focus.x}" style="width:70px" />
+            <label for="focusdetails-y">${feLocalize('focustree.details.y', 'Y')}</label>
+            <input type="number" id="focusdetails-y" value="${focus.y}" style="width:70px" /></div>
+        <div class="focusdetails-row"><label>${feLocalize('focustree.details.prerequisites', 'Prerequisites')}</label>
+            <div id="focusdetails-prereq" class="select multiple-select" tabindex="0" role="combobox"><span class="value"></span></div></div>
+        <div class="focusdetails-row"><label>${feLocalize('focustree.details.mutex', 'Mutually exclusive')}</label>
+            <div id="focusdetails-mutex" class="select multiple-select" tabindex="0" role="combobox"><span class="value"></span></div></div>
+        <div class="focusdetails-row"><label>${feLocalize('focustree.details.relative', 'Relative position')}</label>
+            <div id="focusdetails-relative" class="select" tabindex="0" role="combobox"><span class="value"></span></div></div>
+    `;
+
+    const otherFocuses = Object.values(focusTree.focuses).filter(f => f.id !== focus.id);
+
+    const idInput = document.getElementById('focusdetails-id') as HTMLInputElement;
+    idInput.addEventListener('change', () => {
+        const newId = idInput.value.trim();
+        if (newId && newId !== focus.id) {
+            const message: RenameFocusMessage = { command: 'renameFocus', lastDocumentChangeTimestamp: timestamp(), tree: focusTree, oldId: focus.id, newId };
+            vscode.postMessage(message);
+        } else {
+            idInput.value = focus.id;
+        }
+    });
+
+    const xInput = document.getElementById('focusdetails-x') as HTMLInputElement;
+    const yInput = document.getElementById('focusdetails-y') as HTMLInputElement;
+    const submitPosition = () => {
+        const x = parseInt(xInput.value, 10);
+        const y = parseInt(yInput.value, 10);
+        if (Number.isFinite(x) && Number.isFinite(y) && (x !== focus.x || y !== focus.y)) {
+            const message: UpdateFocusPositionsMessage = {
+                command: 'updateFocusPositions',
+                lastDocumentChangeTimestamp: timestamp(),
+                focuses: [{ focus, file: focus.file, x, y }],
+            };
+            vscode.postMessage(message);
+        }
+    };
+    xInput.addEventListener('change', submitPosition);
+    yInput.addEventListener('change', submitPosition);
+
+    const prereqContainer = document.getElementById('focusdetails-prereq') as HTMLDivElement;
+    prereqDropdown = new DivDropdown(prereqContainer, true);
+    prereqDropdown.setupOptions(otherFocuses.map(f => ({ value: f.id, text: f.id })));
+    prereqDropdown.selectedValues$.next(flatten(focus.prerequisite));
+    prereqDropdown.selectedValues$.subscribe(selected => {
+        if (!arraysEqualAsSets(flatten(focus.prerequisite), selected)) {
+            const message: SetPrerequisitesMessage = { command: 'setPrerequisites', lastDocumentChangeTimestamp: timestamp(), focus, groups: selected.map(id => [id]) };
+            vscode.postMessage(message);
+        }
+    });
+
+    const mutexContainer = document.getElementById('focusdetails-mutex') as HTMLDivElement;
+    mutexDropdown = new DivDropdown(mutexContainer, true);
+    mutexDropdown.setupOptions(otherFocuses.map(f => ({ value: f.id, text: f.id })));
+    mutexDropdown.selectedValues$.next(focus.exclusive);
+    mutexDropdown.selectedValues$.subscribe(selected => {
+        if (!arraysEqualAsSets(focus.exclusive, selected)) {
+            const message: SetMutuallyExclusiveMessage = { command: 'setMutuallyExclusive', lastDocumentChangeTimestamp: timestamp(), focus, ids: [...selected] };
+            vscode.postMessage(message);
+        }
+    });
+
+    const relativeContainer = document.getElementById('focusdetails-relative') as HTMLDivElement;
+    relativeDropdown = new DivDropdown(relativeContainer, false);
+    relativeDropdown.setupOptions([
+        { value: NO_RELATIVE_POSITION, text: feLocalize('focustree.details.none', '(none)') },
+        ...otherFocuses.map(f => ({ value: f.id, text: f.id })),
+    ]);
+    relativeDropdown.selectedValues$.next([focus.relativePositionId ?? NO_RELATIVE_POSITION]);
+    relativeDropdown.selectedValues$.subscribe(selected => {
+        const anchorId = selected[0] === NO_RELATIVE_POSITION ? undefined : selected[0];
+        if (anchorId !== focus.relativePositionId) {
+            const message: SetRelativePositionMessage = { command: 'setRelativePosition', lastDocumentChangeTimestamp: timestamp(), focus, anchorId };
+            vscode.postMessage(message);
+        }
+    });
+}
+
+function htmlAttrEscape(text: string): string {
+    return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function timestamp(): number {
+    return (window as any).lastDocumentChangeTimestamp;
+}
+
+/** `undefined` for a focus living in the previewed file itself (the fast path `getDocumentForPreviewMessage` expects), matching how the file attribute is only rendered for out-of-file focuses (contentbuilder.ts). */
+function focusFileForMessage(focus: Focus, focusTree: FocusTree): string | undefined {
+    return focus.file === focusTree.file ? undefined : focus.file;
+}
+
+function deleteSelectedFocuses(): void {
+    const focusTree = focusTrees[selectedFocusTreeIndex];
+    if (!focusTree || selectedFocusIds.length === 0) {
+        return;
+    }
+    const confirmMessage = selectedFocusIds.length === 1 ?
+        feLocalize('focustree.details.confirmdelete', 'Delete focus "{0}"? This also removes every reference to it.', selectedFocusIds[0]) :
+        feLocalize('focustree.details.confirmdeletemultiple', 'Delete {0} focuses? This also removes every reference to them.', selectedFocusIds.length.toString());
+    if (!window.confirm(confirmMessage)) {
+        return;
+    }
+    const message: DeleteFocusMessage = {
+        command: 'deleteFocus',
+        lastDocumentChangeTimestamp: timestamp(),
+        tree: focusTree,
+        focusIds: [...selectedFocusIds],
+    };
+    vscode.postMessage(message);
+}
+
+function duplicateSelectedFocuses(): void {
+    const focusTree = focusTrees[selectedFocusTreeIndex];
+    if (!focusTree || selectedFocusIds.length === 0) {
+        return;
+    }
+    const message: DuplicateFocusMessage = {
+        command: 'duplicateFocus',
+        lastDocumentChangeTimestamp: timestamp(),
+        tree: focusTree,
+        focusIds: [...selectedFocusIds],
+    };
+    vscode.postMessage(message);
+}
+
+function duplicateSelectedBranch(): void {
+    const focusTree = focusTrees[selectedFocusTreeIndex];
+    if (!focusTree || selectedFocusIds.length !== 1) {
+        return;
+    }
+    const message: DuplicateBranchMessage = {
+        command: 'duplicateBranch',
+        lastDocumentChangeTimestamp: timestamp(),
+        tree: focusTree,
+        rootFocusId: selectedFocusIds[0],
+    };
+    vscode.postMessage(message);
+}
+
+function nudgeSelectedFocuses(deltaGridX: number, deltaGridY: number): void {
+    const focusTree = focusTrees[selectedFocusTreeIndex];
+    if (!focusTree || selectedFocusIds.length === 0) {
+        return;
+    }
+    const focuses = Object.values(focusTree.focuses);
+    const movedFocuses = selectedFocusIds
+        .map(id => focusTree.focuses[id])
+        .filter((f): f is Focus => !!f && !hasSelectedRelativeAncestor(f, focuses));
+    if (movedFocuses.length === 0) {
+        return;
+    }
+    const message: UpdateFocusPositionsMessage = {
+        command: 'updateFocusPositions',
+        lastDocumentChangeTimestamp: timestamp(),
+        focuses: movedFocuses.map(f => ({ focus: f, file: focusFileForMessage(f, focusTree), x: f.x + deltaGridX, y: f.y + deltaGridY })),
+    };
+    vscode.postMessage(message);
+}
+
+type AlignEdge = 'left' | 'right' | 'top' | 'bottom';
+
+function alignSelectedFocuses(edge: AlignEdge): void {
+    const focusTree = focusTrees[selectedFocusTreeIndex];
+    if (!focusTree || selectedFocusIds.length < 2) {
+        return;
+    }
+    const selected = selectedFocusIds.map(id => focusTree.focuses[id]).filter((f): f is Focus => !!f);
+    if (selected.length < 2) {
+        return;
+    }
+
+    const isHorizontal = edge === 'left' || edge === 'right';
+    const values = selected.map(f => isHorizontal ? f.x : f.y);
+    const target = edge === 'left' || edge === 'top' ? Math.min(...values) : Math.max(...values);
+
+    const message: UpdateFocusPositionsMessage = {
+        command: 'updateFocusPositions',
+        lastDocumentChangeTimestamp: timestamp(),
+        focuses: selected
+            .filter(f => (isHorizontal ? f.x : f.y) !== target)
+            .map(f => ({ focus: f, file: focusFileForMessage(f, focusTree), x: isHorizontal ? target : f.x, y: isHorizontal ? f.y : target })),
+    };
+    if (message.focuses.length > 0) {
+        vscode.postMessage(message);
+    }
+}
+
+type DistributeAxis = 'horizontal' | 'vertical';
+
+function distributeSelectedFocuses(axis: DistributeAxis): void {
+    const focusTree = focusTrees[selectedFocusTreeIndex];
+    if (!focusTree || selectedFocusIds.length < 3) {
+        return;
+    }
+    const selected = selectedFocusIds.map(id => focusTree.focuses[id]).filter((f): f is Focus => !!f);
+    if (selected.length < 3) {
+        return;
+    }
+
+    const isHorizontal = axis === 'horizontal';
+    const sorted = [...selected].sort((a, b) => (isHorizontal ? a.x - b.x : a.y - b.y));
+    const first = isHorizontal ? sorted[0].x : sorted[0].y;
+    const last = isHorizontal ? sorted[sorted.length - 1].x : sorted[sorted.length - 1].y;
+    const step = (last - first) / (sorted.length - 1);
+
+    const message: UpdateFocusPositionsMessage = {
+        command: 'updateFocusPositions',
+        lastDocumentChangeTimestamp: timestamp(),
+        focuses: sorted
+            .map((f, i) => ({ f, target: Math.round(first + step * i) }))
+            .filter(({ f, target }) => (isHorizontal ? f.x : f.y) !== target)
+            .map(({ f, target }) => ({ focus: f, file: focusFileForMessage(f, focusTree), x: isHorizontal ? target : f.x, y: isHorizontal ? f.y : target })),
+    };
+    if (message.focuses.length > 0) {
+        vscode.postMessage(message);
+    }
+}
+
+function fitToFocuses(elements: HTMLDivElement[]): void {
+    if (!zoomControl || elements.length === 0) {
+        return;
+    }
+
+    const contentElement = document.getElementById('focustreecontent') as HTMLDivElement | null;
+    if (!contentElement) {
+        return;
+    }
+
+    const oldScale = zoomControl.getScale();
+    const contentRect = contentElement.getBoundingClientRect();
+    const originDocX = contentRect.left + window.scrollX;
+    const originDocY = contentRect.top + window.scrollY;
+
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const element of elements) {
+        const rect = element.getBoundingClientRect();
+        const left = (rect.left + window.scrollX - originDocX) / oldScale;
+        const top = (rect.top + window.scrollY - originDocY) / oldScale;
+        const right = (rect.right + window.scrollX - originDocX) / oldScale;
+        const bottom = (rect.bottom + window.scrollY - originDocY) / oldScale;
+        minX = Math.min(minX, left);
+        minY = Math.min(minY, top);
+        maxX = Math.max(maxX, right);
+        maxY = Math.max(maxY, bottom);
+    }
+
+    const padding = 80;
+    const boxWidth = Math.max(1, maxX - minX) + padding * 2;
+    const boxHeight = Math.max(1, maxY - minY) + padding * 2;
+
+    const newScale = Math.min(1, Math.max(0.2, Math.min(window.innerWidth / boxWidth, window.innerHeight / boxHeight)));
+
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+    zoomControl.setScale(newScale);
+
+    const boxCenterDocX = originDocX + centerX * newScale;
+    const boxCenterDocY = originDocY + centerY * newScale;
+    window.scrollTo(boxCenterDocX - window.innerWidth / 2, boxCenterDocY - window.innerHeight / 2);
+}
+
+function fitToTree(): void {
+    fitToFocuses(Array.from(document.querySelectorAll<HTMLDivElement>('.focus')).filter(el => el.style.display !== 'none'));
+}
+
+function fitToSelection(): void {
+    if (selectedFocusIds.length === 0) {
+        fitToTree();
+        return;
+    }
+    const elements = selectedFocusIds
+        .map(id => document.getElementById('focus_' + id) as HTMLDivElement | null)
+        .filter((el): el is HTMLDivElement => !!el);
+    fitToFocuses(elements);
+}
+
+function setupEditingToolbar(): void {
+    const newFocusButton = document.getElementById('new-focus-button') as HTMLButtonElement | null;
+    newFocusButton?.addEventListener('click', () => {
+        const focusTree = focusTrees[selectedFocusTreeIndex];
+        if (!focusTree) {
+            return;
+        }
+        const id = window.prompt(feLocalize('focustree.details.newfocusprompt', 'New focus ID:'));
+        if (!id || !id.trim()) {
+            return;
+        }
+        const existing = Object.values(focusTree.focuses);
+        const x = existing.length > 0 ? Math.max(...existing.map(f => f.x)) + 1 : 0;
+        const message: CreateFocusMessage = {
+            command: 'createFocus',
+            lastDocumentChangeTimestamp: timestamp(),
+            tree: focusTree,
+            id: id.trim(),
+            x,
+            y: 0,
+        };
+        vscode.postMessage(message);
+    });
+
+    document.getElementById('delete-focus-button')?.addEventListener('click', deleteSelectedFocuses);
+    document.getElementById('duplicate-focus-button')?.addEventListener('click', duplicateSelectedFocuses);
+    document.getElementById('duplicate-branch-button')?.addEventListener('click', duplicateSelectedBranch);
+    document.getElementById('align-left-button')?.addEventListener('click', () => alignSelectedFocuses('left'));
+    document.getElementById('align-right-button')?.addEventListener('click', () => alignSelectedFocuses('right'));
+    document.getElementById('align-top-button')?.addEventListener('click', () => alignSelectedFocuses('top'));
+    document.getElementById('align-bottom-button')?.addEventListener('click', () => alignSelectedFocuses('bottom'));
+    document.getElementById('distribute-horizontal-button')?.addEventListener('click', () => distributeSelectedFocuses('horizontal'));
+    document.getElementById('distribute-vertical-button')?.addEventListener('click', () => distributeSelectedFocuses('vertical'));
+    document.getElementById('fit-tree-button')?.addEventListener('click', fitToTree);
+    document.getElementById('fit-selection-button')?.addEventListener('click', fitToSelection);
+
+    window.addEventListener('keydown', e => {
+        if (isInteractiveTarget(e.target)) {
+            return;
+        }
+
+        if (e.key === '0' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            fitToTree();
+            return;
+        }
+
+        if (selectedFocusIds.length === 0) {
+            return;
+        }
+
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+            e.preventDefault();
+            deleteSelectedFocuses();
+        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
+            e.preventDefault();
+            duplicateSelectedFocuses();
+        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            const step = e.shiftKey ? 5 : 1;
+            const deltaX = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+            const deltaY = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+            nudgeSelectedFocuses(deltaX, deltaY);
+        }
+    });
 }
 
 function getFocusElements(focuses: Focus[]): { focus: Focus, element: HTMLDivElement, navigator: HTMLDivElement }[] {
@@ -585,6 +1137,7 @@ let retriggerSearch: () => void = () => {};
 window.addEventListener('load', tryRun(async function() {
     subscribePreviewLabelToggle();
     setupFocusBoxSelection();
+    setupEditingToolbar();
 
     // Focuses
     const focusesElement = document.getElementById('focuses') as HTMLSelectElement | null;
@@ -681,7 +1234,7 @@ window.addEventListener('load', tryRun(async function() {
 
     // Zoom
     const contentElement = document.getElementById('focustreecontent') as HTMLDivElement;
-    enableZoom(contentElement, 0, 40);
+    zoomControl = enableZoom(contentElement, 0, 40);
 
     // Toggle warnings
     const showWarnings = document.getElementById('show-warnings') as HTMLButtonElement;

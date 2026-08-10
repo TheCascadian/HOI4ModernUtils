@@ -42,4 +42,4 @@ HOI4 Modern Utils is a Visual Studio Code extension for Hearts of Iron IV mod de
 - Releases: <https://github.com/TheCascadian/HOI4ModernUtils/releases>
 - Issues: <https://github.com/TheCascadian/HOI4ModernUtils/issues>
 - License: MIT, see [LICENSE](../../LICENSE)
-- Current extension version: `0.4.4`
+- Current extension version: `0.4.7-pre-release-2`

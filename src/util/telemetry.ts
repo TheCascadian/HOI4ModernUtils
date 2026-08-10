@@ -1,4 +1,9 @@
-import TelemetryReporter from '@vscode/extension-telemetry';
+// Type-only: a real top-level import would make loading this module (and
+// everything that transitively imports it, like localize()) require the
+// 'vscode' module to resolve even outside the extension host -- e.g. in
+// plain unit tests. The runtime import is deferred into
+// registerTelemetryReporter(), the only place the class is instantiated.
+import type TelemetryReporter from '@vscode/extension-telemetry';
 
 interface TelemetryReporterInterface {
     sendTelemetryEvent(eventName: string, properties?: {
@@ -30,7 +35,9 @@ export interface TelemetryMessage {
 export function registerTelemetryReporter() {
     const isDev = process.env.NODE_ENV !== 'production';
     if (!isDev) {
-        telemetryReporter = new TelemetryReporter(EXTENSION_ID, VERSION, '41a5f5b6-f4f0-4707-96ba-c895a2dabf17');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const TelemetryReporterCtor: typeof TelemetryReporter = require('@vscode/extension-telemetry').default;
+        telemetryReporter = new TelemetryReporterCtor(EXTENSION_ID, VERSION, '41a5f5b6-f4f0-4707-96ba-c895a2dabf17');
     } else {
         telemetryReporter = new DevTelemetryReporter();
     }

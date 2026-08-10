@@ -23,7 +23,7 @@ After a supported province merge, the extension repairs affected state victory p
 
 Loader recovery records such as province `0` and color `0` are diagnostic placeholders, not editable definitions. Manual selection and persistence now discard them before validation. A real positive-ID, nonzero-color province remains required as the merge survivor.
 
-The paintbrush keeps edits in a draft until **Apply & Exit**. Version 0.4.4 batches every interpolated pointer sample into one draft update and caches the staged overlay, fixing the severe slowdown that appeared as the painted region grew. A deterministic synthetic 20,000-pixel, 256-dab workload measured 99.75% lower processing time than the previous per-dab path; this does not replace live Extension Host testing.
+The paintbrush keeps edits in a draft until **Apply & Exit**. Version 0.4.7-pre-release-2 batches every interpolated pointer sample into one draft update and caches the staged overlay, fixing the severe slowdown that appeared as the painted region grew. A deterministic synthetic 20,000-pixel, 256-dab workload measured 99.75% lower processing time than the previous per-dab path; this does not replace live Extension Host testing.
 
 ## State and strategic-region editing
 

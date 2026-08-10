@@ -17,7 +17,7 @@ import { localisationIndex } from '../../indexing/localisationindex';
 
 const defaultFocusIcon = 'gfx/interface/goals/goal_unknown.dds';
 
-export async function renderFocusTreeFile(loader: FocusTreeLoader, uri: vscode.Uri, webview: vscode.Webview, lastDocumentChangeTimestamp: number): Promise<string> {
+export async function renderFocusTreeFile(loader: FocusTreeLoader, uri: vscode.Uri, webview: vscode.Webview, lastDocumentChangeTimestamp: number, onFocusTrees?: (focusTrees: FocusTree[]) => void): Promise<string> {
     const setPreviewFileUriScript = { content: `window.previewedFileUri = "${uri.toString()}";` };
 
     try {
@@ -27,6 +27,7 @@ export async function renderFocusTreeFile(loader: FocusTreeLoader, uri: vscode.U
         debug('Loader session focus tree', loadedLoaders);
 
         const focustrees = loadResult.result.focusTrees;
+        onFocusTrees?.(focustrees);
 
         if (focustrees.length === 0) {
             const baseContent = localize('focustree.nofocustree', 'No focus tree.');
@@ -115,8 +116,28 @@ async function renderFocusTrees(focusTrees: FocusTree[], styleTable: StyleTable,
             ${continuousFocusContent}
         </div>` +
         renderWarningContainer(styleTable) +
+        renderFocusDetailsContainer(styleTable) +
         renderToolBar(focusTrees, styleTable)
     );
+}
+
+function renderFocusDetailsContainer(styleTable: StyleTable): string {
+    return `
+    <div id="focusdetails-container" class="${styleTable.style('focusdetails-container', () => `
+        height: 100vh;
+        width: 320px;
+        position: fixed;
+        top: 40px;
+        right: 0;
+        padding: 10px;
+        box-sizing: border-box;
+        background: var(--vscode-editor-background);
+        border-left: 1px solid var(--vscode-panel-border);
+        overflow-y: auto;
+        display: none;
+    `)}">
+        <div id="focusdetails-content"></div>
+    </div>`;
 }
 
 function renderWarningContainer(styleTable: StyleTable) {
@@ -190,12 +211,57 @@ function renderToolBar(focusTrees: FocusTree[], styleTable: StyleTable): string 
             <i class="codicon codicon-warning"></i>
         </button>`;
 
+    const editButtons = `
+        <button id="new-focus-button" title="${localize('focustree.newfocus', 'New focus')}">
+            <i class="codicon codicon-add"></i>
+        </button>
+        <button id="duplicate-focus-button" title="${localize('focustree.duplicatefocus', 'Duplicate selected focus/focuses (Ctrl+D)')}" disabled>
+            <i class="codicon codicon-copy"></i>
+        </button>
+        <button id="duplicate-branch-button" title="${localize('focustree.duplicatebranch', 'Duplicate branch: copies the selected focus and everything that requires it, as a self-contained copy')}" disabled>
+            <i class="codicon codicon-type-hierarchy-sub"></i>
+        </button>
+        <button id="delete-focus-button" title="${localize('focustree.deletefocus', 'Delete selected focus/focuses (Delete)')}" disabled>
+            <i class="codicon codicon-trash"></i>
+        </button>
+        <button id="align-left-button" title="${localize('focustree.alignleft', 'Align left')}" disabled>
+            <i class="codicon codicon-arrow-left"></i>
+        </button>
+        <button id="align-right-button" title="${localize('focustree.alignright', 'Align right')}" disabled>
+            <i class="codicon codicon-arrow-right"></i>
+        </button>
+        <button id="align-top-button" title="${localize('focustree.aligntop', 'Align top')}" disabled>
+            <i class="codicon codicon-arrow-up"></i>
+        </button>
+        <button id="align-bottom-button" title="${localize('focustree.alignbottom', 'Align bottom')}" disabled>
+            <i class="codicon codicon-arrow-down"></i>
+        </button>
+        <button id="distribute-horizontal-button" title="${localize('focustree.distributehorizontal', 'Distribute horizontally')}" disabled>
+            <i class="codicon codicon-split-horizontal"></i>
+        </button>
+        <button id="distribute-vertical-button" title="${localize('focustree.distributevertical', 'Distribute vertically')}" disabled>
+            <i class="codicon codicon-split-vertical"></i>
+        </button>
+        <button id="fit-tree-button" title="${localize('focustree.fittree', 'Fit whole tree to view (Ctrl+0)')}">
+            <i class="codicon codicon-screen-full"></i>
+        </button>
+        <button id="fit-selection-button" title="${localize('focustree.fitselection', 'Fit selection to view')}" disabled>
+            <i class="codicon codicon-target"></i>
+        </button>
+        <button id="focustree-help-button" title="${localize(
+            'focustree.help',
+            'Shortcuts: Ctrl/Cmd+click to multi-select, Delete to remove, Ctrl/Cmd+D to duplicate, arrow keys to nudge, Ctrl/Cmd+0 to fit the tree. Alt+drag from one focus onto another to add a prerequisite; Alt+Shift+drag to add a mutually exclusive relation.'
+        )}">
+            <i class="codicon codicon-question"></i>
+        </button>`;
+
     return `<div class="toolbar-outer ${styleTable.style('toolbar-height', () => `box-sizing: border-box; height: 40px;`)}">
         <div class="toolbar">
             ${indexManager.isIndexEnabled('localisation') ? renderPreviewLabelModeControl(styleTable) : ''}
             ${focuses}
             ${searchbox}
             ${isFeatureEnabled('useConditionInFocus') ? conditions : allowbranch}
+            ${editButtons}
             ${warningsButton}
         </div>
     </div>`;
