@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 import { focusTreePreviewDef } from './focustree';
+import { reportFailure } from '../util/errorreport';
 import { localize } from '../util/i18n';
 import { gfxPreviewDef } from './gfx';
 import { Commands, WebviewType, ContextName } from '../constants';
 import { technologyPreviewDef } from './technology';
 import { matchPathEnd } from '../util/nodecommon';
 import { arrayToMap, debounceByInput } from '../util/common';
-import { debug, error } from '../util/debug';
+import { debug } from '../util/debug';
 import { PreviewBase } from './previewbase';
 import { contextContainer, setVscodeContext } from '../context';
 import { basename, getDocumentByUri } from '../util/vsccommon';
@@ -92,7 +93,9 @@ class PreviewManager implements vscode.WebviewPanelSerializer {
             await vscode.workspace.openTextDocument(uri);
             await this.showPreviewImpl(uri, panel);
         } catch (e) {
-            error(e);
+            await reportFailure(e, { area: 'preview', operation: 'restore', file: uriStr }, {
+                summary: localize('preview.failedtorestore', 'Could not restore the preview for "{0}".', uriStr),
+            });
             panel.dispose();
             debug(`dispose panel ${uriStr} because reopen error`);
         }

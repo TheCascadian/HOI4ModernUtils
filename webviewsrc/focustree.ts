@@ -7,7 +7,9 @@ import {
     FocusTree, Focus, UpdateFocusPositionsMessage,
     CreateFocusMessage, DeleteFocusMessage, DuplicateFocusMessage, DuplicateBranchMessage, RenameFocusMessage,
     SetPrerequisitesMessage, SetMutuallyExclusiveMessage, SetRelativePositionMessage,
+    SetFocusPropertiesMessage, FocusEditableProperties,
 } from "../src/previewdef/focustree/schema";
+import { isValidFocusId } from "../src/previewdef/focustree/focusid";
 import { applyCondition, ConditionItem, conditionItemToStringValue, conditionToString, stringValueToConditionItem } from "../src/hoiformat/condition";
 import { NumberPosition } from "../src/util/common";
 import { GridBoxType } from "../src/hoiformat/gui";
@@ -67,6 +69,7 @@ let conditions: DivDropdown | undefined = undefined;
 let checkedFocuses: Record<string, Checkbox> = {};
 let selectedFocusIds: string[] = getState().selectedFocusIds ?? [];
 let zoomControl: ZoomControl | undefined;
+let connectionMode: 'select' | ConnectionMode = getState().focusEditMode ?? 'select';
 
 async function buildContent() {
     const focusCheckState = getState().checkedFocuses ?? {};
@@ -118,7 +121,35 @@ async function buildContent() {
     subscribeNavigators();
     setupCheckedFocuses(focuses, focusTree);
     setupFocusDragging(focuses);
+    applyCanvasDiagnostics(focusTree);
     refreshFocusSelection();
+}
+
+function applyCanvasDiagnostics(focusTree: FocusTree): void {
+    const messages = new Map<string, string[]>();
+    for (const warning of focusTree.warnings) {
+        if (!warning.source || !focusTree.focuses[warning.source]) {
+            continue;
+        }
+        const list = messages.get(warning.source) ?? [];
+        list.push(warning.text);
+        messages.set(warning.source, list);
+    }
+
+    for (const [focusId, warnings] of messages) {
+        const focusElement = document.getElementById('focus_' + focusId);
+        const navigator = focusElement?.querySelector<HTMLElement>('.navigator');
+        if (!focusElement || !navigator) {
+            continue;
+        }
+        focusElement.dataset.focusWarnings = warnings.join('\n');
+        navigator.title = `${navigator.title}${navigator.title ? '\n\n' : ''}${warnings.join('\n')}`;
+        const marker = document.createElement('span');
+        marker.className = 'focus-diagnostic-marker codicon codicon-warning';
+        marker.style.cssText = 'position:absolute;right:2px;top:2px;z-index:4;color:var(--vscode-editorWarning-foreground,#cca700);text-shadow:0 1px 2px #000;';
+        marker.title = warnings.join('\n');
+        navigator.append(marker);
+    }
 }
 
 function calculateFocusAllowed(focusTree: FocusTree, allowBranchOptionsValue: Record<string, boolean>) {
@@ -306,6 +337,15 @@ function focusToGridItem(
         });
     });
 
+    if (focus.relativePositionId && focustree.focuses[focus.relativePositionId]) {
+        connections.push({
+            target: focus.relativePositionId,
+            targetType: 'related',
+            style: '1px dashed transparent',
+            classNames: `${classNames} focus-relative-connection`,
+        });
+    }
+
     const position = getFocusPosition(focus, positionByFocusId, focustree, [], exprs);
 
     return {
@@ -476,7 +516,7 @@ function startConnectionDrag(sourceFocus: Focus, startEvent: MouseEvent, mode: C
                 command: 'setMutuallyExclusive',
                 lastDocumentChangeTimestamp: timestamp(),
                 focus: target,
-                ids: [...target.exclusive, sourceFocus.id],
+                groups: [...target.exclusiveGroups.map(group => [...group.ids]), [sourceFocus.id]],
             };
             vscode.postMessage(message);
         }
@@ -510,8 +550,10 @@ function setupFocusDragging(focuses: Focus[]) {
             e.preventDefault();
             e.stopPropagation();
 
-            if (e.altKey) {
-                startConnectionDrag(focus, e, e.shiftKey ? 'mutex' : 'prerequisite');
+            if (e.altKey || connectionMode !== 'select') {
+                const mode: ConnectionMode = e.altKey ? (e.shiftKey ? 'mutex' : 'prerequisite') :
+                    connectionMode === 'mutex' ? 'mutex' : 'prerequisite';
+                startConnectionDrag(focus, e, mode);
                 return;
             }
 
@@ -666,8 +708,6 @@ function arraysEqualAsSets(a: readonly string[], b: readonly string[]): boolean 
     return a.every(v => bSet.has(v));
 }
 
-let prereqDropdown: DivDropdown | undefined;
-let mutexDropdown: DivDropdown | undefined;
 let relativeDropdown: DivDropdown | undefined;
 
 const NO_RELATIVE_POSITION = '';
@@ -703,7 +743,7 @@ function renderFocusDetails(): void {
         if (content) {
             content.innerHTML = '';
         }
-        prereqDropdown = mutexDropdown = relativeDropdown = undefined;
+        relativeDropdown = undefined;
         return;
     }
 
@@ -714,35 +754,87 @@ function renderFocusDetails(): void {
     const focusTree = focusTrees[selectedFocusTreeIndex];
     const focus = selectedFocusIds.length === 1 ? focusTree?.focuses[selectedFocusIds[0]] : undefined;
 
-    prereqDropdown = mutexDropdown = relativeDropdown = undefined;
+    relativeDropdown = undefined;
     if (!focus) {
         container.style.display = 'none';
         content.innerHTML = '';
         return;
     }
 
+    const properties: FocusEditableProperties = focus.editableProperties ?? {
+        icon: '', cost: '', text: '', available: '', bypass: '', cancel: '', select_effect: '',
+        completion_reward: '', remove_effect: '', complete_tooltip: '', ai_will_do: '',
+        search_filters: '', will_lead_to_war_with: '',
+        available_if_capitulated: false, cancel_if_invalid: false, continue_if_invalid: false,
+    };
+
     container.style.display = 'block';
     content.innerHTML = `
+        <h2 style="margin-top:0">${feLocalize('focustree.details.title', 'Focus properties')}</h2>
         <div class="focusdetails-row"><label for="focusdetails-id">${feLocalize('focustree.details.id', 'ID')}</label>
             <input type="text" id="focusdetails-id" value="${htmlAttrEscape(focus.id)}" /></div>
         <div class="focusdetails-row"><label for="focusdetails-x">${feLocalize('focustree.details.x', 'X')}</label>
             <input type="number" id="focusdetails-x" value="${focus.x}" style="width:70px" />
             <label for="focusdetails-y">${feLocalize('focustree.details.y', 'Y')}</label>
             <input type="number" id="focusdetails-y" value="${focus.y}" style="width:70px" /></div>
-        <div class="focusdetails-row"><label>${feLocalize('focustree.details.prerequisites', 'Prerequisites')}</label>
-            <div id="focusdetails-prereq" class="select multiple-select" tabindex="0" role="combobox"><span class="value"></span></div></div>
-        <div class="focusdetails-row"><label>${feLocalize('focustree.details.mutex', 'Mutually exclusive')}</label>
-            <div id="focusdetails-mutex" class="select multiple-select" tabindex="0" role="combobox"><span class="value"></span></div></div>
+        <div class="focusdetails-row"><label for="focusdetails-prereq">${feLocalize('focustree.details.prerequisitegroups', 'Prerequisite groups')}</label>
+            <textarea id="focusdetails-prereq" rows="3" aria-describedby="focusdetails-groups-help">${htmlTextEscape(formatRelationGroups(focus.prerequisite))}</textarea></div>
+        <div class="focusdetails-row"><label for="focusdetails-mutex">${feLocalize('focustree.details.mutexgroups', 'Mutually exclusive groups')}</label>
+            <textarea id="focusdetails-mutex" rows="2" aria-describedby="focusdetails-groups-help">${htmlTextEscape(formatRelationGroups(focus.exclusiveGroups.map(group => group.ids)))}</textarea>
+            <small id="focusdetails-groups-help">${feLocalize('focustree.details.groupshelp', 'One block per line; separate alternatives with spaces.')}</small></div>
         <div class="focusdetails-row"><label>${feLocalize('focustree.details.relative', 'Relative position')}</label>
             <div id="focusdetails-relative" class="select" tabindex="0" role="combobox"><span class="value"></span></div></div>
+        <details open>
+            <summary>${feLocalize('focustree.details.gameplay', 'Gameplay')}</summary>
+            <div class="focusdetails-row"><label for="focusdetails-icon">${feLocalize('focustree.details.icon', 'Icon')}</label>
+                <input type="text" id="focusdetails-icon" value="${htmlAttrEscape(properties.icon)}" placeholder="GFX_goal_generic_construct_civ_factory" /></div>
+            <div class="focusdetails-row"><label for="focusdetails-cost">${feLocalize('focustree.details.cost', 'Cost')}</label>
+                <input type="text" inputmode="numeric" id="focusdetails-cost" value="${htmlAttrEscape(properties.cost)}" /></div>
+            <div class="focusdetails-row"><label for="focusdetails-text">${feLocalize('focustree.details.textkey', 'Text key')}</label>
+                <input type="text" id="focusdetails-text" value="${htmlAttrEscape(properties.text)}" /></div>
+            <div class="focusdetails-row"><label for="focusdetails-war">${feLocalize('focustree.details.warwith', 'Will lead to war with')}</label>
+                <input type="text" id="focusdetails-war" value="${htmlAttrEscape(properties.will_lead_to_war_with)}" /></div>
+            <label><input type="checkbox" id="focusdetails-capitulated" ${properties.available_if_capitulated ? 'checked' : ''} /> ${feLocalize('focustree.details.capitulated', 'Available if capitulated')}</label>
+            <label><input type="checkbox" id="focusdetails-cancel-invalid" ${properties.cancel_if_invalid ? 'checked' : ''} /> ${feLocalize('focustree.details.cancelinvalid', 'Cancel if invalid')}</label>
+            <label><input type="checkbox" id="focusdetails-continue-invalid" ${properties.continue_if_invalid ? 'checked' : ''} /> ${feLocalize('focustree.details.continueinvalid', 'Continue if invalid')}</label>
+        </details>
+        <details>
+            <summary>${feLocalize('focustree.details.script', 'Conditions and effects')}</summary>
+            <div class="focusdetails-row"><label for="focusdetails-available">${feLocalize('focustree.details.available', 'Available')}</label>
+                <textarea id="focusdetails-available" rows="5">${htmlTextEscape(properties.available)}</textarea></div>
+            <div class="focusdetails-row"><label for="focusdetails-bypass">${feLocalize('focustree.details.bypass', 'Bypass')}</label>
+                <textarea id="focusdetails-bypass" rows="5">${htmlTextEscape(properties.bypass)}</textarea></div>
+            <div class="focusdetails-row"><label for="focusdetails-cancel">${feLocalize('focustree.details.cancel', 'Cancel trigger')}</label>
+                <textarea id="focusdetails-cancel" rows="5">${htmlTextEscape(properties.cancel)}</textarea></div>
+            <div class="focusdetails-row"><label for="focusdetails-select-effect">${feLocalize('focustree.details.selecteffect', 'Select effect')}</label>
+                <textarea id="focusdetails-select-effect" rows="5">${htmlTextEscape(properties.select_effect)}</textarea></div>
+            <div class="focusdetails-row"><label for="focusdetails-reward">${feLocalize('focustree.details.reward', 'Completion reward')}</label>
+                <textarea id="focusdetails-reward" rows="8">${htmlTextEscape(properties.completion_reward)}</textarea></div>
+            <div class="focusdetails-row"><label for="focusdetails-remove-effect">${feLocalize('focustree.details.removeeffect', 'Remove effect')}</label>
+                <textarea id="focusdetails-remove-effect" rows="5">${htmlTextEscape(properties.remove_effect)}</textarea></div>
+            <div class="focusdetails-row"><label for="focusdetails-tooltip">${feLocalize('focustree.details.tooltip', 'Complete tooltip')}</label>
+                <textarea id="focusdetails-tooltip" rows="4">${htmlTextEscape(properties.complete_tooltip)}</textarea></div>
+            <div class="focusdetails-row"><label for="focusdetails-ai">${feLocalize('focustree.details.ai', 'AI will do')}</label>
+                <textarea id="focusdetails-ai" rows="4">${htmlTextEscape(properties.ai_will_do)}</textarea></div>
+            <div class="focusdetails-row"><label for="focusdetails-filters">${feLocalize('focustree.details.searchfilters', 'Search filters')}</label>
+                <textarea id="focusdetails-filters" rows="3">${htmlTextEscape(properties.search_filters)}</textarea></div>
+        </details>
+        <button type="button" id="save-focus-properties-button" style="width:auto;padding:4px 10px;margin:12px 0">${feLocalize('focustree.details.save', 'Save properties')}</button>
+        <button type="button" id="open-focus-source-button" style="width:auto;padding:4px 10px;margin:12px 0">${feLocalize('focustree.details.opensource', 'Open raw source')}</button>
     `;
 
-    const otherFocuses = Object.values(focusTree.focuses).filter(f => f.id !== focus.id);
+    const otherFocuses = Object.values(focusTree.focuses)
+        .filter(f => f.id !== focus.id && !relativeChainContains(f, focus.id, focusTree));
 
     const idInput = document.getElementById('focusdetails-id') as HTMLInputElement;
     idInput.addEventListener('change', () => {
         const newId = idInput.value.trim();
-        if (newId && newId !== focus.id) {
+        if (newId && newId !== focus.id && !isValidFocusId(newId)) {
+            idInput.setCustomValidity(feLocalize('focustree.details.badidchars', 'Use only letters, digits, _ . - and \'.'));
+            idInput.reportValidity();
+            idInput.value = focus.id;
+        } else if (newId && newId !== focus.id) {
+            idInput.setCustomValidity('');
             const message: RenameFocusMessage = { command: 'renameFocus', lastDocumentChangeTimestamp: timestamp(), tree: focusTree, oldId: focus.id, newId };
             vscode.postMessage(message);
         } else {
@@ -767,24 +859,75 @@ function renderFocusDetails(): void {
     xInput.addEventListener('change', submitPosition);
     yInput.addEventListener('change', submitPosition);
 
-    const prereqContainer = document.getElementById('focusdetails-prereq') as HTMLDivElement;
-    prereqDropdown = new DivDropdown(prereqContainer, true);
-    prereqDropdown.setupOptions(otherFocuses.map(f => ({ value: f.id, text: f.id })));
-    prereqDropdown.selectedValues$.next(flatten(focus.prerequisite));
-    prereqDropdown.selectedValues$.subscribe(selected => {
-        if (!arraysEqualAsSets(flatten(focus.prerequisite), selected)) {
-            const message: SetPrerequisitesMessage = { command: 'setPrerequisites', lastDocumentChangeTimestamp: timestamp(), focus, groups: selected.map(id => [id]) };
+    document.getElementById('save-focus-properties-button')?.addEventListener('click', () => {
+        const value = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLTextAreaElement).value;
+        const checked = (id: string) => (document.getElementById(id) as HTMLInputElement).checked;
+        const changedProperties: Partial<FocusEditableProperties> = {};
+        const addStringChange = (key: keyof FocusEditableProperties, next: string) => {
+            if (next !== properties[key]) {
+                (changedProperties as Record<string, string | boolean>)[key] = next;
+            }
+        };
+        const addBooleanChange = (key: keyof FocusEditableProperties, next: boolean) => {
+            if (next !== properties[key]) {
+                (changedProperties as Record<string, string | boolean>)[key] = next;
+            }
+        };
+        addStringChange('icon', value('focusdetails-icon'));
+        addStringChange('cost', value('focusdetails-cost'));
+        addStringChange('text', value('focusdetails-text'));
+        addStringChange('will_lead_to_war_with', value('focusdetails-war'));
+        addStringChange('available', value('focusdetails-available'));
+        addStringChange('bypass', value('focusdetails-bypass'));
+        addStringChange('cancel', value('focusdetails-cancel'));
+        addStringChange('select_effect', value('focusdetails-select-effect'));
+        addStringChange('completion_reward', value('focusdetails-reward'));
+        addStringChange('remove_effect', value('focusdetails-remove-effect'));
+        addStringChange('complete_tooltip', value('focusdetails-tooltip'));
+        addStringChange('ai_will_do', value('focusdetails-ai'));
+        addStringChange('search_filters', value('focusdetails-filters'));
+        addBooleanChange('available_if_capitulated', checked('focusdetails-capitulated'));
+        addBooleanChange('cancel_if_invalid', checked('focusdetails-cancel-invalid'));
+        addBooleanChange('continue_if_invalid', checked('focusdetails-continue-invalid'));
+        if (Object.keys(changedProperties).length === 0) {
+            return;
+        }
+        const message: SetFocusPropertiesMessage = {
+            command: 'setFocusProperties',
+            lastDocumentChangeTimestamp: timestamp(),
+            focus,
+            properties: changedProperties,
+        };
+        vscode.postMessage(message);
+    });
+
+    document.getElementById('open-focus-source-button')?.addEventListener('click', () => {
+        if (!focus.blockRange) {
+            return;
+        }
+        vscode.postMessage({
+            command: 'navigate',
+            file: focus.file === focusTree.file ? undefined : focus.file,
+            start: focus.blockRange.start,
+            end: focus.blockRange.end,
+        });
+    });
+
+    const prereqEditor = document.getElementById('focusdetails-prereq') as HTMLTextAreaElement;
+    prereqEditor.addEventListener('change', () => {
+        const groups = parseRelationGroups(prereqEditor.value);
+        if (!relationGroupsEqual(focus.prerequisite, groups)) {
+            const message: SetPrerequisitesMessage = { command: 'setPrerequisites', lastDocumentChangeTimestamp: timestamp(), focus, groups };
             vscode.postMessage(message);
         }
     });
 
-    const mutexContainer = document.getElementById('focusdetails-mutex') as HTMLDivElement;
-    mutexDropdown = new DivDropdown(mutexContainer, true);
-    mutexDropdown.setupOptions(otherFocuses.map(f => ({ value: f.id, text: f.id })));
-    mutexDropdown.selectedValues$.next(focus.exclusive);
-    mutexDropdown.selectedValues$.subscribe(selected => {
-        if (!arraysEqualAsSets(focus.exclusive, selected)) {
-            const message: SetMutuallyExclusiveMessage = { command: 'setMutuallyExclusive', lastDocumentChangeTimestamp: timestamp(), focus, ids: [...selected] };
+    const mutexEditor = document.getElementById('focusdetails-mutex') as HTMLTextAreaElement;
+    mutexEditor.addEventListener('change', () => {
+        const groups = parseRelationGroups(mutexEditor.value);
+        const current = focus.exclusiveGroups.map(group => group.ids);
+        if (!relationGroupsEqual(current, groups)) {
+            const message: SetMutuallyExclusiveMessage = { command: 'setMutuallyExclusive', lastDocumentChangeTimestamp: timestamp(), focus, groups };
             vscode.postMessage(message);
         }
     });
@@ -799,14 +942,72 @@ function renderFocusDetails(): void {
     relativeDropdown.selectedValues$.subscribe(selected => {
         const anchorId = selected[0] === NO_RELATIVE_POSITION ? undefined : selected[0];
         if (anchorId !== focus.relativePositionId) {
-            const message: SetRelativePositionMessage = { command: 'setRelativePosition', lastDocumentChangeTimestamp: timestamp(), focus, anchorId };
+            const absolute = absoluteFocusPosition(focus, focusTree);
+            const anchor = anchorId ? absoluteFocusPosition(focusTree.focuses[anchorId], focusTree) : { x: 0, y: 0 };
+            const message: SetRelativePositionMessage = {
+                command: 'setRelativePosition',
+                lastDocumentChangeTimestamp: timestamp(),
+                focus,
+                anchorId,
+                x: absolute.x - anchor.x,
+                y: absolute.y - anchor.y,
+            };
             vscode.postMessage(message);
         }
     });
 }
 
+function absoluteFocusPosition(focus: Focus, tree: FocusTree): { x: number; y: number } {
+    let x = focus.x;
+    let y = focus.y;
+    let anchorId = focus.relativePositionId;
+    const visited = new Set<string>([focus.id]);
+    while (anchorId && !visited.has(anchorId)) {
+        visited.add(anchorId);
+        const anchor = tree.focuses[anchorId];
+        if (!anchor) {
+            break;
+        }
+        x += anchor.x;
+        y += anchor.y;
+        anchorId = anchor.relativePositionId;
+    }
+    return { x, y };
+}
+
+function relativeChainContains(focus: Focus, focusId: string, tree: FocusTree): boolean {
+    let current: Focus | undefined = focus;
+    const visited = new Set<string>();
+    while (current && !visited.has(current.id)) {
+        if (current.id === focusId) {
+            return true;
+        }
+        visited.add(current.id);
+        current = current.relativePositionId ? tree.focuses[current.relativePositionId] : undefined;
+    }
+    return false;
+}
+
+function formatRelationGroups(groups: readonly (readonly string[])[]): string {
+    return groups.map(group => group.join(' ')).join('\n');
+}
+
+function parseRelationGroups(value: string): string[][] {
+    return value.split(/\r?\n/)
+        .map(line => [...new Set(line.trim().split(/[\s,|]+/).filter(Boolean))])
+        .filter(group => group.length > 0);
+}
+
+function relationGroupsEqual(a: readonly (readonly string[])[], b: readonly (readonly string[])[]): boolean {
+    return a.length === b.length && a.every((group, i) => arraysEqualAsSets(group, b[i]));
+}
+
 function htmlAttrEscape(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+function htmlTextEscape(text: string): string {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;');
 }
 
 function timestamp(): number {
@@ -821,12 +1022,6 @@ function focusFileForMessage(focus: Focus, focusTree: FocusTree): string | undef
 function deleteSelectedFocuses(): void {
     const focusTree = focusTrees[selectedFocusTreeIndex];
     if (!focusTree || selectedFocusIds.length === 0) {
-        return;
-    }
-    const confirmMessage = selectedFocusIds.length === 1 ?
-        feLocalize('focustree.details.confirmdelete', 'Delete focus "{0}"? This also removes every reference to it.', selectedFocusIds[0]) :
-        feLocalize('focustree.details.confirmdeletemultiple', 'Delete {0} focuses? This also removes every reference to them.', selectedFocusIds.length.toString());
-    if (!window.confirm(confirmMessage)) {
         return;
     }
     const message: DeleteFocusMessage = {
@@ -1005,14 +1200,56 @@ function fitToSelection(): void {
 }
 
 function setupEditingToolbar(): void {
+    const visualMode = document.getElementById('focus-visual-mode') as HTMLSelectElement | null;
+    if (visualMode) {
+        visualMode.value = getState().focusVisualMode ?? 'game';
+        const applyVisualMode = () => {
+            document.body.classList.toggle('focus-logic-view', visualMode.value === 'logic');
+            setState({ focusVisualMode: visualMode.value });
+        };
+        visualMode.addEventListener('change', applyVisualMode);
+        applyVisualMode();
+    }
+    const editMode = document.getElementById('focus-edit-mode') as HTMLSelectElement | null;
+    if (editMode) {
+        editMode.value = connectionMode;
+        editMode.addEventListener('change', () => {
+            connectionMode = editMode.value as 'select' | ConnectionMode;
+            setState({ focusEditMode: connectionMode });
+        });
+    }
+    const creator = document.getElementById('focus-creator') as HTMLDivElement | null;
+    const newFocusId = document.getElementById('new-focus-id') as HTMLInputElement | null;
     const newFocusButton = document.getElementById('new-focus-button') as HTMLButtonElement | null;
     newFocusButton?.addEventListener('click', () => {
-        const focusTree = focusTrees[selectedFocusTreeIndex];
-        if (!focusTree) {
+        if (!creator || !newFocusId) {
             return;
         }
-        const id = window.prompt(feLocalize('focustree.details.newfocusprompt', 'New focus ID:'));
-        if (!id || !id.trim()) {
+        creator.style.display = 'block';
+        newFocusId.value = '';
+        newFocusId.focus();
+    });
+
+    const closeCreator = () => {
+        if (creator) {
+            creator.style.display = 'none';
+        }
+    };
+    const createFocus = () => {
+        const focusTree = focusTrees[selectedFocusTreeIndex];
+        const id = newFocusId?.value.trim() ?? '';
+        if (!focusTree || !id) {
+            newFocusId?.focus();
+            return;
+        }
+        if (!isValidFocusId(id)) {
+            newFocusId?.setCustomValidity(feLocalize('focustree.details.badidchars', 'Use only letters, digits, _ . - and \'.'));
+            newFocusId?.reportValidity();
+            return;
+        }
+        if (focusTree.focuses[id]) {
+            newFocusId?.setCustomValidity(feLocalize('focustree.details.duplicateid', 'A focus with this ID already exists.'));
+            newFocusId?.reportValidity();
             return;
         }
         const existing = Object.values(focusTree.focuses);
@@ -1021,11 +1258,53 @@ function setupEditingToolbar(): void {
             command: 'createFocus',
             lastDocumentChangeTimestamp: timestamp(),
             tree: focusTree,
-            id: id.trim(),
+            id,
             x,
             y: 0,
         };
+        closeCreator();
         vscode.postMessage(message);
+    };
+    newFocusId?.addEventListener('input', () => newFocusId.setCustomValidity(''));
+    newFocusId?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            createFocus();
+        } else if (e.key === 'Escape') {
+            e.preventDefault();
+            closeCreator();
+            newFocusButton?.focus();
+        }
+    });
+    document.getElementById('confirm-new-focus-button')?.addEventListener('click', createFocus);
+    document.getElementById('cancel-new-focus-button')?.addEventListener('click', closeCreator);
+
+    const moreToolsButton = document.getElementById('more-focus-tools-button') as HTMLButtonElement | null;
+    const moreTools = document.getElementById('focus-secondary-tools') as HTMLDivElement | null;
+    const closeMoreTools = () => {
+        if (moreTools) {
+            moreTools.style.display = 'none';
+        }
+        moreToolsButton?.setAttribute('aria-expanded', 'false');
+    };
+    moreToolsButton?.addEventListener('click', e => {
+        e.stopPropagation();
+        if (!moreTools) {
+            return;
+        }
+        const open = moreTools.style.display === 'block';
+        moreTools.style.display = open ? 'none' : 'block';
+        moreToolsButton.setAttribute('aria-expanded', open ? 'false' : 'true');
+    });
+    moreTools?.addEventListener('click', e => {
+        if ((e.target as HTMLElement).closest('button:not(:disabled)')) {
+            closeMoreTools();
+        }
+    });
+    document.addEventListener('click', e => {
+        if (!moreTools?.contains(e.target as Node) && e.target !== moreToolsButton) {
+            closeMoreTools();
+        }
     });
 
     document.getElementById('delete-focus-button')?.addEventListener('click', deleteSelectedFocuses);
@@ -1129,7 +1408,7 @@ function rectsIntersect(a: DOMRect, b: DOMRect): boolean {
 }
 
 function isInteractiveTarget(target: EventTarget | null): boolean {
-    return target instanceof HTMLElement && !!target.closest('input,button,select,textarea,label');
+    return target instanceof HTMLElement && !!target.closest('input,button,select,textarea,label,[role="menu"]');
 }
 
 let retriggerSearch: () => void = () => {};

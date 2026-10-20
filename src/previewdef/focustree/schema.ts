@@ -8,6 +8,7 @@ import { isFeatureEnabled } from "../../util/featureflags";
 import { randomString, Warning } from "../../util/common";
 import { localize } from "../../util/i18n";
 import { validateFocusTree } from "./validation";
+import { nodeToString } from "../../hoiformat/tostring";
 
 export interface FocusTree {
     id: string;
@@ -70,7 +71,30 @@ export interface Focus {
     /** Span of the whole `focus = { ... }` block, from the `focus` keyword through the closing brace. */
     blockRange: TokenRange | undefined;
     file: string;
+    /** Common editable HOI4 fields, serialized without their outer `key =` wrapper. */
+    editableProperties?: FocusEditableProperties;
 }
+
+export interface FocusEditableProperties {
+    icon: string;
+    cost: string;
+    text: string;
+    available: string;
+    bypass: string;
+    cancel: string;
+    select_effect: string;
+    completion_reward: string;
+    remove_effect: string;
+    complete_tooltip: string;
+    ai_will_do: string;
+    search_filters: string;
+    will_lead_to_war_with: string;
+    available_if_capitulated: boolean;
+    cancel_if_invalid: boolean;
+    continue_if_invalid: boolean;
+}
+
+export type EditableFocusProperty = keyof FocusEditableProperties;
 
 export interface FocusWarning extends Warning<string> {
     navigations?: { file: string, start: number, end: number }[];
@@ -136,7 +160,7 @@ export interface SetMutuallyExclusiveMessage {
     command: 'setMutuallyExclusive';
     lastDocumentChangeTimestamp: number;
     focus: Focus;
-    ids: string[];
+    groups: string[][];
 }
 
 export interface SetRelativePositionMessage {
@@ -144,6 +168,16 @@ export interface SetRelativePositionMessage {
     lastDocumentChangeTimestamp: number;
     focus: Focus;
     anchorId: string | undefined;
+    /** Rebased local coordinates that preserve the node's absolute canvas position. */
+    x?: number;
+    y?: number;
+}
+
+export interface SetFocusPropertiesMessage {
+    command: 'setFocusProperties';
+    lastDocumentChangeTimestamp: number;
+    focus: Focus;
+    properties: Partial<FocusEditableProperties>;
 }
 
 export type FocusTreeEditorMessage =
@@ -155,7 +189,8 @@ export type FocusTreeEditorMessage =
     RenameFocusMessage |
     SetPrerequisitesMessage |
     SetMutuallyExclusiveMessage |
-    SetRelativePositionMessage;
+    SetRelativePositionMessage |
+    SetFocusPropertiesMessage;
 
 interface Offset {
     x: number;
@@ -187,8 +222,22 @@ interface FocusDef {
     _token: Token;
     _valueStartToken?: Token;
     _valueEndToken?: Token;
-    text?: string;
+    text?: Raw;
     overlay?: string;
+    cost: Raw;
+    available: Raw;
+    bypass: Raw;
+    cancel: Raw;
+    select_effect: Raw;
+    completion_reward: Raw;
+    remove_effect: Raw;
+    complete_tooltip: Raw;
+    ai_will_do: Raw;
+    search_filters: Raw;
+    will_lead_to_war_with: Raw;
+    available_if_capitulated: Raw;
+    cancel_if_invalid: Raw;
+    continue_if_invalid: Raw;
 }
 
 interface FocusIconDef {
@@ -262,8 +311,22 @@ const focusSchema: SchemaDef<FocusDef> = {
         },
         _type: 'array',
     },
-    text: "string",
+    text: "raw",
     overlay: "string",
+    cost: "raw",
+    available: "raw",
+    bypass: "raw",
+    cancel: "raw",
+    select_effect: "raw",
+    completion_reward: "raw",
+    remove_effect: "raw",
+    complete_tooltip: "raw",
+    ai_will_do: "raw",
+    search_filters: "raw",
+    will_lead_to_war_with: "raw",
+    available_if_capitulated: "raw",
+    cancel_if_invalid: "raw",
+    continue_if_invalid: "raw",
 };
 
 const focusTreeSchema: SchemaDef<FocusTreeDef> = {
@@ -308,13 +371,13 @@ export function convertFocusFileNodeToJson(node: Node, constants: {}): HOIPartia
     return convertNodeToJson<FocusFile>(node, focusFileSchema, constants);
 }
 
-export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFocusTrees: FocusTree[], filePath: string, constants: {} ): FocusTree[] {
+export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFocusTrees: FocusTree[], filePath: string, constants: {}, sourceText?: string): FocusTree[] {
     const focusTrees: FocusTree[] = [];
 
     if (file.shared_focus.length > 0 || file.joint_focus.length > 0) {
         const conditionExprs: ConditionItem[] = [];
         const warnings: FocusWarning[] = [];
-        const focuses = getFocuses([...file.shared_focus, ...file.joint_focus], conditionExprs, filePath, warnings, constants);
+        const focuses = getFocuses([...file.shared_focus, ...file.joint_focus], conditionExprs, filePath, warnings, constants, sourceText);
         const sharedFocusTree = {
             id: localize('focustree.sharedfocuses', '<Shared focuses>'),
             focuses,
@@ -334,7 +397,7 @@ export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFoc
     for (const focusTree of file.focus_tree) {
         const conditionExprs: ConditionItem[] = [];
         const warnings: FocusWarning[] = [];
-        const focuses = getFocuses(focusTree.focus, conditionExprs, filePath, warnings, constants);
+        const focuses = getFocuses(focusTree.focus, conditionExprs, filePath, warnings, constants, sourceText);
         
         if (isFeatureEnabled('useConditionInFocus')) {
             for (const sharedFocus of focusTree.shared_focus) {
@@ -367,18 +430,18 @@ export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFoc
     return focusTrees;
 }
 
-export function getFocusTree(node: Node, sharedFocusTrees: FocusTree[], filePath: string): FocusTree[] {
+export function getFocusTree(node: Node, sharedFocusTrees: FocusTree[], filePath: string, sourceText?: string): FocusTree[] {
     const constants = {};
     const file = convertFocusFileNodeToJson(node, constants);
 
-    return getFocusTreeWithFocusFile(file, sharedFocusTrees, filePath, constants);
+    return getFocusTreeWithFocusFile(file, sharedFocusTrees, filePath, constants, sourceText);
 }
 
-function getFocuses(hoiFocuses: HOIPartial<FocusDef>[], conditionExprs: ConditionItem[], filePath: string, warnings: FocusWarning[], constants: {}): Record<string, Focus> {
+function getFocuses(hoiFocuses: HOIPartial<FocusDef>[], conditionExprs: ConditionItem[], filePath: string, warnings: FocusWarning[], constants: {}, sourceText?: string): Record<string, Focus> {
     const focuses: Record<string, Focus> = {};
 
     for (const hoiFocus of hoiFocuses) {
-        const focus = getFocus(hoiFocus, conditionExprs, filePath, warnings, constants);
+        const focus = getFocus(hoiFocus, conditionExprs, filePath, warnings, constants, sourceText);
         if (focus !== null) {
             if (focus.id in focuses) {
                 const otherFocus = focuses[focus.id];
@@ -428,7 +491,7 @@ function getFocuses(hoiFocuses: HOIPartial<FocusDef>[], conditionExprs: Conditio
     return focuses;
 }
 
-function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[], filePath: string, warnings: FocusWarning[], constants: {}): Focus | null {
+function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[], filePath: string, warnings: FocusWarning[], constants: {}, sourceText?: string): Focus | null {
     const idValue = hoiFocus.id?._raw ? convertNodeToJson<string>(hoiFocus.id._raw, "string", constants) : undefined;
     const id = idValue ?? `[missing_id_${randomString(8)}]`;
     const idToken = hoiFocus.id?._valueStartToken === hoiFocus.id?._valueEndToken ? hoiFocus.id?._valueEndToken : undefined;
@@ -472,7 +535,7 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
         trigger: o.trigger ? extractConditionValues(o.trigger.filter((v): v is Raw => v !== undefined).map(v => v._raw.value), countryScope, conditionExprs).condition : false,
     }));
 
-    const text = hoiFocus.text;
+    const text = hoiFocus.text?._raw ? convertNodeToJson<string>(hoiFocus.text._raw, 'string', constants) : undefined;
     const overlay = hoiFocus.overlay;
 
     return {
@@ -499,7 +562,49 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
         xToken: hoiFocus.x?._valueStartToken === hoiFocus.x?._valueEndToken ? hoiFocus.x?._valueEndToken : undefined,
         yToken: hoiFocus.y?._valueStartToken === hoiFocus.y?._valueEndToken ? hoiFocus.y?._valueEndToken : undefined,
         blockRange,
+        editableProperties: {
+            icon: rawValue(hoiFocus.icon[0], sourceText),
+            cost: rawValue(hoiFocus.cost, sourceText),
+            text: rawValue(hoiFocus.text, sourceText),
+            available: rawValue(hoiFocus.available, sourceText),
+            bypass: rawValue(hoiFocus.bypass, sourceText),
+            cancel: rawValue(hoiFocus.cancel, sourceText),
+            select_effect: rawValue(hoiFocus.select_effect, sourceText),
+            completion_reward: rawValue(hoiFocus.completion_reward, sourceText),
+            remove_effect: rawValue(hoiFocus.remove_effect, sourceText),
+            complete_tooltip: rawValue(hoiFocus.complete_tooltip, sourceText),
+            ai_will_do: rawValue(hoiFocus.ai_will_do, sourceText),
+            search_filters: rawValue(hoiFocus.search_filters, sourceText),
+            will_lead_to_war_with: rawValue(hoiFocus.will_lead_to_war_with, sourceText),
+            available_if_capitulated: rawBoolean(hoiFocus.available_if_capitulated?._raw),
+            cancel_if_invalid: rawBoolean(hoiFocus.cancel_if_invalid?._raw),
+            continue_if_invalid: rawBoolean(hoiFocus.continue_if_invalid?._raw),
+        },
     };
+}
+
+function rawValue(raw: HOIPartial<Raw> | undefined, sourceText?: string): string {
+    const node = raw?._raw;
+    if (!node || node.value === null) {
+        return '';
+    }
+    if (sourceText && raw?._valueStartToken && raw._valueEndToken) {
+        if (Array.isArray(node.value)) {
+            return sourceText.slice(raw._valueStartToken.end, raw._valueEndToken.start);
+        }
+        return sourceText.slice(raw._valueStartToken.start, raw._valueEndToken.end);
+    }
+    if (Array.isArray(node.value)) {
+        return node.value.map(nodeToString).join('\n');
+    }
+    if (typeof node.value === 'string') {
+        return JSON.stringify(node.value);
+    }
+    return node.value.name;
+}
+
+function rawBoolean(node: Node | undefined): boolean {
+    return !!node && !Array.isArray(node.value) && typeof node.value !== 'string' && node.value?.name.toLowerCase() === 'yes';
 }
 
 function focusRelationGroup(group: HOIPartial<FocusOrORList>): FocusRelationGroup {

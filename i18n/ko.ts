@@ -555,7 +555,24 @@ const table: Partial<typeof __table> = {
     "worldmap.waterland.terrain": "Land terrain",
     "worldmap.waterland.title": "Convert Water Provinces to Land",
     "worldmap.waterland.warning": "This rewrites definition.csv plus state and strategic-region membership as one undoable transaction. Empty source strategic regions are removed.",
-    "worldmap.waterland.wateronly": "Water-to-land conversion accepts only sea and lake provinces."
+    "worldmap.waterland.wateronly": "Water-to-land conversion accepts only sea and lake provinces.",
+    "error.copied": "오류 정보를 클립보드에 복사했습니다.",
+    "error.copy": "오류 정보 복사",
+    "error.detail": "오류 코드: {0}\n\n{1}\n\n\"오류 정보 복사\"를 선택하여 확장 프로그램 작성자에게 보내 주세요.",
+    "error.featurefailed": "\"{0}\"을(를) 시작할 수 없습니다.",
+    "error.generic": "HOI4 Modern Utils에서 문제가 발생했습니다.",
+    "error.indexingfailed": "인덱싱을 시작하지 못했습니다.",
+    "error.lastcode": "마지막 오류 코드: {0}",
+    "error.noreport": "아직 오류 보고서가 없습니다.",
+    "error.page.code": "오류 코드",
+    "error.page.help": "오류 정보를 복사하여 확장 프로그램 작성자에게 보내 주세요.",
+    "error.retry": "다시 시도",
+    "error.showlog": "로그 보기",
+    "error.startupfailed": "HOI4 Modern Utils 시작을 완료하지 못했습니다.",
+    "error.startupphase": "\"{0}\" 시작 중 문제가 발생했습니다.",
+    "preview.actionfailed": "\"{0}\" 작업에 실패했습니다.",
+    "preview.failedtoload": "미리보기를 불러오지 못했습니다.",
+    "preview.failedtorestore": "\"{0}\" 미리보기를 복원할 수 없습니다."
 };
 
 export default table;

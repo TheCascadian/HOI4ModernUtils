@@ -4,6 +4,7 @@ import worldmapviewstyles from './worldmapview.css';
 import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
+import { reportFailure } from '../../util/errorreport';
 import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistProvinceBmpMessage, PersistVictoryPointLocalisationMessage, PersistCountryDiplomacyMessage, CreateCountryMessage, RunAreaOperationMessage, RunContinentPipelineMessage, WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest, WorldMapRuntimeTestResultMessage } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
@@ -83,7 +84,7 @@ export class WorldMap {
         webview.onDidReceiveMessage((msg) => {
             this.messageQueue = this.messageQueue
                 .then(() => this.onMessage(msg))
-                .catch(e => error(e));
+                .catch(e => { void reportFailure(e, { area: 'worldmap', operation: 'messagequeue' }); });
         });
     }
 
@@ -272,7 +273,7 @@ export class WorldMap {
                             command: 'persiststatesresult',
                             requestId: msg.requestId,
                             success: false,
-                            error: e instanceof Error ? e.message : String(e),
+                            error: await this.failureMessage(e, 'persiststatesresult'),
                         });
                     }
                     break;
@@ -280,12 +281,11 @@ export class WorldMap {
                     try {
                         await this.persistCountryDiplomacy(msg as PersistCountryDiplomacyMessage);
                     } catch (e) {
-                        error(e);
                         await this.postMessageToWebview({
                             command: 'countrydiplomacyupdated',
                             requestId: msg.requestId,
                             success: false,
-                            error: e instanceof Error ? e.message : String(e),
+                            error: await this.failureMessage(e, 'countrydiplomacyupdated'),
                         });
                     }
                     break;
@@ -302,12 +302,11 @@ export class WorldMap {
                             success: true,
                         });
                     } catch (e) {
-                        error(e);
                         await this.postMessageToWebview({
                             command: 'persiststrategicregionsresult',
                             requestId: msg.requestId,
                             success: false,
-                            error: e instanceof Error ? e.message : String(e),
+                            error: await this.failureMessage(e, 'persiststrategicregionsresult'),
                         });
                     }
                     break;
@@ -320,12 +319,11 @@ export class WorldMap {
                             success: true,
                         });
                     } catch (e) {
-                        error(e);
                         await this.postMessageToWebview({
                             command: 'persistvictorypointlocalisationresult',
                             requestId: msg.requestId,
                             success: false,
-                            error: e instanceof Error ? e.message : String(e),
+                            error: await this.failureMessage(e, 'persistvictorypointlocalisationresult'),
                         });
                     }
                     break;
@@ -338,12 +336,11 @@ export class WorldMap {
                             success: true,
                         });
                     } catch (e) {
-                        error(e);
                         await this.postMessageToWebview({
                             command: 'persistprovincesresult',
                             requestId: msg.requestId,
                             success: false,
-                            error: e instanceof Error ? e.message : String(e),
+                            error: await this.failureMessage(e, 'persistprovincesresult'),
                         });
                     }
                     break;
@@ -361,16 +358,15 @@ export class WorldMap {
                         });
 
                         vscode.window.showInformationMessage(
-                            'Province BMP and dependent map records updated.'
+                            localize('worldmap.bmp.updated', 'Province BMP and dependent map records updated.')
                         );
                     } catch (e) {
-                        error(e);
 
                         await this.postMessageToWebview({
                             command: 'provincebmpupdated',
                             requestId: msg.requestId,
                             success: false,
-                            error: e instanceof Error ? e.message : String(e),
+                            error: await this.failureMessage(e, 'provincebmpupdated'),
                             canUndo: this.bmpUndoStack.length > 0,
                             canRedo: this.bmpRedoStack.length > 0,
                             forceReload: false,
@@ -388,7 +384,7 @@ export class WorldMap {
                     break;
             }
         } catch (e) {
-            error(e);
+            await reportFailure(e, { area: 'worldmap', operation: `message:${String(msg?.command)}` }, { modal: true });
         }
     }
 
@@ -436,11 +432,10 @@ export class WorldMap {
                 data: summary,
             } as WorldMapMessage);
         } catch (e) {
-            error(e);
-
+            const code = await reportFailure(e, { area: 'worldmap', operation: 'load' });
             await this.postMessageToWebview({
                 command: 'error',
-                data: localize('worldmap.failedtoload', 'Failed to load world map: {0}.', forceError(e).toString()),
+                data: localize('worldmap.failedtoload', 'Failed to load world map: {0}.', forceError(e).toString()) + ` [${code}]`,
             } as WorldMapMessage);
         }
     }
@@ -486,7 +481,10 @@ export class WorldMap {
             });
 
         } catch (e) {
-            await vscode.window.showErrorMessage(localize('worldmap.failedtoopenstate', 'Failed to open {0} file: {1}.', typeName, forceError(e).toString()));
+            await reportFailure(e, { area: 'worldmap', operation: `openfile:${typeName}`, file }, {
+                modal: true,
+                summary: localize('worldmap.failedtoopenstate', 'Failed to open {0} file: {1}.', typeName, forceError(e).toString()),
+            });
         }
     }
 
@@ -670,6 +668,12 @@ export class WorldMap {
         await this.postMessageToWebview({ command: 'requestexportmap' });
     }
 
+    /** Records a failed world-map operation, notifies the user with a copyable code, and returns text for the webview. */
+    private async failureMessage(e: unknown, operation: string): Promise<string> {
+        const code = await reportFailure(e, { area: 'worldmap', operation });
+        return `${e instanceof Error ? e.message : String(e)} [${code}]`;
+    }
+
     private async exportMap(dataUrl?: string) {
         const uri = this.lastRequestedExportUri;
         if (!uri) {
@@ -691,8 +695,10 @@ export class WorldMap {
             vscode.window.showInformationMessage(localize('worldmap.export.success', 'Successfully exported world map.'));
 
         } catch (e) {
-            error(e);
-            vscode.window.showErrorMessage(localize('worldmap.export.error', 'Can\'t export world map: {0}.', e));
+            await reportFailure(e, { area: 'worldmap', operation: 'export' }, {
+                modal: true,
+                summary: localize('worldmap.export.error', 'Can\'t export world map: {0}.', e),
+            });
         }
     }
 
@@ -838,13 +844,16 @@ export class WorldMap {
                 } catch {
                     continue;
                 }
-                const sourceText = source.toString('utf-8').replace(/^\uFEFF/, '');
+                const rawText = source.toString('utf-8');
+                const bom = rawText.startsWith('\uFEFF') ? '\uFEFF' : '';
+                const sourceText = rawText.slice(bom.length);
                 const nextText = reindexCountryHistoryFile(
                     sourceText,
-                    stateReplacements
+                    stateReplacements,
+                    { allowUnmapped: true }
                 ).text;
                 if (nextText !== sourceText) {
-                    await queue(relativePath, Buffer.from(nextText, 'utf-8'));
+                    await queue(relativePath, Buffer.from(bom + nextText, 'utf-8'));
                 }
             }
         }
@@ -1067,7 +1076,7 @@ export class WorldMap {
                 command: 'createcountryresult',
                 requestId: msg.requestId,
                 success: false,
-                error: e instanceof Error ? e.message : String(e),
+                error: await this.failureMessage(e, 'createcountryresult'),
             });
         }
     }
@@ -1806,7 +1815,7 @@ export class WorldMap {
                 const repair = await this.repairProvinceReferenceFiles(msg.provinceReplacements);
                 if (repair.warnings.length > 0) {
                     vscode.window.showWarningMessage(
-                        `Province references repaired with ${repair.warnings.length} warning(s): ${repair.warnings.join(' ')}`
+                        localize('worldmap.references.repaired', 'Province references repaired with {0} warning(s): {1}', repair.warnings.length, repair.warnings.join(' '))
                     );
                 }
             }
@@ -1946,7 +1955,7 @@ export class WorldMap {
                 command: 'resolveprovincewarningsresult',
                 requestId,
                 success: false,
-                error: e instanceof Error ? e.message : String(e),
+                error: await this.failureMessage(e, 'resolveprovincewarningsresult'),
             });
         }
     }
@@ -2127,7 +2136,7 @@ export class WorldMap {
                 requestId: msg.requestId,
                 success: false,
                 operation: msg.operation,
-                error: e instanceof Error ? e.message : String(e),
+                error: await this.failureMessage(e, 'areaoperationresult'),
             });
         }
     }
@@ -2327,7 +2336,7 @@ export class WorldMap {
                 command: 'reindexmapresult',
                 requestId,
                 success: false,
-                error: e instanceof Error ? e.message : String(e),
+                error: await this.failureMessage(e, 'reindexmapresult'),
             });
         }
     }
@@ -2876,7 +2885,7 @@ export class WorldMap {
                 continentId,
                 continentName,
                 targetCountryTag,
-                error: e instanceof Error ? e.message : String(e),
+                error: await this.failureMessage(e, 'continentpipelineresult'),
             });
         }
     }
@@ -2899,12 +2908,11 @@ export class WorldMap {
                 });
             }
         } catch (e) {
-            error(e);
             await this.postMessageToWebview({
                 command: 'provincebmpdata',
                 requestId,
                 success: false,
-                error: e instanceof Error ? e.message : String(e),
+                error: await this.failureMessage(e, 'provincebmpdata'),
                 colorByPosition: new Uint32Array(),
                 width: 0,
                 height: 0,
@@ -2919,12 +2927,11 @@ export class WorldMap {
         try {
             await this.undoProvinceBmpImpl(requestId);
         } catch (e) {
-            error(e);
             await this.postMessageToWebview({
                 command: 'provincebmpupdated',
                 requestId,
                 success: false,
-                error: e instanceof Error ? e.message : String(e),
+                error: await this.failureMessage(e, 'provincebmpupdated'),
                 canUndo: this.bmpUndoStack.length > 0,
                 canRedo: this.bmpRedoStack.length > 0,
                 forceReload: true,
@@ -2979,12 +2986,11 @@ export class WorldMap {
         try {
             await this.redoProvinceBmpImpl(requestId);
         } catch (e) {
-            error(e);
             await this.postMessageToWebview({
                 command: 'provincebmpupdated',
                 requestId,
                 success: false,
-                error: e instanceof Error ? e.message : String(e),
+                error: await this.failureMessage(e, 'provincebmpupdated'),
                 canUndo: this.bmpUndoStack.length > 0,
                 canRedo: this.bmpRedoStack.length > 0,
                 forceReload: true,

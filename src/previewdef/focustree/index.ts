@@ -16,10 +16,13 @@ import {
     FocusTreeEditorMessage,
     RenameFocusMessage,
     SetMutuallyExclusiveMessage,
+    SetFocusPropertiesMessage,
     SetPrerequisitesMessage,
     SetRelativePositionMessage,
     UpdateFocusPositionsMessage,
 } from './schema';
+import { reportFailure } from '../../util/errorreport';
+import { isValidFocusId } from './focusid';
 import * as edits from './edits';
 import { updateFocusTreeDiagnostics, clearFocusTreeDiagnostics } from './diagnostics';
 
@@ -74,6 +77,7 @@ class FocusTreePreview extends PreviewBase {
 
     protected async handleMessage(msg: FocusTreeEditorMessage): Promise<void> {
         if (this.pendingChangeDocument || this.lastDocumentChangeTimestamp !== msg.lastDocumentChangeTimestamp) {
+            await vscode.window.showWarningMessage(localize('preview.focustree.stale', 'The focus tree changed while this edit was in flight, so it was not applied. Please try again.'));
             return;
         }
 
@@ -104,6 +108,9 @@ class FocusTreePreview extends PreviewBase {
                 break;
             case 'setRelativePosition':
                 await this.setRelativePosition(msg);
+                break;
+            case 'setFocusProperties':
+                await this.setFocusProperties(msg);
                 break;
         }
     }
@@ -164,6 +171,10 @@ class FocusTreePreview extends PreviewBase {
             await vscode.window.showErrorMessage(localize('preview.focustree.invalidid', 'Cannot create a focus: it needs an ID.'));
             return;
         }
+        if (!isValidFocusId(msg.id.trim())) {
+            await vscode.window.showErrorMessage(localize('preview.focustree.badidchars', 'Focus IDs may only contain letters, digits, "_", ".", "-" and "\'".'));
+            return;
+        }
         if (msg.id in msg.tree.focuses) {
             await vscode.window.showErrorMessage(localize('preview.focustree.duplicateid', 'A focus with ID "{0}" already exists in this tree.', msg.id));
             return;
@@ -185,6 +196,15 @@ class FocusTreePreview extends PreviewBase {
 
     private async deleteFocus(msg: DeleteFocusMessage): Promise<void> {
         if (msg.focusIds.length === 0) {
+            return;
+        }
+
+        const confirmation = msg.focusIds.length === 1 ?
+            localize('preview.focustree.confirmdelete', 'Delete focus "{0}"? Every reference to it will also be removed.', msg.focusIds[0]) :
+            localize('preview.focustree.confirmdeletemultiple', 'Delete {0} focuses? Every reference to them will also be removed.', msg.focusIds.length.toString());
+        const deleteLabel = localize('preview.focustree.delete', 'Delete');
+        const choice = await vscode.window.showWarningMessage(confirmation, { modal: true }, deleteLabel);
+        if (choice !== deleteLabel) {
             return;
         }
 
@@ -242,12 +262,55 @@ class FocusTreePreview extends PreviewBase {
             await vscode.window.showErrorMessage(localize('preview.focustree.invalidid', 'Cannot create a focus: it needs an ID.'));
             return;
         }
+        if (!isValidFocusId(newId)) {
+            await vscode.window.showErrorMessage(localize('preview.focustree.badidchars', 'Focus IDs may only contain letters, digits, "_", ".", "-" and "\'".'));
+            return;
+        }
         if (newId !== msg.oldId && newId in msg.tree.focuses) {
             await vscode.window.showErrorMessage(localize('preview.focustree.duplicateid', 'A focus with ID "{0}" already exists in this tree.', newId));
             return;
         }
 
-        await this.applyTextEdits(edits.renameFocus(msg.tree, msg.oldId, newId));
+        const target = msg.tree.focuses[msg.oldId];
+        if (!target?.idToken) {
+            await vscode.window.showErrorMessage(localize('preview.focustree.renamenotsafe', 'Cannot rename this focus because its ID is not a plain source token.'));
+            return;
+        }
+
+        const textEdits: edits.TextEdit[] = [edits.patchToken(target.file, target.idToken, newId)];
+        textEdits.push(...await this.findProjectFocusRenameEdits(msg.oldId, newId));
+        await this.applyTextEdits(textEdits);
+    }
+
+    private async findProjectFocusRenameEdits(oldId: string, newId: string): Promise<edits.TextEdit[]> {
+        const uris = await vscode.workspace.findFiles('**/*.{txt,yml,yaml}', '**/{.git,node_modules,out,dist}/**');
+        const uniqueUris = new Map(uris.map(uri => [uri.toString(), uri]));
+        uniqueUris.set(this.uri.toString(), this.uri);
+
+        const result: edits.TextEdit[] = [];
+        for (const uri of uniqueUris.values()) {
+            let text: string;
+            try {
+                const openDocument = getDocumentByUri(uri);
+                text = openDocument?.getText() ?? new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+            } catch {
+                continue;
+            }
+            const file = uri.toString();
+            if (/\.txt$/i.test(uri.path)) {
+                // A different file that defines its own focus with this ID is a different
+                // tree; its references point at its own focus, not the one being renamed.
+                const definesSameId = uri.toString() !== this.uri.toString() &&
+                    new RegExp(`\\bid\\s*=\\s*"?${oldId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"?(?![\\w.\\-'])`).test(text);
+                if (definesSameId) {
+                    continue;
+                }
+                result.push(...edits.findFocusIdReferences(file, text, oldId, newId, file));
+            } else {
+                result.push(...edits.findFocusLocalisationKeys(file, text, oldId, newId, file));
+            }
+        }
+        return result;
     }
 
     private async setPrerequisites(msg: SetPrerequisitesMessage): Promise<void> {
@@ -263,7 +326,7 @@ class FocusTreePreview extends PreviewBase {
         if (sourceText === undefined) {
             return;
         }
-        await this.applyTextEdits(edits.setMutuallyExclusive(msg.focus, sourceText, msg.ids));
+        await this.applyTextEdits(edits.setMutuallyExclusive(msg.focus, sourceText, msg.groups));
     }
 
     private async setRelativePosition(msg: SetRelativePositionMessage): Promise<void> {
@@ -271,7 +334,28 @@ class FocusTreePreview extends PreviewBase {
         if (sourceText === undefined) {
             return;
         }
-        await this.applyTextEdits(edits.setRelativePosition(msg.focus, sourceText, msg.anchorId));
+        if ((msg.x !== undefined || msg.y !== undefined) && (!msg.focus.xToken || !msg.focus.yToken ||
+            !/^-?\d+$/.test(msg.focus.xToken.value) || !/^-?\d+$/.test(msg.focus.yToken.value))) {
+            await vscode.window.showErrorMessage(localize('preview.focusposition.unsupported', 'Cannot update focus position: x/y must be explicit numeric values in the focus block.'));
+            return;
+        }
+        const textEdits = edits.setRelativePosition(msg.focus, sourceText, msg.anchorId);
+        if (msg.x !== undefined && msg.y !== undefined && msg.focus.xToken && msg.focus.yToken &&
+            /^-?\d+$/.test(msg.focus.xToken.value) && /^-?\d+$/.test(msg.focus.yToken.value)) {
+            textEdits.push(
+                edits.patchToken(msg.focus.file, msg.focus.xToken, String(msg.x)),
+                edits.patchToken(msg.focus.file, msg.focus.yToken, String(msg.y)),
+            );
+        }
+        await this.applyTextEdits(textEdits);
+    }
+
+    private async setFocusProperties(msg: SetFocusPropertiesMessage): Promise<void> {
+        const sourceText = await this.readSourceText(msg.focus.file);
+        if (sourceText === undefined) {
+            return;
+        }
+        await this.applyTextEdits(edits.setFocusProperties(msg.focus, sourceText, msg.properties));
     }
 
     /** Reads the full text of every file a tree's focuses live in (shared_focus can span files), keyed by file path. */
@@ -300,20 +384,41 @@ class FocusTreePreview extends PreviewBase {
 
         const documents = new Map<string, vscode.TextDocument>();
         const edit = new vscode.WorkspaceEdit();
+        const seen = new Set<string>();
         for (const textEdit of textEdits) {
-            let document = documents.get(textEdit.file);
+            const documentKey = textEdit.documentUri ?? textEdit.file;
+            let document = documents.get(documentKey);
             if (!document) {
-                const resolved = await this.getDocumentForPreviewMessage(textEdit.file === this.focusTreeLoader.file ? undefined : textEdit.file);
+                const resolved = textEdit.documentUri ?
+                    (getDocumentByUri(vscode.Uri.parse(textEdit.documentUri)) ?? await vscode.workspace.openTextDocument(vscode.Uri.parse(textEdit.documentUri))) :
+                    await this.getDocumentForPreviewMessage(textEdit.file === this.focusTreeLoader.file ? undefined : textEdit.file);
                 if (!resolved) {
                     return;
                 }
                 document = resolved;
-                documents.set(textEdit.file, document);
+                documents.set(documentKey, document);
             }
+            const editKey = `${document.uri.toString()}:${textEdit.start}:${textEdit.end}:${textEdit.newText}`;
+            if (seen.has(editKey)) {
+                continue;
+            }
+            seen.add(editKey);
             edit.replace(document.uri, new vscode.Range(document.positionAt(textEdit.start), document.positionAt(textEdit.end)), textEdit.newText);
         }
 
-        await vscode.workspace.applyEdit(edit);
+        const applied = await vscode.workspace.applyEdit(edit);
+        if (!applied) {
+            await reportFailure(new Error('vscode.workspace.applyEdit returned false'), {
+                area: 'focustree',
+                operation: 'applyedit',
+                file: this.uri.toString(),
+                details: { editCount: textEdits.length, documents: [...documents.keys()].join(', ') },
+            }, {
+                modal: true,
+                summary: localize('preview.focustree.editfailed', 'The focus-tree edit could not be applied. Check that the source files are writable and try again.'),
+            });
+            return;
+        }
         this.reload();
     }
 

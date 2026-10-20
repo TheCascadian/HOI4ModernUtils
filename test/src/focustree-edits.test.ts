@@ -5,8 +5,11 @@ import {
     deleteFocuses,
     duplicateBranch,
     duplicateFocuses,
+    findFocusIdReferences,
+    findFocusLocalisationKeys,
     renameFocus,
     setMutuallyExclusive,
+    setFocusProperties,
     setPrerequisites,
     setRelativePosition,
     TextEdit,
@@ -150,8 +153,26 @@ describe('focustree edits: minimal, git-friendly text patches', () => {
 
     it('setMutuallyExclusive is a no-op when the desired list already matches', () => {
         const tree = buildTree();
-        const edits = setMutuallyExclusive(tree.focuses.focus_b, source, ['focus_a']);
+        const edits = setMutuallyExclusive(tree.focuses.focus_b, source, [['focus_a']]);
         assert.deepStrictEqual(edits, []);
+    });
+
+    it('setMutuallyExclusive preserves a multi-focus block instead of flattening it', () => {
+        const withGroupedMutex = source.replace(
+            'mutually_exclusive = { focus = focus_a }',
+            'mutually_exclusive = { focus = focus_a focus = focus_c }',
+        );
+        const focus = emptyFocus({
+            id: 'focus_b',
+            file: FILE,
+            blockRange: findBlock(withGroupedMutex, 'focus = {\n\t\tid = focus_b'),
+            exclusive: ['focus_a', 'focus_c'],
+            exclusiveGroups: [{
+                ids: ['focus_a', 'focus_c'],
+                range: findBlock(withGroupedMutex, 'mutually_exclusive = {'),
+            }],
+        });
+        assert.deepStrictEqual(setMutuallyExclusive(focus, withGroupedMutex, [['focus_a', 'focus_c']]), []);
     });
 
     it('setRelativePosition inserts a new statement before the closing brace', () => {
@@ -202,6 +223,49 @@ describe('focustree edits: minimal, git-friendly text patches', () => {
         assert.strictEqual(result, source);
     });
 
+    it('setFocusProperties adds gameplay fields in one insertion without touching unknown script', () => {
+        const tree = buildTree();
+        const focus = tree.focuses.focus_b;
+        const edits = setFocusProperties(focus, source, {
+            icon: 'GFX_goal_test',
+            cost: '10',
+            completion_reward: 'add_political_power = 50',
+            cancel_if_invalid: true,
+        });
+        const result = applyEdits(source, edits);
+        assert.ok(result.includes('\t\ticon = GFX_goal_test'));
+        assert.ok(result.includes('\t\tcost = 10'));
+        assert.ok(result.includes('\t\tcompletion_reward = {\n\t\t\tadd_political_power = 50\n\t\t}'));
+        assert.ok(result.includes('\t\tcancel_if_invalid = yes'));
+        assert.ok(result.includes('mutually_exclusive = { focus = focus_a }'));
+        assert.strictEqual(edits.filter(edit => edit.start === focus.blockRange!.end - 1).length, 1);
+    });
+
+    it('setFocusProperties replaces and removes known fields while preserving neighboring statements', () => {
+        const withProperties = source.replace(
+            '\t\ty = 0\n\t\tmutually_exclusive',
+            '\t\ty = 0\n\t\tcost = 7\n\t\tavailable = { has_war = yes }\n\t\tmutually_exclusive',
+        );
+        const focus = emptyFocus({
+            id: 'focus_b',
+            file: FILE,
+            blockRange: findBlock(withProperties, 'focus = {\n\t\tid = focus_b'),
+        });
+        const edits = setFocusProperties(focus, withProperties, { cost: '14', available: '' });
+        const result = applyEdits(withProperties, edits);
+        assert.ok(result.includes('\t\tcost = 14'));
+        assert.ok(!result.includes('available ='));
+        assert.ok(result.includes('mutually_exclusive = { focus = focus_a }'));
+    });
+
+    it('setFocusProperties preserves comments and whitespace supplied by the raw block editor', () => {
+        const tree = buildTree();
+        const rawBody = '\n\t\t\t# Keep this custom condition\n\t\t\tcustom_trigger = yes\n\t\t';
+        const result = applyEdits(source, setFocusProperties(tree.focuses.focus_b, source, { available: rawBody }));
+        assert.ok(result.includes(`available = {${rawBody}}`));
+        assert.ok(result.includes('mutually_exclusive = { focus = focus_a }'));
+    });
+
     it('createFocus appends a new block after the last sibling, matching its indentation', () => {
         const tree = buildTree();
         const edits = createFocus(tree, source, { id: 'focus_c', x: 2, y: 0 });
@@ -241,6 +305,24 @@ describe('focustree edits: minimal, git-friendly text patches', () => {
         assert.ok(result.includes('prerequisite = { focus = focus_b_renamed }'));
         assert.ok(result.includes('mutually_exclusive = { focus = focus_a }'));
         assert.ok(!result.includes('id = focus_b\n'));
+    });
+
+    it('findFocusIdReferences patches only parsed focus-reference properties', () => {
+        const projectFile = `# focus_b must stay in this comment\ncountry_event = {\n\tid = focus_b\n\ttrigger = { has_completed_focus = focus_b }\n\tcomplete_national_focus = focus_b\n\tcustom_key = focus_b\n}\n`;
+        const result = applyEdits(projectFile, findFocusIdReferences(FILE, projectFile, 'focus_b', 'focus_new'));
+        assert.ok(result.includes('# focus_b must stay in this comment'));
+        assert.ok(result.includes('id = focus_b'));
+        assert.ok(result.includes('has_completed_focus = focus_new'));
+        assert.ok(result.includes('complete_national_focus = focus_new'));
+        assert.ok(result.includes('custom_key = focus_b'));
+    });
+
+    it('findFocusLocalisationKeys renames exact name/description keys but not similar prefixes or values', () => {
+        const localisation = `l_english:\n focus_b:0 "Focus focus_b"\n focus_b_desc:0 "Description"\n focus_bonus:0 "Other"\n`;
+        const result = applyEdits(localisation, findFocusLocalisationKeys('test.yml', localisation, 'focus_b', 'focus_new'));
+        assert.ok(result.includes('focus_new:0 "Focus focus_b"'));
+        assert.ok(result.includes('focus_new_desc:0 "Description"'));
+        assert.ok(result.includes('focus_bonus:0 "Other"'));
     });
 
     it('deleteFocuses removes multiple focuses and every cross-reference between them in one atomic batch', () => {
@@ -342,5 +424,15 @@ describe('focustree edits: minimal, git-friendly text patches', () => {
         // focus_b couldn't be copied, the copy's prerequisite still points at the original.
         assert.ok(result.includes('id = focus_a_copy\n\t\tx = 1\n\t\ty = 1\n\t\tprerequisite = { focus = focus_b }'));
         assert.ok(!result.includes('focus_b_copy'));
+    });
+});
+
+describe('focus edit regressions', () => {
+    it('validates focus IDs', () => {
+        const { isValidFocusId } = require('../../src/previewdef/focustree/focusid');
+        assert.ok(isValidFocusId('GER_a.b-c'));
+        for (const bad of ['a b', 'a=b', 'a{', '', 'a#b', '"a"']) {
+            assert.ok(!isValidFocusId(bad), bad);
+        }
     });
 });

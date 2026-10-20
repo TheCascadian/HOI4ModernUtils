@@ -555,7 +555,24 @@ const table: Partial<typeof __table> = {
     "worldmap.waterland.terrain": "Land terrain",
     "worldmap.waterland.title": "Convert Water Provinces to Land",
     "worldmap.waterland.warning": "This rewrites definition.csv plus state and strategic-region membership as one undoable transaction. Empty source strategic regions are removed.",
-    "worldmap.waterland.wateronly": "Water-to-land conversion accepts only sea and lake provinces."
+    "worldmap.waterland.wateronly": "Water-to-land conversion accepts only sea and lake provinces.",
+    "error.copied": "错误详情已复制到剪贴板。",
+    "error.copy": "复制错误详情",
+    "error.detail": "错误代码：{0}\n\n{1}\n\n请选择 “复制错误详情” 并发送给扩展作者。",
+    "error.featurefailed": "无法启动 “{0}”。",
+    "error.generic": "HOI4 Modern Utils 出现问题。",
+    "error.indexingfailed": "索引启动失败。",
+    "error.lastcode": "最近的错误代码：{0}",
+    "error.noreport": "暂无错误报告。",
+    "error.page.code": "错误代码",
+    "error.page.help": "请复制错误详情并发送给扩展作者。",
+    "error.retry": "重试",
+    "error.showlog": "显示日志",
+    "error.startupfailed": "HOI4 Modern Utils 未能完成启动。",
+    "error.startupphase": "启动 “{0}” 时出现问题。",
+    "preview.actionfailed": "操作 “{0}” 失败。",
+    "preview.failedtoload": "预览加载失败。",
+    "preview.failedtorestore": "无法恢复 “{0}” 的预览。"
 };
 
 export default table;

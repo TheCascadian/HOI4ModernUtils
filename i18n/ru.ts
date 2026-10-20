@@ -555,7 +555,24 @@ const table: Partial<typeof __table> = {
     "worldmap.waterland.terrain": "Land terrain",
     "worldmap.waterland.title": "Convert Water Provinces to Land",
     "worldmap.waterland.warning": "This rewrites definition.csv plus state and strategic-region membership as one undoable transaction. Empty source strategic regions are removed.",
-    "worldmap.waterland.wateronly": "Water-to-land conversion accepts only sea and lake provinces."
+    "worldmap.waterland.wateronly": "Water-to-land conversion accepts only sea and lake provinces.",
+    "error.copied": "Сведения об ошибке скопированы в буфер обмена.",
+    "error.copy": "Копировать сведения об ошибке",
+    "error.detail": "Код ошибки: {0}\n\n{1}\n\nНажмите \"Копировать сведения об ошибке\" и отправьте их автору расширения.",
+    "error.featurefailed": "Не удалось запустить \"{0}\".",
+    "error.generic": "В HOI4 Modern Utils произошла ошибка.",
+    "error.indexingfailed": "Не удалось запустить индексацию.",
+    "error.lastcode": "Последний код ошибки: {0}",
+    "error.noreport": "Отчёта об ошибке пока нет.",
+    "error.page.code": "Код ошибки",
+    "error.page.help": "Скопируйте сведения об ошибке и отправьте их автору расширения.",
+    "error.retry": "Повторить",
+    "error.showlog": "Показать журнал",
+    "error.startupfailed": "HOI4 Modern Utils не удалось завершить запуск.",
+    "error.startupphase": "Проблема при запуске \"{0}\".",
+    "preview.actionfailed": "Действие \"{0}\" не удалось.",
+    "preview.failedtoload": "Не удалось загрузить предпросмотр.",
+    "preview.failedtorestore": "Не удалось восстановить предпросмотр \"{0}\"."
 };
 
 export default table;

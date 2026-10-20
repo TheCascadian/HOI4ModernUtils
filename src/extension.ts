@@ -6,11 +6,12 @@ import { ViewType, ContextName } from './constants';
 import { registerTelemetryReporter, sendEvent } from './util/telemetry';
 import { registerScanReferencesCommand } from './util/dependency';
 import { registerHoiFs } from './util/hoifs';
-import { loadI18n } from './util/i18n';
+import { loadI18n, localize } from './util/i18n';
 import { Logger } from "./util/logger";
 import { registerLazyPreviews } from './previewdef/lazyregistration';
 import { registerLazyAssetService } from './fileSystem/lazyassetservice';
 import { registerScanAndLogErrorsCommand } from './util/worldmaperrorscan';
+import { registerErrorReporting, reportFailure } from './util/errorreport';
 
 export function activate(context: vscode.ExtensionContext) {
     const activationStarted = performance.now();
@@ -25,6 +26,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Must register this first because other component may use it.
     measurePhase('core', () => {
         context.subscriptions.push(Logger.register());
+        context.subscriptions.push(registerErrorReporting());
         context.subscriptions.push(registerContextContainer(context));
         context.subscriptions.push(registerTelemetryReporter());
     });
@@ -46,11 +48,17 @@ export function activate(context: vscode.ExtensionContext) {
 
     const indexingTimer = setTimeout(async () => {
         const started = performance.now();
-        const { indexManager } = await import('./indexing/indexmanager');
-        context.subscriptions.push(indexManager.register());
-        sendEvent('extension.lazyIndexing.ready', undefined, {
-            durationMs: performance.now() - started,
-        });
+        try {
+            const { indexManager } = await import('./indexing/indexmanager');
+            context.subscriptions.push(indexManager.register());
+            sendEvent('extension.lazyIndexing.ready', undefined, {
+                durationMs: performance.now() - started,
+            });
+        } catch (e) {
+            await reportFailure(e, { area: 'indexing', operation: 'start' }, {
+                summary: localize('error.indexingfailed', 'Indexing failed to start. GFX, localisation and focus lookups may be incomplete.'),
+            });
+        }
     }, 0);
     context.subscriptions.push({ dispose: () => clearTimeout(indexingTimer) });
 
@@ -85,7 +93,14 @@ function measurePhase(name: string, action: () => void): void {
     const startMark = `hoi4mu.activate.${name}.start`;
     const endMark = `hoi4mu.activate.${name}.end`;
     performance.mark(startMark);
-    action();
+    try {
+        action();
+    } catch (e) {
+        // Keep activating: one failed registration must not take the whole extension down.
+        void reportFailure(e, { area: 'activation', operation: name }, {
+            summary: localize('error.startupphase', 'HOI4 Modern Utils had a problem starting "{0}".', name),
+        });
+    }
     performance.mark(endMark);
     performance.measure(`hoi4mu.activate.${name}`, startMark, endMark);
     performance.clearMarks(startMark);

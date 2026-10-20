@@ -1,5 +1,5 @@
-import { Token } from "../../hoiformat/hoiparser";
-import { Focus, FocusRelationGroup, FocusTree, TokenRange } from "./schema";
+import { Node, parseHoi4File, Token } from "../../hoiformat/hoiparser";
+import { EditableFocusProperty, Focus, FocusEditableProperties, FocusRelationGroup, FocusTree, TokenRange } from "./schema";
 
 /**
  * A single surgical text replacement, expressed as byte offsets into the
@@ -11,9 +11,76 @@ import { Focus, FocusRelationGroup, FocusTree, TokenRange } from "./schema";
  */
 export interface TextEdit {
     file: string;
+    /** Absolute URI for project-wide refactors outside the loader's mod-relative file map. */
+    documentUri?: string;
     start: number;
     end: number;
     newText: string;
+}
+
+const focusReferenceKeys = new Set([
+    'focus',
+    'has_completed_focus',
+    'relative_position_id',
+    'complete_national_focus',
+    'uncomplete_national_focus',
+    'unlock_national_focus',
+]);
+
+/**
+ * Finds semantically named focus references in arbitrary Paradox script.
+ * Only scalar values of known reference keys are patched; comments, strings
+ * in unrelated fields, and coincidental identifier text are never touched.
+ */
+export function findFocusIdReferences(file: string, sourceText: string, oldId: string, newId: string, documentUri?: string): TextEdit[] {
+    let root: Node;
+    try {
+        root = parseHoi4File(sourceText);
+    } catch {
+        return [];
+    }
+    const result: TextEdit[] = [];
+    const visit = (nodes: Node[]) => {
+        for (const node of nodes) {
+            if (Array.isArray(node.value)) {
+                visit(node.value);
+                continue;
+            }
+            const scalar = typeof node.value === 'string' ? node.value : node.value?.name;
+            if (node.name && focusReferenceKeys.has(node.name.toLowerCase()) && scalar === oldId && node.valueStartToken && node.valueEndToken) {
+                result.push({
+                    file,
+                    documentUri,
+                    start: node.valueStartToken.start,
+                    end: node.valueEndToken.end,
+                    newText: typeof node.value === 'string' ? JSON.stringify(newId) : newId,
+                });
+            }
+        }
+    };
+    if (Array.isArray(root.value)) {
+        visit(root.value);
+    }
+    return result;
+}
+
+/** Renames exact localisation keys (`ID` and `ID_desc`) without touching values or similar prefixes. */
+export function findFocusLocalisationKeys(file: string, sourceText: string, oldId: string, newId: string, documentUri?: string): TextEdit[] {
+    const result: TextEdit[] = [];
+    const escaped = oldId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`^(\\s*)(${escaped}(?:_desc)?)(\\s*:)`, 'gm');
+    for (const match of sourceText.matchAll(pattern)) {
+        const key = match[2];
+        const start = (match.index ?? 0) + match[1].length;
+        result.push({
+            file,
+            documentUri,
+            start,
+            end: start + key.length,
+            newText: key === oldId ? newId : `${newId}_desc`,
+        });
+    }
+    return result;
 }
 
 const TAB = '\t';
@@ -48,6 +115,24 @@ function deleteSpan(file: string, sourceText: string, range: TokenRange): TextEd
 
 function renderGroup(keyword: 'prerequisite' | 'mutually_exclusive', ids: string[]): string {
     return `${keyword} = { ${ids.map(id => `focus = ${id}`).join(' ')} }`;
+}
+
+/**
+ * Removes the given IDs from a multi-line or commented relation group by
+ * deleting only their `focus = ID` entries, keeping comments and layout.
+ * Single-line comment-free groups are cheaper to re-render whole.
+ */
+function renderGroupWithout(sourceText: string, group: FocusRelationGroup, keyword: 'prerequisite' | 'mutually_exclusive', removed: Set<string>): string {
+    const original = sourceText.slice(group.range.start, group.range.end);
+    if (!/[#\r\n]/.test(original)) {
+        return renderGroup(keyword, group.ids.filter(id => !removed.has(id)));
+    }
+    let result = original;
+    for (const id of removed) {
+        const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        result = result.replace(new RegExp(`focus\\s*=\\s*"?${escaped}"?[ \\t]*`, 'g'), '');
+    }
+    return result;
 }
 
 function setsEqual(a: Set<string>, b: Set<string>): boolean {
@@ -107,9 +192,9 @@ export function setPrerequisites(focus: Focus, sourceText: string, desiredGroups
     return setRelationGroups(focus, sourceText, 'prerequisite', focus.prerequisiteGroups, desiredGroups.filter(g => g.length > 0));
 }
 
-/** Sets a focus's full mutually-exclusive list. Always authors one ID per block; see module notes on multi-ID blocks. */
-export function setMutuallyExclusive(focus: Focus, sourceText: string, desiredIds: string[]): TextEdit[] {
-    return setRelationGroups(focus, sourceText, 'mutually_exclusive', focus.exclusiveGroups, desiredIds.map(id => [id]));
+/** Sets the full mutually-exclusive block structure without flattening multi-ID groups. */
+export function setMutuallyExclusive(focus: Focus, sourceText: string, desiredGroups: string[][]): TextEdit[] {
+    return setRelationGroups(focus, sourceText, 'mutually_exclusive', focus.exclusiveGroups, desiredGroups.filter(g => g.length > 0));
 }
 
 /** Sets, patches, or clears a focus's `relative_position_id`. */
@@ -130,6 +215,108 @@ export function setRelativePosition(focus: Focus, sourceText: string, newAnchorI
         end: focus.blockRange.end - 1,
         newText: `${indent}relative_position_id = ${newAnchorId}\n`,
     }];
+}
+
+const scalarFocusProperties = new Set<EditableFocusProperty>(['icon', 'cost', 'text', 'will_lead_to_war_with']);
+const blockFocusProperties = new Set<EditableFocusProperty>([
+    'available', 'bypass', 'cancel', 'select_effect', 'completion_reward',
+    'remove_effect', 'complete_tooltip', 'search_filters',
+]);
+
+function findNodeAt(nodes: Node[], start: number): Node | undefined {
+    for (const node of nodes) {
+        if (node.nameToken?.start === start) {
+            return node;
+        }
+        if (Array.isArray(node.value)) {
+            const nested = findNodeAt(node.value, start);
+            if (nested) {
+                return nested;
+            }
+        }
+    }
+    return undefined;
+}
+
+function renderEditableProperty(key: EditableFocusProperty, value: string | boolean, indent: string): string {
+    if (typeof value === 'boolean') {
+        return `${key} = ${value ? 'yes' : 'no'}`;
+    }
+    const trimmed = value.trim();
+    const conditionalIcon = key === 'icon' && (trimmed.includes('=') || value !== trimmed);
+    if (scalarFocusProperties.has(key) && !conditionalIcon) {
+        return `${key} = ${trimmed}`;
+    }
+    const shouldRenderBlock = conditionalIcon || blockFocusProperties.has(key) || key === 'ai_will_do' && (trimmed.includes('=') || trimmed.includes('\n'));
+    if (!shouldRenderBlock) {
+        return `${key} = ${trimmed}`;
+    }
+    // Values loaded with sourceText are the exact bytes between the braces.
+    // If the user edits that representation, keep their comments and layout
+    // instead of normalising it through the semantic parser.
+    if (/^\s/.test(value) || /\s$/.test(value)) {
+        return `${key} = {${value}}`;
+    }
+    const innerIndent = indent + TAB;
+    const body = trimmed.split(/\r?\n/).map(line => innerIndent + line.trim()).join('\n');
+    return `${key} = {\n${body}\n${indent}}`;
+}
+
+/** Updates common focus fields in one atomic, source-preserving batch. Unknown statements are untouched. */
+export function setFocusProperties(focus: Focus, sourceText: string, properties: Partial<FocusEditableProperties>): TextEdit[] {
+    if (!focus.blockRange) {
+        return [];
+    }
+    const root = parseHoi4File(sourceText);
+    const focusNode = Array.isArray(root.value) ? findNodeAt(root.value, focus.blockRange.start) : undefined;
+    if (!focusNode || !Array.isArray(focusNode.value)) {
+        return [];
+    }
+
+    const edits: TextEdit[] = [];
+    const newLines: string[] = [];
+    const indent = indentOf(sourceText, focus.blockRange.start) + TAB;
+    for (const [rawKey, rawValue] of Object.entries(properties)) {
+        const key = rawKey as EditableFocusProperty;
+        const existing = focusNode.value.filter(node => node.name === key);
+        const remove = typeof rawValue === 'string' && rawValue.trim() === '';
+        if (remove) {
+            for (const node of existing) {
+                if (node.nameToken) {
+                    edits.push(deleteSpan(focus.file, sourceText, {
+                        start: node.nameToken.start,
+                        end: node.valueEndToken?.end ?? node.nameToken.end,
+                    }));
+                }
+            }
+            continue;
+        }
+
+        const rendered = renderEditableProperty(key, rawValue as string | boolean, indent);
+        const first = existing[0];
+        if (first?.nameToken) {
+            edits.push({
+                file: focus.file,
+                start: first.nameToken.start,
+                end: first.valueEndToken?.end ?? first.nameToken.end,
+                newText: rendered,
+            });
+            // Do not remove repeated keys. Some Paradox constructs permit
+            // them, and preserving unsupported/repeated source is safer than
+            // assuming the first occurrence semantically replaces the rest.
+        } else {
+            newLines.push(`${indent}${rendered}\n`);
+        }
+    }
+    if (newLines.length > 0) {
+        edits.push({
+            file: focus.file,
+            start: focus.blockRange.end - 1,
+            end: focus.blockRange.end - 1,
+            newText: newLines.join(''),
+        });
+    }
+    return edits;
 }
 
 /** Appends a brand-new `focus = { id = ...  x = ...  y = ... }` block to a tree, matching the indentation of its last sibling (or the tree itself, if it has none yet). */
@@ -196,7 +383,7 @@ export function deleteFocuses(tree: FocusTree, sourceTextByFile: Record<string, 
                 const remaining = group.ids.filter(id => !targetSet.has(id));
                 edits.push(remaining.length === 0 ?
                     deleteSpan(other.file, otherSource, group.range) :
-                    { file: other.file, start: group.range.start, end: group.range.end, newText: renderGroup('prerequisite', remaining) });
+                    { file: other.file, start: group.range.start, end: group.range.end, newText: renderGroupWithout(otherSource, group, 'prerequisite', targetSet) });
             }
         }
         for (const group of other.exclusiveGroups) {
@@ -204,7 +391,7 @@ export function deleteFocuses(tree: FocusTree, sourceTextByFile: Record<string, 
                 const remaining = group.ids.filter(id => !targetSet.has(id));
                 edits.push(remaining.length === 0 ?
                     deleteSpan(other.file, otherSource, group.range) :
-                    { file: other.file, start: group.range.start, end: group.range.end, newText: renderGroup('mutually_exclusive', remaining) });
+                    { file: other.file, start: group.range.start, end: group.range.end, newText: renderGroupWithout(otherSource, group, 'mutually_exclusive', targetSet) });
             }
         }
         if (other.relativePositionId !== undefined && targetSet.has(other.relativePositionId)) {

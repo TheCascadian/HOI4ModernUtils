@@ -50,5 +50,7 @@
     "hoi4modernutils.worldMapConfirmNewProvinceCreation.title": "World Map Confirm New Province Creation",
     "hoi4modernutils.worldMapConfirmNewProvinceCreation.desc": "Show a confirmation dialog before creating a new province in the world map preview's paintbrush tool. Disabling this (e.g. via the dialog's \"Don't ask again\" checkbox) skips the confirmation; re-enable it here.",
     "hoi4modernutils.worldMapAutoCoreTransfers.title": "Auto-Core All Transferred States",
-    "hoi4modernutils.worldMapAutoCoreTransfers.desc": "Automatically add the destination country as a core when transferring or annexing states."
+    "hoi4modernutils.worldMapAutoCoreTransfers.desc": "Automatically add the destination country as a core when transferring or annexing states.",
+    "hoi4modernutils.copylasterror.title": "Copy Last Error Details",
+    "hoi4modernutils.showlasterror.title": "Show Last Error Log"
 }

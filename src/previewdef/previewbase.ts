@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
 import { localize } from '../util/i18n';
-import { error, debug, createStopwatch } from '../util/debug';
+import { debug, createStopwatch } from '../util/debug';
 import { dirUri, getDocumentByUri } from '../util/vsccommon';
 import { isEqual } from 'lodash';
 import { getFilePathFromMod, getHoiOpenedFileOriginalUri, readFileFromModOrHOI4 } from '../util/fileloader';
 import { mkdirs, writeFile } from '../util/vsccommon';
 import { sendByMessage } from '../util/telemetry';
 import { forceError } from '../util/common';
+import { handleErrorPageMessage, renderErrorPage, reportFailure } from '../util/errorreport';
 
 export abstract class PreviewBase {
     private cachedDependencies: string[] | undefined = undefined;
@@ -50,7 +51,20 @@ export abstract class PreviewBase {
                 this.panel.webview.html = content;
             }
         } catch(e) {
-            error(e);
+            const code = await reportFailure(e, {
+                area: 'preview',
+                operation: 'load',
+                file: this.uri.toString(),
+                details: { previewType: this.constructor.name },
+            });
+            if (!this.disposed) {
+                this.panel.webview.html = renderErrorPage(
+                    this.panel.webview,
+                    code,
+                    localize('preview.failedtoload', 'This preview failed to load.'),
+                    e,
+                );
+            }
         }
 
         debug(`Preview base (${this.uri.toString()}) content loaded in ${stopwatch.getElapsed()} ms.`);
@@ -72,39 +86,65 @@ export abstract class PreviewBase {
 
     protected registerEvents(panel: vscode.WebviewPanel): void {
         panel.webview.onDidReceiveMessage(async (msg) => {
-            switch (msg.command) {
-                case 'navigate':
-                    if (msg.start !== undefined) {
-                        if (msg.file === undefined) {
-                            const document = getDocumentByUri(this.uri);
-                            if (document === undefined) {
-                                return;
-                            }
-        
-                            vscode.window.showTextDocument(this.uri, {
-                                selection: new vscode.Range(document.positionAt(msg.start), document.positionAt(msg.end)),
-                                viewColumn: vscode.ViewColumn.One
-                            });
-                        } else {
-                            this.openOrCopyFile(msg.file, msg.start, msg.end);
-                        }
-                    }
-                    break;
-                case 'telemetry':
-                    sendByMessage(msg);
-                    break;
-                case 'reload':
-                    this.reload();
-                    break;
-                default:
-                    await this.handleMessage(msg);
-                    break;
+            if (await handleErrorPageMessage(msg)) {
+                return;
+            }
+
+            try {
+                await this.dispatchMessage(msg);
+            } catch (e) {
+                await reportFailure(e, {
+                    area: 'preview',
+                    operation: `message:${String(msg?.command)}`,
+                    file: this.uri.toString(),
+                }, {
+                    modal: true,
+                    summary: localize('preview.actionfailed', 'The action "{0}" failed.', String(msg?.command)),
+                });
             }
         });
-        
+
         panel.onDidDispose(() => {
             this.dispose();
         });
+    }
+
+    private async dispatchMessage(msg: any): Promise<void> {
+        switch (msg.command) {
+            case 'navigate':
+                if (msg.start !== undefined) {
+                    if (msg.file === undefined) {
+                        const document = getDocumentByUri(this.uri);
+                        if (document === undefined) {
+                            return;
+                        }
+    
+                        vscode.window.showTextDocument(this.uri, {
+                            selection: new vscode.Range(document.positionAt(msg.start), document.positionAt(msg.end)),
+                            viewColumn: vscode.ViewColumn.One
+                        });
+                    } else {
+                        this.openOrCopyFile(msg.file, msg.start, msg.end);
+                    }
+                }
+                break;
+            case 'telemetry':
+                sendByMessage(msg);
+                break;
+            case 'reload':
+                this.reload();
+                break;
+            case 'webviewError':
+                await reportFailure(Object.assign(new Error(String(msg.message)), { stack: String(msg.stack ?? '') }), {
+                    area: 'webview',
+                    operation: String(msg.source ?? 'runtime'),
+                    file: this.uri.toString(),
+                });
+                break;
+            default:
+                await this.handleMessage(msg);
+                break;
+        }
     }
     
     protected updateDependencies(dependencies: string[]): void {
@@ -157,7 +197,10 @@ export abstract class PreviewBase {
             });
 
         } catch (e) {
-            await vscode.window.showErrorMessage(localize('preview.failedtoopen', 'Failed to open file "{0}": {1}.', file, forceError(e).toString()));
+            await reportFailure(e, { area: 'preview', operation: 'openfile', file }, {
+                modal: true,
+                summary: localize('preview.failedtoopen', 'Failed to open file "{0}": {1}.', file, forceError(e).toString()),
+            });
         }
     }
 

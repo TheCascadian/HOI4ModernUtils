@@ -111,6 +111,8 @@ const table: Partial<typeof __table> = {
     "preview.focusposition.unsupported": "Cannot update focus position: x/y must be explicit numeric values in the focus block.",
     "preview.focustree.cannotcreate": "Cannot create a focus here: this tree has no anchor to insert a new focus against.",
     "preview.focustree.duplicatebranchskipped": "Could not duplicate as part of the branch: {0}. Their ID, x, or y is not a plain value Modern Utils can safely copy; anything downstream still points at the original.",
+    "preview.focustree.stale": "The focus tree changed while this edit was in flight, so it was not applied. Please try again.",
+    "preview.focustree.badidchars": "Focus IDs may only contain letters, digits, \"_\", \".\", \"-\" and \"'\".",
     "preview.focustree.duplicateid": "A focus with ID \"{0}\" already exists in this tree.",
     "preview.focustree.duplicateskipped": "Could not duplicate: {0}. Their ID, x, or y is not a plain value Modern Utils can safely copy.",
     "preview.focustree.invalidid": "Cannot create a focus: it needs an ID.",
@@ -630,7 +632,26 @@ const table: Partial<typeof __table> = {
     "worldmap.waterland.terrain": "Land terrain",
     "worldmap.waterland.title": "Convert Water Provinces to Land",
     "worldmap.waterland.warning": "This rewrites definition.csv plus state and strategic-region membership as one undoable transaction. Empty source strategic regions are removed.",
-    "worldmap.waterland.wateronly": "Water-to-land conversion accepts only sea and lake provinces."
+    "worldmap.waterland.wateronly": "Water-to-land conversion accepts only sea and lake provinces.",
+    "error.copied": "Error details copied to the clipboard.",
+    "error.copy": "Copy Error Details",
+    "error.detail": "Error code: {0}\n\n{1}\n\nSelect \"Copy Error Details\" and send it to the extension author to get this fixed.",
+    "error.featurefailed": "Could not start \"{0}\".",
+    "error.generic": "Something went wrong in HOI4 Modern Utils.",
+    "error.indexingfailed": "Indexing failed to start. GFX, localisation and focus lookups may be incomplete.",
+    "error.lastcode": "Last error code: {0}",
+    "error.noreport": "No error report is available yet.",
+    "error.page.code": "Error code",
+    "error.page.help": "Copy the error details and send them to the extension author.",
+    "error.retry": "Retry",
+    "error.showlog": "Show Log",
+    "error.startupfailed": "HOI4 Modern Utils failed to finish starting up. Some previews may not work.",
+    "error.startupphase": "HOI4 Modern Utils had a problem starting \"{0}\".",
+    "preview.actionfailed": "The action \"{0}\" failed.",
+    "preview.failedtoload": "This preview failed to load.",
+    "preview.failedtorestore": "Could not restore the preview for \"{0}\".",
+    "worldmap.bmp.updated": "Province BMP and dependent map records updated.",
+    "worldmap.references.repaired": "Province references repaired with {0} warning(s): {1}"
 };
 
 export default table;

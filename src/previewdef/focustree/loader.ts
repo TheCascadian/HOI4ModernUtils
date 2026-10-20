@@ -55,7 +55,7 @@ export class FocusTreeLoader extends ContentLoader<FocusTreeLoaderResult> {
             .filter(ft => ft.isSharedFocues)
             .value();
 
-        const focusTrees = getFocusTreeWithFocusFile(file, sharedFocusTrees, this.file, constants);
+        const focusTrees = getFocusTreeWithFocusFile(file, sharedFocusTrees, this.file, constants, content);
 
         const focusGfxNames = chain(focusTrees)
             .flatMap(ft => Object.values(ft.focuses))

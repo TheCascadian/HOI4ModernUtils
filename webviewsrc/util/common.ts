@@ -44,6 +44,28 @@ export function subscribeNavigators(container: HTMLElement | Document = document
     }
 }
 
+let webviewErrorsSent = 0;
+const webviewErrorSeen = new Set<string>();
+
+/** Forwards a webview-side failure to the extension host so it can show a copyable error code. */
+export function reportWebviewError(e: unknown, source: string): void {
+    try {
+        const err = forceError(e);
+        const key = `${source}|${err.message}`;
+        if (webviewErrorSeen.has(key) || webviewErrorsSent >= 5) {
+            return;
+        }
+        webviewErrorSeen.add(key);
+        webviewErrorsSent++;
+        vscode.postMessage({ command: 'webviewError', message: err.message, stack: err.stack, source });
+    } catch {
+        // never let error reporting throw
+    }
+}
+
+window.addEventListener('error', ev => reportWebviewError(ev.error ?? ev.message, 'window.error'));
+window.addEventListener('unhandledrejection', ev => reportWebviewError(ev.reason, 'unhandledrejection'));
+
 export function tryRun<T extends (...args: any[]) => any>(func: T): (...args: Parameters<T>) => ReturnType<T> | undefined {
     return function(this: any, ...args) {
         try {
@@ -52,6 +74,7 @@ export function tryRun<T extends (...args: any[]) => any>(func: T): (...args: Pa
                 return result.catch(e => {
                     console.error(e);
                     sendException(forceError(e));
+                    reportWebviewError(e, 'tryRun');
                 }) as ReturnType<T>;
             }
 
@@ -60,6 +83,7 @@ export function tryRun<T extends (...args: any[]) => any>(func: T): (...args: Pa
         } catch (e) {
             console.error(e);
             sendException(forceError(e));
+            reportWebviewError(e, 'tryRun');
         }
 
         return undefined;

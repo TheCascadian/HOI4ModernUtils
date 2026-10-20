@@ -2,7 +2,7 @@
 	"name": "hoi4modernutils",
 	"displayName": "%hoi4modernutils.displayName%",
 	"description": "Utilities for Heart of Iron IV mods developers",
-	"version": "0.4.7-pre-release-3",
+	"version": "0.4.8",
 	"author": "TheCascadian",
 	"publisher": "thecascadian",
 	"icon": "icon.png",
@@ -27,6 +27,8 @@
 		"onCommand:hoi4modernutils.previewworld",
 		"onCommand:hoi4modernutils.scanAndLogErrors",
 		"onCommand:hoi4modernutils.scanreferences",
+		"onCommand:hoi4modernutils.copylasterror",
+		"onCommand:hoi4modernutils.showlasterror",
 		"onCommand:hoi4modernutils.selectmodfile",
 		"onCommand:hoi4modernutils.selecthoifolder",
 		"onCustomEditor:hoi4modernutils.dds",
@@ -212,6 +214,16 @@
 			}
 		],
 		"commands": [
+			{
+				"command": "hoi4modernutils.copylasterror",
+				"title": "%hoi4modernutils.copylasterror.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.showlasterror",
+				"title": "%hoi4modernutils.showlasterror.title%",
+				"category": "%hoi4modernutils.category%"
+			},
 			{
 				"command": "hoi4modernutils.preview",
 				"title": "%hoi4modernutils.preview.title%",

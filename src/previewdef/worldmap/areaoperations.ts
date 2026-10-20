@@ -267,7 +267,15 @@ function namedBlockRange(text: string, name: string): { start: number; end: numb
     }
     const open = text.indexOf('{', match.index);
     let depth = 0;
+    let inQuote = false;
     for (let index = open; index < text.length; index++) {
+        if (text[index] === '"') {
+            inQuote = !inQuote;
+        } else if (!inQuote && text[index] === '#') {
+            while (index < text.length && text[index] !== '\n') {index++;}
+            continue;
+        }
+        if (inQuote) {continue;}
         if (text[index] === '{') {
             depth++;
         }
@@ -291,8 +299,8 @@ export function patchStatePreservingUnknownContent(
     const replaceScalar = (name: string, value: string) => {
         const pattern = new RegExp(`\\b${name}\\s*=\\s*(?:"[^"]*"|[^\\s#}]+)`);
         text = pattern.test(text)
-            ? text.replace(pattern, `${name} = ${value}`)
-            : text.replace(/\{/, `{${eol}\t${name} = ${value}`);
+            ? text.replace(pattern, () => `${name} = ${value}`)
+            : text.replace(/\{/, () => `{${eol}\t${name} = ${value}`);
     };
     replaceScalar('name', `"${state.name.replace(/"/g, '\\"')}"`);
     replaceScalar('manpower', String(state.manpower));
@@ -315,7 +323,7 @@ export function patchStatePreservingUnknownContent(
     text = /\bresources\s*=\s*\{[^}]*\}/.test(text)
         ? text.replace(/\bresources\s*=\s*\{[^}]*\}/, resources)
         : resources
-            ? text.replace(/\bhistory\s*=/, `\t${resources}${eol}\thistory =`)
+            ? text.replace(/^([\t ]*)history\s*=/m, (_m, ws: string) => `${ws || '\t'}${resources}${eol}${ws || '\t'}history =`)
             : text;
 
     const historyRange = namedBlockRange(text, 'history');
@@ -325,21 +333,34 @@ export function patchStatePreservingUnknownContent(
     const lines = text.slice(historyRange.start, historyRange.end).split(/\r?\n/);
     const retained: string[] = [];
     let depth = 0;
+    let insertAt = 0;
+    let skippingVictoryPoint = false;
+    let victoryPointOpened = false;
     for (const line of lines) {
         const trimmed = line.trim();
         const directKnownEntry = depth === 1 &&
             /^(?:owner|controller|add_core_of)\s*=/.test(trimmed);
-        const directVictoryPoint = depth === 1 && /^victory_points\s*=/.test(trimmed);
-        if (!directKnownEntry && !directVictoryPoint) {
+        if (depth === 1 && /^victory_points\s*=/.test(trimmed)) {
+            skippingVictoryPoint = true;
+            victoryPointOpened = false;
+        }
+        if (!directKnownEntry && !skippingVictoryPoint) {
             retained.push(line);
         }
-        for (const char of line) {
+        for (const char of stripLineComment(line)) {
             if (char === '{') {
                 depth++;
+                victoryPointOpened = true;
             }
             if (char === '}') {
                 depth--;
             }
+        }
+        if (skippingVictoryPoint && victoryPointOpened && depth === 1) {
+            skippingVictoryPoint = false;
+        }
+        if (insertAt === 0 && depth >= 1) {
+            insertAt = retained.length;
         }
     }
     const known: string[] = [];
@@ -357,8 +378,18 @@ export function patchStatePreservingUnknownContent(
         .filter(([, value]) => value !== undefined)
         .sort((a, b) => a[0] - b[0])
         .map(([provinceId, value]) => `\t\tvictory_points = { ${provinceId} ${value} }`));
-    retained.splice(1, 0, ...known);
+    retained.splice(insertAt, 0, ...known);
     return text.slice(0, historyRange.start) + retained.join(eol) + text.slice(historyRange.end);
+}
+
+/** Drops a trailing `# comment`, ignoring `#` inside double quotes, so comment braces don't skew depth counting. */
+function stripLineComment(line: string): string {
+    let inQuote = false;
+    for (let i = 0; i < line.length; i++) {
+        if (line[i] === '"') {inQuote = !inQuote;}
+        else if (line[i] === '#' && !inQuote) {return line.slice(0, i);}
+    }
+    return line;
 }
 
 /** Moves province membership and victory points without rewriting state data. */
@@ -379,18 +410,31 @@ export function patchStateMembershipPreservingContent(
     const lines = text.slice(historyRange.start, historyRange.end).split(/\r?\n/);
     const retained: string[] = [];
     let depth = 0;
+    let insertAt = 0;
+    let skippingVictoryPoint = false;
+    let victoryPointOpened = false;
     for (const line of lines) {
-        const directVictoryPoint = depth === 1 && /^victory_points\s*=/.test(line.trim());
-        if (!directVictoryPoint) {
+        if (depth === 1 && /^victory_points\s*=/.test(line.trim())) {
+            skippingVictoryPoint = true;
+            victoryPointOpened = false;
+        }
+        if (!skippingVictoryPoint) {
             retained.push(line);
         }
-        for (const char of line) {
+        for (const char of stripLineComment(line)) {
             if (char === '{') {
                 depth++;
+                victoryPointOpened = true;
             }
             if (char === '}') {
                 depth--;
             }
+        }
+        if (skippingVictoryPoint && victoryPointOpened && depth === 1) {
+            skippingVictoryPoint = false;
+        }
+        if (insertAt === 0 && depth >= 1) {
+            insertAt = retained.length;
         }
     }
     const entries = Object.entries(victoryPoints)
@@ -398,7 +442,7 @@ export function patchStateMembershipPreservingContent(
         .filter(([, value]) => value !== undefined)
         .sort((a, b) => a[0] - b[0])
         .map(([provinceId, value]) => `\t\tvictory_points = { ${provinceId} ${value} }`);
-    retained.splice(1, 0, ...entries);
+    retained.splice(insertAt, 0, ...entries);
     return text.slice(0, historyRange.start) + retained.join(eol) + text.slice(historyRange.end);
 }
 

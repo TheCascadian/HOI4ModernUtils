@@ -239,12 +239,18 @@ export function reindexSupplyAreaFile(
 
 export function reindexCountryHistoryFile(
     text: string,
-    stateIds: Readonly<Record<number, number>>
+    stateIds: Readonly<Record<number, number>>,
+    options: { allowUnmapped?: boolean } = {}
 ): ReindexResult {
     let changed = 0;
-    const output = text.replace(/\bcapital\s*=\s*(\d+)/g, (whole, value: string) => {
+    const output = text.replace(/(#[^\n]*)|\bcapital\s*=\s*(\d+)/g, (whole, comment: string | undefined, value: string) => {
+        if (comment !== undefined) {return whole;}
         const oldId = Number.parseInt(value, 10);
-        const nextId = requireMappedId(oldId, stateIds, 'capital state');
+        // A partial map (e.g. a state merge) only lists the IDs that move;
+        // every other capital stays as it is.
+        const nextId = options.allowUnmapped
+            ? mapId(oldId, stateIds) ?? oldId
+            : requireMappedId(oldId, stateIds, 'capital state');
         if (nextId === oldId) {return whole;}
         changed++;
         return whole.replace(value, String(nextId));

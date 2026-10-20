@@ -6,6 +6,14 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 **Versioning note:** This fork ([TheCascadian/HOI4ModernUtils](https://github.com/TheCascadian/HOI4ModernUtils)) keeps its own `0.x` version line, independent of the upstream project it was forked from. Entries at `[0.4.0]` and above are this fork's own releases. Entries from `[0.15.1]` down to `[0.13.0]` are inherited from upstream (`herbix/hoi4modutilities`) and were merged into this fork's history alongside its own work; older upstream entries have been compressed out of this file -  see the [upstream changelog](https://github.com/herbix/hoi4modutilities/blob/master/CHANGELOG.md) for full history. Because the two projects numbered releases independently, some version numbers (e.g. `0.12.x`, `0.3.2`) appear twice in git history for unrelated changes at different dates; this file only lists one entry per number going forward.
 
+## [0.4.8]
+
+### Fixed
+* Fixed World Map state merges failing every time with "Cannot reindex unknown capital state ID N." The merge only supplies replacement IDs for the merged states, but the country-history capital remap required every `capital = N` to be in that map, so the first country whose capital was not a merged state aborted the whole operation. Capitals that are not part of the merge are now left unchanged and merged capitals are remapped to the surviving state. The full-map reindex still validates strictly.
+
+### Changed
+* Version number is now plain `major.minor.patch` so the package can be published to the Visual Studio Marketplace. This release includes all changes from `0.4.7-pre-release-1` through `0.4.7-pre-release-3`.
+
 ## [0.4.7-pre-release-3]
 
 ### Added

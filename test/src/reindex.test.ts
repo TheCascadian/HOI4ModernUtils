@@ -87,6 +87,17 @@ describe('destructive map reindexing', () => {
         );
     });
 
+    it('leaves unmapped capitals untouched when given a partial replacement map', () => {
+        assert.strictEqual(
+            reindexCountryHistoryFile('capital = 1', { 5: 4 }, { allowUnmapped: true }).text,
+            'capital = 1'
+        );
+        assert.strictEqual(
+            reindexCountryHistoryFile('capital = 5', { 5: 4 }, { allowUnmapped: true }).text,
+            'capital = 4'
+        );
+    });
+
     it('reindexes unitstacks column one, preserves payload columns, and drops unknown rows', () => {
         const input = [
             '# province;unknown;x;y;z;angle;scale',
@@ -111,5 +122,12 @@ describe('destructive map reindexing', () => {
             () => reindexUnitStacks('not-a-province;0;1;2;3;4;5', provinces),
             /malformed unitstacks row 1/
         );
+    });
+});
+
+describe('country history capital regressions', () => {
+    it('does not rewrite capitals inside comments', () => {
+        const out = reindexCountryHistoryFile('# capital = 5\ncapital = 5\n', { 5: 9 }, { allowUnmapped: true });
+        assert.strictEqual(out.text, '# capital = 5\ncapital = 9\n');
     });
 });

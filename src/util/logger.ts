@@ -10,7 +10,8 @@ enum LogLevel {
 
 // User-facing logger
 export class Logger {
-    private static outputChannel: vscode.OutputChannel;
+    private static outputChannel: vscode.OutputChannel | undefined;
+    private static recentLines: string[] = [];
 
     public static register(): vscode.Disposable {
         Logger.outputChannel = vscode.window.createOutputChannel('HOI4 Mod Utilities');
@@ -21,7 +22,21 @@ export class Logger {
 
     private static logMessage(level: LogLevel, message: string) {
         const timestamp = new Date().toISOString();
-        Logger.outputChannel.appendLine(`[${timestamp}] [${level}] ${message}`);
+        const line = `[${timestamp}] [${level}] ${message}`;
+        Logger.recentLines.push(line);
+        if (Logger.recentLines.length > 200) {
+            Logger.recentLines.shift();
+        }
+        Logger.outputChannel?.appendLine(line);
+    }
+
+    /** The newest log lines, kept so error reports can include what led up to a failure. */
+    public static recent(count: number): string[] {
+        return Logger.recentLines.slice(-count);
+    }
+
+    public static show(): void {
+        Logger.outputChannel?.show(true);
     }
 
     public static debug(message: string) {

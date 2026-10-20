@@ -231,6 +231,29 @@ describe('selected area operations', () => {
         assert.ok(result.includes('victory_points = { 900 5 }'));
     });
 
+    it('removes multi-line victory_points blocks without leaving orphans', () => {
+        const source = [
+            'state={',
+            '\tid=15',
+            '\tprovinces = { 485 9434 }',
+            '\thistory=',
+            '\t{',
+            '\t\towner = FRA',
+            '\t\tvictory_points = {',
+            '\t\t\t9434 10',
+            '\t\t}',
+            '\t\tvictory_points = {',
+            '\t\t\t485 3',
+            '\t\t}',
+            '\t}',
+            '}',
+        ].join('\n');
+        const result = patchStateMembershipPreservingContent(source, [485, 9434], { 485: 3, 9434: 10 }, '\n');
+        assert.strictEqual((result.match(/\{/g) ?? []).length, (result.match(/\}/g) ?? []).length);
+        assert.ok(!/^\s+\d+ \d+\s*$/m.test(result));
+        assert.ok(/history=\n\t\{\n\t\tvictory_points = \{ 485 3 \}/.test(result));
+    });
+
     it('verifies complete ocean-tile readiness', () => {
         const ready = verifyOceanTileReadiness({
             id: 17,
@@ -330,5 +353,20 @@ describe('selected area operations', () => {
         assert.ok(result.includes('owner = NEW'));
         assert.ok(!result.includes('owner = OLD'));
         assert.ok(result.includes('victory_points = { 4 5 }'));
+    });
+});
+
+describe('state patch regressions', () => {
+    const src = 'state = {\n\tid = 1\n\tname = "STATE_1"\n\tmanpower = 1\n\tstate_category = rural\n\tprovinces = { 1 2 }\n\thistory = {\n\t\towner = GER # {\n\t\tvictory_points = { 1 5 }\n\t}\n}\n';
+    const fields: any = { id: 1, name: 'Cost $& Bay $1', manpower: 5, category: 'town', provinces: [1, 2], impassable: false, resources: {}, owner: 'FRA', cores: [], victoryPoints: { 1: 7 } };
+    it('treats $ in names literally', () => {
+        const out = patchStatePreservingUnknownContent(src, fields, '\n');
+        assert.ok(out.includes('name = "Cost $& Bay $1"'), out);
+    });
+    it('ignores braces in comments and replaces old victory points', () => {
+        const out = patchStatePreservingUnknownContent(src, fields, '\n');
+        assert.strictEqual((out.match(/victory_points/g) ?? []).length, 1, out);
+        const moved = patchStateMembershipPreservingContent(src, [1], { 1: 4 }, '\n');
+        assert.strictEqual((moved.match(/victory_points/g) ?? []).length, 1, moved);
     });
 });
