@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { chain } from 'lodash';
-import { getLanguageIdInYml } from '../util/vsccommon';
+import { dirUri, getLanguageIdInYml, readFile, writeFile } from '../util/vsccommon';
 import { forEachConcurrent, IndexBase } from './indexbase';
 import type { IndexType } from './indexmanager';
 import { listFilesFromModOrHOI4, readFileFromModOrHOI4 } from '../util/fileloader';
@@ -10,6 +10,10 @@ import { ConfigurationKey } from '../constants';
 import { Logger } from '../util/logger';
 import { error } from '../util/debug';
 import { indexingWorker } from './indexingworker';
+
+interface LocalisationMetadata {
+    languageId: string;
+}
 
 interface LocalisationEntry {
     file: string;
@@ -38,7 +42,7 @@ class LocalisationIndex extends IndexBase<LocalisationEntry> {
         if (wsFolder) {
             const relative = path.relative(wsFolder.uri.path, file.path).replace(/\\+/g, '/');
                 if (relative && relative.startsWith('localisation/')) {
-                this.fillLocalisationItems(relative, this._workspaceIndex, { hoi4: false, dlc: false, resolveReplacements: true });
+                this.fillLocalisationItems(relative, this.workspaceIndex, { hoi4: false, dlc: false, resolveReplacements: true });
                 this.indexUpdatedEventEmitter?.fire();
             }
         }
@@ -49,21 +53,69 @@ class LocalisationIndex extends IndexBase<LocalisationEntry> {
         if (wsFolder) {
             const relative = path.relative(wsFolder.uri.path, file.path).replace(/\\+/g, '/');
             if (relative && relative.startsWith('localisation/')) {
-                for (const [key, value] of this._workspaceIndex) {
+                for (const [key, value] of this.workspaceIndex) {
                     if (value.file === relative) {
-                        this._workspaceIndex.delete(key);
+                        this.workspaceIndex.delete(key);
                     }
                 }
             }
         }
     }
 
-    public async buildIndex(index: Map<string, LocalisationEntry>, estimatedSize: [number], options: { mod?: boolean; hoi4?: boolean; dlc?: boolean }): Promise<void> {
+    protected async buildIndex(index: Map<string, LocalisationEntry>, estimatedSize: [number], options: { mod?: boolean; hoi4?: boolean; dlc?: boolean }): Promise<void> {
         const localisationFiles = (await listFilesFromModOrHOI4('localisation', { ...options, recursively: true })).filter(f => f.toLocaleLowerCase().endsWith('.yml'));
         await forEachConcurrent(localisationFiles, 4, f =>
             this.fillLocalisationItems('localisation/' + f, index, options, estimatedSize)
         );
         this.resolveReplacements(index);
+    }
+
+    protected async getFiles(options: { mod?: boolean; hoi4?: boolean; dlc?: boolean }): Promise<string[]> {
+        return (await listFilesFromModOrHOI4('localisation', { ...options, recursively: true }))
+            .filter(f => f.toLocaleLowerCase().endsWith('.yml'))
+            .map(f => 'localisation/' + f);
+    }
+
+    protected validateIndexValue(value: unknown): value is LocalisationEntry {
+        if (typeof value !== 'object' || value === null) {
+            return false;
+        }
+        const entry = value as Partial<LocalisationEntry>;
+        return typeof entry.file === 'string' && typeof entry.value === 'string';
+    }
+
+    protected override async loadCachedGlobalIndex(): Promise<boolean> {
+        const cachedMetadataUri = this.getCachedMetadataUri();
+        if (!cachedMetadataUri) {
+            return false;
+        }
+
+        try {
+            const metadata: unknown = JSON.parse((await readFile(cachedMetadataUri)).toString());
+            if (typeof metadata !== 'object' || metadata === null ||
+                (metadata as Partial<LocalisationMetadata>).languageId !== getLanguageIdInYml()) {
+                return false;
+            }
+        } catch (_) {
+            return false;
+        }
+
+        return super.loadCachedGlobalIndex();
+    }
+
+    protected override async saveCachedGlobalIndex(): Promise<void> {
+        await super.saveCachedGlobalIndex();
+
+        const cachedMetadataUri = this.getCachedMetadataUri();
+        if (cachedMetadataUri) {
+            const metadata: LocalisationMetadata = { languageId: getLanguageIdInYml() };
+            await writeFile(cachedMetadataUri, Buffer.from(JSON.stringify(metadata)));
+        }
+    }
+
+    private getCachedMetadataUri(): vscode.Uri | undefined {
+        const cachedIndexUri = this.getCachedGlobalIndexUri();
+        return cachedIndexUri && vscode.Uri.joinPath(dirUri(cachedIndexUri), this.type + '-metadata.json');
     }
 
     public getLocalisationContainerFile(key: string | undefined): string | undefined {
@@ -97,6 +149,7 @@ class LocalisationIndex extends IndexBase<LocalisationEntry> {
             // IndexManager -> LocalisationIndex -> IndexManager. This module is
             // also pulled in by the lazily loaded world-map preview, where that
             // cycle can leave the IndexManager binding uninitialized.
+            void this.deleteCachedGlobalIndex();
             void import('./indexmanager').then(({ indexManager }) => indexManager.rebuildIndex(this));
         }
     }

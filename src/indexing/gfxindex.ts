@@ -21,7 +21,7 @@ class GfxIndex extends IndexBase<string> {
         if (wsFolder) {
             const relative = path.relative(wsFolder.uri.path, file.path).replace(/\\+/g, '/');
             if (relative && relative.startsWith('interface/')) {
-                this.fillGfxItems(relative, this._workspaceIndex, { hoi4: false, dlc: false });
+                this.fillGfxItems(relative, this.workspaceIndex, { hoi4: false, dlc: false });
             }
         }
     }
@@ -31,20 +31,30 @@ class GfxIndex extends IndexBase<string> {
         if (wsFolder) {
             const relative = path.relative(wsFolder.uri.path, file.path).replace(/\\+/g, '/');
             if (relative && relative.startsWith('interface/')) {
-                for (const [key, value] of this._workspaceIndex) {
+                for (const [key, value] of this.workspaceIndex) {
                     if (value === relative) {
-                        this._workspaceIndex.delete(key);
+                        this.workspaceIndex.delete(key);
                     }
                 }
             }
         }
     }
     
-    public async buildIndex(index: Map<string, string>, estimatedSize: [number], options: { mod?: boolean; hoi4?: boolean; dlc?: boolean }): Promise<void> {
-        const gfxFiles = (await listFilesFromModOrHOI4('interface', { ...options, recursively: true })).filter(f => f.toLocaleLowerCase().endsWith('.gfx'));
+    protected async buildIndex(index: Map<string, string>, estimatedSize: [number], options: { mod?: boolean; hoi4?: boolean; dlc?: boolean }): Promise<void> {
+        const gfxFiles = await this.getFiles(options);
         await forEachConcurrent(gfxFiles, 4, f =>
-            this.fillGfxItems('interface/' + f, index, options, estimatedSize)
+            this.fillGfxItems(f, index, options, estimatedSize)
         );
+    }
+
+    protected async getFiles(options: { mod?: boolean; hoi4?: boolean; dlc?: boolean }): Promise<string[]> {
+        return (await listFilesFromModOrHOI4('interface', { ...options, recursively: true }))
+            .filter(f => f.toLocaleLowerCase().endsWith('.gfx'))
+            .map(f => 'interface/' + f);
+    }
+
+    protected validateIndexValue(value: unknown): value is string {
+        return typeof value === 'string';
     }
 
     public getGfxContainerFile(gfxName: string | undefined): string | undefined {

@@ -6,6 +6,13 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 **Versioning note:** This fork ([TheCascadian/HOI4ModernUtils](https://github.com/TheCascadian/HOI4ModernUtils)) keeps its own `0.x` version line, independent of the upstream project it was forked from. Entries at `[0.4.0]` and above are this fork's own releases. Entries from `[0.15.1]` down to `[0.13.0]` are inherited from upstream (`herbix/hoi4modutilities`) and were merged into this fork's history alongside its own work; older upstream entries have been compressed out of this file -  see the [upstream changelog](https://github.com/herbix/hoi4modutilities/blob/master/CHANGELOG.md) for full history. Because the two projects numbered releases independently, some version numbers (e.g. `0.12.x`, `0.3.2`) appear twice in git history for unrelated changes at different dates; this file only lists one entry per number going forward.
 
+## [Unreleased]
+
+### Added
+* Ported from upstream: the global index is now cached on disk (per index type) and reused when no vanilla or DLC file is newer than the cache. The localisation cache is invalidated when the preview language changes.
+* Ported from upstream: a GUI index (`gui`) for `containerwindowtype`, `windowtype`, `scrollbartype`, `extendedscrollbartype` and `positiontype` names, enabled through the `indexing` setting.
+* Ported from upstream: GUI file parsing now understands edit boxes, dropdowns, scrollbars, list boxes, overlapping element boxes, `fullscreen` and `show_position`.
+
 ## [0.4.8]
 
 ### Fixed

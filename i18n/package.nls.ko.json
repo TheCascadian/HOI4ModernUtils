@@ -28,6 +28,7 @@
     "hoi4modernutils.indexing.sharedfocus": "Shared Focuses and Joint Focuses",
     "hoi4modernutils.indexing.localisation": "Localisation Texts",
     "hoi4modernutils.indexing.event": "Events",
+    "hoi4modernutils.indexing.gui": "GUI Elements",
     "hoi4modernutils.stateBoundaryColor.title": "스테이트 경계선 색상",
     "hoi4modernutils.stateBoundaryColor.desc": "스테이트 경계선의 CSS 색상 (예: 'rgba(0,0,0,0.4)', '#FF0000').",
     "hoi4modernutils.stateBoundaryWidth.title": "스테이트 경계선 두께",

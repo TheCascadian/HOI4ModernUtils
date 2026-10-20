@@ -28,6 +28,7 @@
     "hoi4modernutils.indexing.sharedfocus": "共享国策和联合国策",
     "hoi4modernutils.indexing.localisation": "本地化文本",
     "hoi4modernutils.indexing.event": "事件",
+    "hoi4modernutils.indexing.gui": "GUI 元素",
     "hoi4modernutils.stateBoundaryColor.title": "州边界颜色",
     "hoi4modernutils.stateBoundaryColor.desc": "州边界线的CSS颜色（例如 'rgba(0,0,0,0.4)', '#FF0000'）。",
     "hoi4modernutils.stateBoundaryWidth.title": "州边界宽度",

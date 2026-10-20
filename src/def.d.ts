@@ -9,7 +9,7 @@ declare module 'vscode' {
             readonly previewLocalisation: 'Use Visual Studio Code Language' | 'Brazilian Portuguese' | 'English' | 'French' | 'German' | 'Japanese' | 'Korean' | 'Polish' | 'Russian' | 'Simplified Chinese' | 'Spanish';
             readonly stateBoundaryColor: string;
             readonly stateBoundaryWidth: number;
-            readonly indexing: ('gfx' | 'sharedfocus' | 'localisation' | 'event')[];
+            readonly indexing: ('gfx' | 'sharedfocus' | 'localisation' | 'event' | 'gui')[];
             readonly worldMapConfirmNewProvinceCreation: boolean;
         };
     }

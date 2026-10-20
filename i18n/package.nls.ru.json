@@ -28,6 +28,7 @@
     "hoi4modernutils.indexing.sharedfocus": "Shared Focuses and Joint Focuses",
     "hoi4modernutils.indexing.localisation": "Localisation Texts",
     "hoi4modernutils.indexing.event": "Events",
+    "hoi4modernutils.indexing.gui": "GUI Elements",
     "hoi4modernutils.stateBoundaryColor.title": "Цвет границ штатов",
     "hoi4modernutils.stateBoundaryColor.desc": "CSS-цвет для линий границ штатов (например, 'rgba(0,0,0,0.4)', '#FF0000').",
     "hoi4modernutils.stateBoundaryWidth.title": "Толщина границ штатов",
