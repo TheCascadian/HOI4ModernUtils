@@ -8,6 +8,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.10]
+
 ### Added
 * World map export now asks for an image scale (1 ~ 10) before saving.
 * World map warns about one-pixel provinces, and merges adjacent coverage zones of each province before computing size warnings.
