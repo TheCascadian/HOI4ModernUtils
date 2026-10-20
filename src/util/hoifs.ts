@@ -13,7 +13,26 @@ const installPathContainer: { current: vscode.Uri | null } = {
     current: null,
 };
 
-export function registerHoiFs(): vscode.Disposable {
+// Backup copy of the install path. The setting alone is not enough: writing it can fail or be
+// skipped (non-file URIs, remote windows, read-only settings.json), and the path then vanished on relaunch.
+const StoredInstallPathKey = 'hoi4ModernUtils.installPathUri';
+let storage: vscode.Memento | undefined;
+
+function readStoredInstallPath(): vscode.Uri | null {
+    const stored = storage?.get<string>(StoredInstallPathKey);
+    if (!stored) {
+        return null;
+    }
+
+    try {
+        return vscode.Uri.parse(stored, true);
+    } catch {
+        return null;
+    }
+}
+
+export function registerHoiFs(context: vscode.ExtensionContext): vscode.Disposable {
+    storage = context.globalState;
     const disposables: vscode.Disposable[] = [];
     disposables.push(vscode.commands.registerCommand(Commands.SelectHoiFolder, selectHoiFolder));
     disposables.push(vscode.workspace.registerFileSystemProvider(Hoi4FsScheme, hoi4FsProvider, { isReadonly: true }));
@@ -38,15 +57,21 @@ async function selectHoiFolder(): Promise<void> {
     }
 
     const uri = result[0];
-    installPathContainer.current = uri;
     clearDlcZipCache();
     clearImageCache();
 
+    await storage?.update(StoredInstallPathKey, uri.toString());
+
     if (!IS_WEB_EXT && isFileScheme(uri)) {
-        const conf = getConfiguration();
-        conf.update('installPath', uri.fsPath, vscode.ConfigurationTarget.Global);
+        try {
+            await getConfiguration().update('installPath', uri.fsPath, vscode.ConfigurationTarget.Global);
+        } catch (e) {
+            vscode.window.showWarningMessage(localize('installpathsavefailed', 'Could not save the install path to settings ({0}). It is remembered by the extension instead.', (e as Error)?.message ?? String(e)));
+        }
+        installPathContainer.current = uri;
         vscode.window.showInformationMessage(localize('installpathsetto', 'Install path of Heart of Iron IV is set to: {0}.', uri.fsPath));
     } else {
+        installPathContainer.current = uri;
         vscode.window.showInformationMessage(localize('installpathsetto', 'Install path of Heart of Iron IV is set to: {0}.', uri));
     }
 }
@@ -54,6 +79,10 @@ async function selectHoiFolder(): Promise<void> {
 function onChangeWorkspaceConfiguration(e: vscode.ConfigurationChangeEvent): void {
     if (e.affectsConfiguration(`${ConfigurationKey}.installPath`)) {
         installPathContainer.current = null;
+        if (getConfiguration().installPath === '') {
+            // User cleared the setting on purpose, so do not resurrect the backup.
+            storage?.update(StoredInstallPathKey, undefined);
+        }
         clearDlcZipCache();
         clearImageCache();
     }
@@ -134,11 +163,16 @@ class Hoi4UtilsFsProvider implements vscode.FileSystemProvider, vscode.Disposabl
         }
 
         const installPath = getConfiguration().installPath;
-        if (installPath === '') {
-            throw new UserError("Install path of Heart of Iron IV is not set.");
+        if (installPath !== '') {
+            return installPathContainer.current = vscode.Uri.file(installPath);
         }
 
-        return installPathContainer.current = vscode.Uri.file(installPath);
+        const stored = readStoredInstallPath();
+        if (stored !== null) {
+            return installPathContainer.current = stored;
+        }
+
+        throw new UserError("Install path of Heart of Iron IV is not set.");
     }
 }
 

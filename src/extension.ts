@@ -39,7 +39,7 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(registerModFile());
         context.subscriptions.push(registerScanReferencesCommand());
         context.subscriptions.push(registerScanAndLogErrorsCommand());
-        context.subscriptions.push(registerHoiFs());
+        context.subscriptions.push(registerHoiFs(context));
         // Custom editor providers must be available before VS Code resolves an
         // onCustomEditor activation. Their constructors do no asset decoding.
         context.subscriptions.push(vscode.window.registerCustomEditorProvider(ViewType.DDS, new DDSViewProvider(context)));
