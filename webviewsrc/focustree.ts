@@ -17,6 +17,11 @@ import { toNumberLike } from "../src/hoiformat/schema";
 import { feLocalize } from './util/i18n';
 import { Checkbox } from "./util/checkbox";
 import { vscode } from "./util/vscode";
+import { FocusInlayWindow } from "../src/previewdef/focustree/inlaywindow/schema";
+
+// Measured from the game; the continuous focus and inlay windows are offset from their script positions.
+const uiOffsetX = -38;
+const uiOffsetY = 27;
 
 function showBranch(visibility: boolean, optionClass: string) {
     const elements = document.getElementsByClassName(optionClass);
@@ -61,6 +66,7 @@ function search(searchContent: string, navigate: boolean = true) {
 const useConditionInFocus: boolean = (window as any).__featureflags.useConditionInFocus;
 const rightButtonDrag: boolean = (window as any).__featureflags.rightButtonDrag;
 const focusTrees: FocusTree[] = (window as any).focusTrees;
+const inlayWindows: Record<string, FocusInlayWindow> = (window as any).inlayWindows ?? {};
 
 let selectedExprs: ConditionItem[] = getState().selectedExprs ?? [];
 let selectedFocusTreeIndex: number = Math.min(focusTrees.length - 1, getState().selectedFocusTreeIndex ?? 0);
@@ -68,6 +74,7 @@ let allowBranches: DivDropdown | undefined = undefined;
 let conditions: DivDropdown | undefined = undefined;
 let checkedFocuses: Record<string, Checkbox> = {};
 let selectedFocusIds: string[] = getState().selectedFocusIds ?? [];
+let selectedSearchFilters: string[] = getState().selectedSearchFilters ?? [];
 let zoomControl: ZoomControl | undefined;
 let connectionMode: 'select' | ConnectionMode = getState().focusEditMode ?? 'select';
 
@@ -117,12 +124,56 @@ async function buildContent() {
 
     focustreeplaceholder.innerHTML = focusTreeContent + styleTable.toStyleElement((window as any).styleNonce);
 
+    showInlayWindows(focusTree, exprs);
     refreshPreviewLabelMode();
     subscribeNavigators();
     setupCheckedFocuses(focuses, focusTree);
     setupFocusDragging(focuses);
     applyCanvasDiagnostics(focusTree);
     refreshFocusSelection();
+    applySearchFilters();
+}
+
+function showInlayWindows(focusTree: FocusTree, exprs: ConditionItem[]) {
+    const inlayWindowElements = document.getElementsByClassName('inlayWindow');
+    for (let i = 0; i < inlayWindowElements.length; i++) {
+        (inlayWindowElements[i] as HTMLDivElement).style.display = 'none';
+    }
+    for (const inlayWindow of focusTree.inlayWindows) {
+        const inlayWindowData = inlayWindows[inlayWindow.id];
+        if (!inlayWindowData) {
+            continue;
+        }
+        const inlayWindowElement = document.getElementById('inlayWindow-' + normalizeForStyle(focusTree.id) + '-' + normalizeForStyle(inlayWindow.id)) as HTMLDivElement | null;
+        if (!inlayWindowElement) {
+            continue;
+        }
+        if (applyCondition(inlayWindowData.visible, exprs)) {
+            inlayWindowElement.style.display = 'block';
+            for (const position of inlayWindow.position) {
+                if (applyCondition(position.condition, exprs)) {
+                    inlayWindowElement.style.left = (position.x + uiOffsetX) + 'px';
+                    inlayWindowElement.style.top = (position.y + uiOffsetY) + 'px';
+                    break;
+                }
+            }
+        }
+    }
+}
+
+function applySearchFilters(): void {
+    const focusTree = focusTrees[selectedFocusTreeIndex];
+    if (!focusTree) {
+        return;
+    }
+    for (const focus of Object.values(focusTree.focuses)) {
+        const focusElement = document.getElementById('focus_' + focus.id);
+        if (!focusElement) {
+            continue;
+        }
+        const matchesFilter = selectedSearchFilters.some(filter => focus.searchFilters.includes(filter));
+        focusElement.style.opacity = matchesFilter || selectedSearchFilters.length === 0 ? '1' : '0.2';
+    }
 }
 
 function applyCanvasDiagnostics(focusTree: FocusTree): void {
@@ -194,9 +245,11 @@ function updateSelectedFocusTree(clearCondition: boolean) {
     const continuousFocuses = document.getElementById('continuousFocuses') as HTMLDivElement;
 
     if (focusTree.continuousFocusPositionX !== undefined && focusTree.continuousFocusPositionY !== undefined) {
-        continuousFocuses.style.left = (focusTree.continuousFocusPositionX - 59) + 'px';
-        continuousFocuses.style.top = (focusTree.continuousFocusPositionY + 7) + 'px';
+        continuousFocuses.style.left = (focusTree.continuousFocusPositionX + uiOffsetX) + 'px';
+        continuousFocuses.style.top = (focusTree.continuousFocusPositionY + uiOffsetY) + 'px';
         continuousFocuses.style.display = 'block';
+        continuousFocuses.setAttribute('start', focusTree.continuousFocusPositionToken?.start.toString() ?? '');
+        continuousFocuses.setAttribute('end', focusTree.continuousFocusPositionToken?.end.toString() ?? '');
     } else {
         continuousFocuses.style.display = 'none';
     }
@@ -1509,6 +1562,18 @@ window.addEventListener('load', tryRun(async function() {
                 retriggerSearch();
             });
         }
+    }
+
+    // Search filters
+    const searchFiltersElement = document.getElementById('search-filters') as HTMLDivElement | null;
+    if (searchFiltersElement) {
+        const searchFiltersDropdown = new DivDropdown(searchFiltersElement, true);
+        searchFiltersDropdown.selectedValues$.next(selectedSearchFilters);
+        searchFiltersDropdown.selectedValues$.subscribe((selection) => {
+            selectedSearchFilters = [...selection];
+            setState({ selectedSearchFilters });
+            applySearchFilters();
+        });
     }
 
     // Zoom

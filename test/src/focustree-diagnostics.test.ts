@@ -7,7 +7,7 @@ const OTHER_FILE = 'test/shared.txt';
 
 function focus(overrides: Partial<Focus> & { id: string }): Focus {
     return {
-        x: 0, y: 0, icon: [],
+        x: 0, y: 0, icon: [], textIcon: undefined, searchFilters: [],
         prerequisite: [], prerequisiteGroups: [],
         exclusive: [], exclusiveGroups: [],
         hasAllowBranch: false, inAllowBranch: [], allowBranch: undefined,
@@ -25,6 +25,7 @@ function tree(focuses: Focus[], overrides: Partial<FocusTree> = {}): FocusTree {
         focuses: Object.fromEntries(focuses.map(f => [f.id, f])),
         allowBranchOptions: [], conditionExprs: [], isSharedFocues: false, warnings: [],
         file: FILE, treeRange: undefined,
+        searchFilters: [], inlayWindows: [], continuousFocusPositionToken: undefined,
         ...overrides,
     };
 }

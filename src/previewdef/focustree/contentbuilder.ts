@@ -1,19 +1,25 @@
 import * as vscode from 'vscode';
-import { FocusTree, Focus } from './schema';
-import { getSpriteByGfxName, Image, getImageByPath } from '../../util/image/imagecache';
+import { FocusTree, Focus, FocusInlayWindowWithCondition, FocusStyle, getGfxNameForSearchFilter } from './schema';
+import { getSpriteByGfxName, Image, getImageByPath, Sprite } from '../../util/image/imagecache';
 import { localize, i18nTableAsScript } from '../../util/i18n';
-import { forceError, randomString } from '../../util/common';
+import { arrayToMap, forceError, randomString } from '../../util/common';
 import { HOIPartial, toNumberLike, toStringAsSymbolIgnoreCase } from '../../hoiformat/schema';
 import { html, htmlEscape } from '../../util/html';
-import { GridBoxType } from '../../hoiformat/gui';
-import { FocusTreeLoader } from './loader';
+import { ContainerWindowType, GridBoxType, IconType, InstantTextBoxType } from '../../hoiformat/gui';
+import { defaultFocusStyle, FocusTreeLoader, FocusTreeLoaderResult } from './loader';
 import { LoaderSession } from '../../util/loader/loader';
 import { debug } from '../../util/debug';
 import { StyleTable, normalizeForStyle } from '../../util/styletable';
 import { featureFlagsAsScript, isFeatureEnabled } from '../../util/featureflags';
-import { flatMap } from 'lodash';
+import { chain, flatMap } from 'lodash';
 import { indexManager } from '../../indexing/indexmanager';
 import { localisationIndex } from '../../indexing/localisationindex';
+import { renderContainerWindow } from '../../util/hoi4gui/containerwindow';
+import { renderInstantTextBox } from '../../util/hoi4gui/instanttextbox';
+import { RenderNodeCommonOptions } from '../../util/hoi4gui/nodecommon';
+import { renderIcon } from '../../util/hoi4gui/icon';
+import { calculateBBox, ParentInfo } from '../../util/hoi4gui/common';
+import { FocusInlayWindow } from './inlaywindow/schema';
 
 const defaultFocusIcon = 'gfx/interface/goals/goal_unknown.dds';
 
@@ -37,7 +43,7 @@ export async function renderFocusTreeFile(loader: FocusTreeLoader, uri: vscode.U
         const styleTable = new StyleTable();
         const jsCodes: string[] = [];
         const styleNonce = randomString(32);
-        const baseContent = await renderFocusTrees(focustrees, styleTable, loadResult.result.gfxFiles, jsCodes, styleNonce, loader.file);
+        const baseContent = await renderFocusTrees(focustrees, styleTable, loadResult.result, jsCodes, styleNonce, loader.file);
         jsCodes.push(i18nTableAsScript());
         jsCodes.push(featureFlagsAsScript());
         jsCodes.push(`window.lastDocumentChangeTimestamp = ${lastDocumentChangeTimestamp};`);
@@ -67,10 +73,21 @@ export async function renderFocusTreeFile(loader: FocusTreeLoader, uri: vscode.U
 
 const leftPaddingBase = 50;
 const topPaddingBase = 50;
-const xGridSize = 96;
-const yGridSize = 130;
+const defaultXGridSize = 96;
+const defaultYGridSize = 130;
 
-async function renderFocusTrees(focusTrees: FocusTree[], styleTable: StyleTable, gfxFiles: string[], jsCodes: string[], styleNonce: string, file: string): Promise<string> {
+async function renderFocusTrees(focusTrees: FocusTree[], styleTable: StyleTable, loadResult: FocusTreeLoaderResult, jsCodes: string[], styleNonce: string, file: string): Promise<string> {
+    const gfxFiles = loadResult.gfxFiles;
+    const guiTypes = chain(loadResult.guiFiles).flatMap(guiFile => guiFile.data.guitypes);
+    const containerWindows = guiTypes.flatMap(guiType => guiType.containerwindowtype).value();
+    const nationalFocusItem = containerWindows.find(window => window.name === 'national_focus_item');
+    const gridSize = guiTypes
+        .flatMap(guiType => guiType.positiontype)
+        .find(position => position.name === 'focus_spacing')
+        .value()
+        ?.position;
+    const xGridSize = gridSize?.x ?? defaultXGridSize;
+    const yGridSize = gridSize?.y ?? defaultYGridSize;
     const leftPadding = leftPaddingBase;
     const topPadding = topPaddingBase;
 
@@ -83,25 +100,17 @@ async function renderFocusTrees(focusTrees: FocusTree[], styleTable: StyleTable,
 
     const renderedFocus: Record<string, string> = {};
     await Promise.all(flatMap(focusTrees, tree => Object.values(tree.focuses)).map(async (focus) =>
-        renderedFocus[focus.id] = (await renderFocus(focus, styleTable, gfxFiles, file)).replace(/\s\s+/g, ' ')));
+        renderedFocus[focus.id] = (await renderFocus(focus, styleTable, gfxFiles, file, nationalFocusItem, loadResult.styles, xGridSize, yGridSize)).replace(/\s\s+/g, ' ')));
+
+    const inlayWindows = arrayToMap(loadResult.inlayWindows, 'id');
 
     jsCodes.push('window.focusTrees = ' + JSON.stringify(focusTrees));
+    jsCodes.push('window.inlayWindows = ' + JSON.stringify(inlayWindows));
     jsCodes.push('window.renderedFocus = ' + JSON.stringify(renderedFocus));
     jsCodes.push('window.gridBox = ' + JSON.stringify(gridBox));
     jsCodes.push('window.styleNonce = ' + JSON.stringify(styleNonce));
     jsCodes.push('window.xGridSize = ' + xGridSize);
     jsCodes.push('window.yGridSize = ' + yGridSize);
-
-    const continuousFocusContent =
-        `<div id="continuousFocuses" class="${styleTable.oneTimeStyle('continuousFocuses', () => `
-            position: absolute;
-            width: 770px;
-            height: 380px;
-            margin: 20px;
-            background: rgba(128, 128, 128, 0.2);
-            text-align: center;
-            pointer-events: none;
-        `)}">Continuous focuses</div>`;
 
     return (
         `<div id="dragger" additionalDraggerHostId="focustreecontent" class="${styleTable.oneTimeStyle('dragger', () => `
@@ -113,14 +122,92 @@ async function renderFocusTrees(focusTrees: FocusTree[], styleTable: StyleTable,
         `)}"></div>` +
         `<div id="focustreecontent" class="${styleTable.oneTimeStyle('focustreecontent', () => `top:40px;left:-20px;position:relative`)}">
             <div id="focustreeplaceholder"></div>
-            ${continuousFocusContent}
+            ${await renderContinuousFocuses(containerWindows, styleTable, gfxFiles)}
+            ${await renderInlayWindows(focusTrees, inlayWindows, containerWindows, styleTable, gfxFiles)}
         </div>` +
         renderWarningContainer(styleTable) +
         renderFocusDetailsContainer(styleTable) +
         renderFocusCreator(styleTable) +
         renderSecondaryTools(styleTable) +
-        renderToolBar(focusTrees, styleTable)
+        await renderToolBar(focusTrees, styleTable, gfxFiles)
     );
+}
+
+async function renderContinuousFocuses(containerWindows: HOIPartial<ContainerWindowType>[], styleTable: StyleTable, gfxFiles: string[]): Promise<string> {
+    const nationalFocusView = containerWindows.find(w => w.name === 'nationalfocusview');
+    const tree = nationalFocusView?.containerwindowtype.find(w => w.name === 'tree');
+    const gridWindow = tree?.containerwindowtype.find(w => w.name === 'grid_window');
+    const continuousFocusWindow = gridWindow?.containerwindowtype.find(w => w.name === 'continuous_focus_window');
+
+    const continuousFocusContent = continuousFocusWindow ?
+        await renderContainerWindow(
+            continuousFocusWindow,
+            {
+                size: { width: 1920, height: 1080 },
+                orientation: 'upper_left',
+            },
+            {
+                getSprite: (name) => getSpriteByGfxName(name, gfxFiles),
+                styleTable,
+                id: 'continuousFocuses',
+                classNames: [
+                    styleTable.oneTimeStyle('continuousFocuses', () => `cursor: pointer;`),
+                    'navigator',
+                ].join(' '),
+            }) :
+        `<div id="continuousFocuses" class="${styleTable.oneTimeStyle('continuousFocuses', () => `
+            position: absolute;
+            width: 770px;
+            height: 380px;
+            margin: 20px;
+            background: rgba(128, 128, 128, 0.2);
+            text-align: center;
+            pointer-events: none;
+        `)}">Continuous focuses</div>`;
+
+    return continuousFocusContent;
+}
+
+async function renderInlayWindows(
+    focusTrees: FocusTree[],
+    inlayWindows: Record<string, FocusInlayWindow>,
+    containerWindows: HOIPartial<ContainerWindowType>[],
+    styleTable: StyleTable,
+    gfxFiles: string[]
+): Promise<string> {
+    return (await Promise.all(focusTrees
+            .flatMap(ft => ft.inlayWindows.map(iw => [ft, iw] as [FocusTree, FocusInlayWindowWithCondition]))
+            .map(async ([ft, iw]) => {
+        const inlayWindow = inlayWindows[iw.id];
+        if (!inlayWindow) {
+            return '';
+        }
+
+        const containerWindow = containerWindows.find(w => w.name === inlayWindow.windowName);
+        if (!containerWindow) {
+            return '';
+        }
+
+        return await renderContainerWindow(
+            containerWindow,
+            {
+                size: { width: 1920, height: 1080 },
+                orientation: 'upper_left',
+            },
+            {
+                getSprite: (name) => getSpriteByGfxName(name, gfxFiles),
+                styleTable,
+                id: 'inlayWindow-' + normalizeForStyle(ft.id) + '-' + normalizeForStyle(inlayWindow.id),
+                classNames: [
+                    styleTable.oneTimeStyle('inlayWindow', () => `cursor: pointer; z-index: 20;`),
+                    styleTable.style('displayNone', () => `display: none;`),
+                    'inlayWindow',
+                    iw.token ? 'navigator' : '',
+                ].join(' '),
+                navigatorToken: iw.token,
+            });
+
+    }))).join('');
 }
 
 function renderFocusCreator(styleTable: StyleTable): string {
@@ -186,6 +273,8 @@ function renderFocusDetailsContainer(styleTable: StyleTable): string {
     styleTable.raw('body.focus-logic-view .focus-artwork, body.focus-logic-view .focus-overlay, body.focus-logic-view .focus-checkbox', 'display:none !important;');
     styleTable.raw('body.focus-logic-view .navigator', 'border:1px solid var(--vscode-panel-border);background:var(--vscode-editor-background);box-sizing:border-box;');
     styleTable.raw('body.focus-logic-view .focus-label', 'margin-top:28px !important;font-family:var(--vscode-editor-font-family,monospace);font-weight:600;');
+    styleTable.raw('body.focus-logic-view .focus-gui', 'display:none !important;');
+    styleTable.raw('body.focus-logic-view .focus-logic-label', 'display:inline-block !important;');
     styleTable.raw('body.focus-logic-view .focus-relative-connection', 'border-color:var(--vscode-charts-purple,#b180d7) !important;');
     return `
     <div id="focusdetails-container" class="${styleTable.style('focusdetails-container', () => `
@@ -234,7 +323,7 @@ function renderWarningContainer(styleTable: StyleTable) {
     </div>`;
 }
 
-function renderToolBar(focusTrees: FocusTree[], styleTable: StyleTable): string {
+async function renderToolBar(focusTrees: FocusTree[], styleTable: StyleTable, gfxFiles: string[]): Promise<string> {
     const focuses = focusTrees.length <= 1 ? '' : `
         <label for="focuses" class="${styleTable.style('focusesLabel', () => `margin-right:5px`)}">${localize('focustree.focustree', 'Focus tree: ')}</label>
         <div class="select-container ${styleTable.style('marginRight10', () => `margin-right:10px`)}">
@@ -277,6 +366,36 @@ function renderToolBar(focusTrees: FocusTree[], styleTable: StyleTable): string 
             <i class="codicon codicon-warning"></i>
         </button>`;
 
+    const searchFilterNames = chain(focusTrees).flatMap(ft => ft.searchFilters).uniq().value();
+    const searchFilterSprites: Record<string, Sprite | undefined> = {};
+    await Promise.all(searchFilterNames.map(async searchFilter => {
+        searchFilterSprites[searchFilter] = await getSpriteByGfxName(getGfxNameForSearchFilter(searchFilter), gfxFiles);
+    }));
+
+    const searchFilters = searchFilterNames.length === 0 ? '' : `
+        <div id="search-filters-container">
+            <label for="search-filters" class="${styleTable.style('searchFiltersLabel', () => `margin-right:5px`)}">${localize('focustree.searchfilters', 'Filters: ')}</label>
+            <div class="select-container ${styleTable.style('marginRight10', () => `margin-right:10px`)}">
+                <div id="search-filters" class="select multiple-select" tabindex="0" role="combobox">
+                    <span class="value"></span>
+                    ${
+                        searchFilterNames.map(filter =>
+                            `<div class="option" value="${htmlEscape(filter)}">
+                                <span class="${styleTable.oneTimeStyle('searchFilterIcon', () =>
+                                    `background-image: url(${searchFilterSprites[filter]?.image.uri});`
+                                )}
+                                ${styleTable.style('searchFilterIcon', () =>
+                                    `display: inline-block; width: 16px; height: 16px; background-size: 16px 16px;`
+                                )}"></span>
+                                ${htmlEscape(localisationIndex.getLocalisedText(filter) ?? '')}
+                            </div>`)
+                        .join('')
+                    }
+                </div>
+            </div>
+        </div>
+    `;
+
     const editButtons = `
         <select id="focus-visual-mode" aria-label="${localize('focustree.visualmode', 'Visual mode')}">
             <option value="game">${localize('focustree.visualmode.game', 'Game view')}</option>
@@ -310,6 +429,7 @@ function renderToolBar(focusTrees: FocusTree[], styleTable: StyleTable): string 
             ${indexManager.isIndexEnabled('localisation') ? renderPreviewLabelModeControl(styleTable) : ''}
             ${focuses}
             ${searchbox}
+            ${searchFilters}
             ${isFeatureEnabled('useConditionInFocus') ? conditions : allowbranch}
             ${editButtons}
             ${warningsButton}
@@ -325,7 +445,21 @@ function renderPreviewLabelModeControl(styleTable: StyleTable): string {
     </div>`;
 }
 
-async function renderFocus(focus: Focus, styleTable: StyleTable, gfxFiles: string[], file: string): Promise<string> {
+async function renderFocus(
+    focus: Focus,
+    styleTable: StyleTable,
+    gfxFiles: string[],
+    file: string,
+    nationalFocusItem: HOIPartial<ContainerWindowType> | undefined,
+    focusStyles: FocusStyle[],
+    xGridSize: number,
+    yGridSize: number,
+): Promise<string> {
+    if (nationalFocusItem) {
+        return await renderFocusWithGui(focus, styleTable, gfxFiles, file, nationalFocusItem, focusStyles, xGridSize, yGridSize);
+    }
+
+    // Legacy rendering, only used when interface/nationalfocusview.gui has no national_focus_item.
     for (const focusIcon of focus.icon) {
         const iconName = focusIcon.icon;
         const iconSprite = iconName ? await getSpriteByGfxName(iconName, gfxFiles) : undefined;
@@ -428,6 +562,140 @@ async function renderFocus(focus: Focus, styleTable: StyleTable, gfxFiles: strin
         `)}">
         ${textContent}
         </span>
+    </div>`;
+}
+
+async function renderFocusWithGui(
+    focus: Focus,
+    styleTable: StyleTable,
+    gfxFiles: string[],
+    file: string,
+    nationalFocusItem: HOIPartial<ContainerWindowType>,
+    focusStyles: FocusStyle[],
+    xGridSize: number,
+    yGridSize: number
+): Promise<string> {
+    for (const focusIcon of focus.icon) {
+        const iconName = focusIcon.icon;
+        const iconSprite = iconName ? await getSpriteByGfxName(iconName, gfxFiles) : undefined;
+        const iconObject = iconSprite?.image ?? (iconName ? await getImageByPath(defaultFocusIcon) : null);
+        const iconWidth = iconSprite?.image.width ?? xGridSize;
+        const iconHeight = iconSprite?.image.height ?? xGridSize;
+        styleTable.style('focus-icon-' + normalizeForStyle(iconName ?? '-empty'), () => `
+            width: ${iconWidth}px;
+            height: ${iconHeight}px;
+            ${iconObject ? `background-image: url(${iconObject.uri});` : 'background: grey;'}
+            background-size: ${iconObject ? `${iconObject.width}px ${iconObject.height}px` : '0 0'};
+            transform: translate(-50%, -50%);
+            background-position: center;
+        `);
+    }
+
+    styleTable.style('focus-icon-' + normalizeForStyle('-empty'), () => `
+        width: ${xGridSize}px;
+        height: ${xGridSize}px;
+        background: grey;
+        transform: translate(-50%, -50%);
+    `);
+
+    const localisedText = getFocusLocalisedText(focus);
+    const commonOptions: RenderNodeCommonOptions = {
+        getSprite: (name) => getSpriteByGfxName(name, gfxFiles),
+        styleTable,
+    };
+
+    const focusStyle = focusStyles.find(style => focus.textIcon === undefined ? style.default : focus.textIcon === style.name) ?? defaultFocusStyle;
+    const bgIcon = focusStyle.unavailable;
+
+    const parentInfo: ParentInfo = {
+        size: { width: 1920, height: 1080 },
+        orientation: 'upper_left',
+    };
+    const [_, __, width, height] = calculateBBox(nationalFocusItem, parentInfo);
+
+    const renderedContainerWindow = await renderContainerWindow(
+        nationalFocusItem,
+        parentInfo,
+        {
+            ...commonOptions,
+            classNames: [
+                styleTable.style('national-focus-position-important', () =>
+                    `left: ${(xGridSize - width) / 2 - 4}px !important;` +
+                    `top: ${(yGridSize - height) / 2 + 26}px !important;`
+                ),
+            ].join(' '),
+            onRenderChild: async (type, child, parentInfo) => {
+                if (child.name === 'bg') {
+                    const icon = child as HOIPartial<IconType>;
+                    return await renderIcon({...icon, quadtexturesprite: bgIcon}, parentInfo, commonOptions);
+                }
+                
+                if (child.name === 'symbol') {
+                    const icon = child as HOIPartial<IconType>;
+                    let [x, y] = calculateBBox(icon, parentInfo);
+                    return `<div class="
+                        {{iconClass}}
+                        ${styleTable.style('focus-icon-common', () => `
+                            position: absolute;
+                            pointer-events: none;
+                            z-index: 0;
+                            background-repeat: no-repeat;
+                        `)}
+                        ${styleTable.oneTimeStyle('icon', () => `
+                            left: ${x}px;
+                            top: ${y}px;
+                        `)}
+                    "></div>`;
+                }
+
+                if (child.name === 'overlay') {
+                    const icon = child as HOIPartial<IconType>;
+                    return await renderIcon({...icon, quadtexturesprite: focus.overlay}, parentInfo, commonOptions);
+                }
+
+                if (child.name === 'name') {
+                    const text = child as HOIPartial<InstantTextBoxType>;
+                    return await renderInstantTextBox(
+                        { ...text, text: `<span class="focus-label" ${getPreviewLabelAttributes(focus.id, localisedText)}>${htmlEscape(focus.id)}</span>` },
+                        parentInfo,
+                        { ...commonOptions, localise: false, rawText: true }
+                    );
+                }
+
+                return '';
+            },
+        });
+
+    const titleAttributes = getPreviewTitleAttributes(focus.id, localisedText, '{{position}}');
+    return `<div
+    class="
+        navigator
+        ${styleTable.style('focus-common', () => `
+            position: relative;
+            width: 100%;
+            height: 100%;
+            text-align: center;
+            cursor: pointer;
+            display: grid;
+            place-items: center;
+        `)}
+    "
+    start="${focus.token?.start}"
+    end="${focus.token?.end}"
+    ${file === focus.file ? '' : `file="${focus.file}"`}
+    ${titleAttributes}>
+        <div class="focus-checkbox ${styleTable.style('focus-checkbox', () => `position: absolute; top: 1px; left: 0; z-index: 1;`)}">
+            <input id="checkbox-${normalizeForStyle(focus.id)}" type="checkbox"/>
+        </div>
+        <div class="focus-gui ${styleTable.style('focus-gui', () => `display: contents;`)}">${renderedContainerWindow}</div>
+        <span ${getPreviewLabelAttributes(focus.id, localisedText)}
+        class="focus-logic-label ${styleTable.style('focus-logic-label', () => `
+            display: none;
+            position: relative;
+            z-index: 1;
+            font-family: var(--vscode-editor-font-family, monospace);
+            font-weight: 600;
+        `)}">${htmlEscape(focus.id)}</span>
     </div>`;
 }
 

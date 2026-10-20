@@ -49,7 +49,7 @@ function findToken(source: string, needle: string, from = 0) {
 
 function emptyFocus(overrides: Partial<Focus> & { id: string; file: string }): Focus {
     return {
-        x: 0, y: 0, icon: [],
+        x: 0, y: 0, icon: [], textIcon: undefined, searchFilters: [],
         prerequisite: [], prerequisiteGroups: [],
         exclusive: [], exclusiveGroups: [],
         hasAllowBranch: false, inAllowBranch: [], allowBranch: undefined,
@@ -121,6 +121,7 @@ function buildTree(): FocusTree {
         id: 'test_tree', focuses: { focus_a: focusA, focus_b: focusB },
         allowBranchOptions: [], conditionExprs: [], isSharedFocues: false, warnings: [],
         file: FILE, treeRange,
+        searchFilters: [], inlayWindows: [], continuousFocusPositionToken: undefined,
     };
 }
 
@@ -281,6 +282,7 @@ describe('focustree edits: minimal, git-friendly text patches', () => {
         const tree: FocusTree = {
             id: 'empty_tree', focuses: {}, allowBranchOptions: [], conditionExprs: [],
             isSharedFocues: false, warnings: [], file: FILE, treeRange: emptyTreeRange,
+            searchFilters: [], inlayWindows: [], continuousFocusPositionToken: undefined,
         };
         const edits = createFocus(tree, empty, { id: 'focus_a', x: 0, y: 0 });
         const result = applyEdits(empty, edits);

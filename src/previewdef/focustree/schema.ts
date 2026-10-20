@@ -2,10 +2,10 @@ import { Node, Token } from "../../hoiformat/hoiparser";
 import { HOIPartial, SchemaDef, Position, convertNodeToJson, positionSchema, Raw, CustomMap } from "../../hoiformat/schema";
 import { normalizeNumberLike } from "../../util/hoi4gui/common";
 import { flatten, chain } from 'lodash';
-import { ConditionItem, ConditionComplexExpr, extractConditionValues, extractConditionValue, extractConditionalExprs } from "../../hoiformat/condition";
+import { ConditionItem, ConditionComplexExpr, extractConditionValues, extractConditionValue, extractConditionalExprs, sortConditionExprs } from "../../hoiformat/condition";
 import { countryScope } from "../../hoiformat/scope";
 import { isFeatureEnabled } from "../../util/featureflags";
-import { randomString, Warning } from "../../util/common";
+import { NumberPosition, randomString, Warning } from "../../util/common";
 import { localize } from "../../util/i18n";
 import { validateFocusTree } from "./validation";
 import { nodeToString } from "../../hoiformat/tostring";
@@ -18,6 +18,9 @@ export interface FocusTree {
     isSharedFocues: boolean;
     continuousFocusPositionX?: number;
     continuousFocusPositionY?: number;
+    searchFilters: string[];
+    inlayWindows: FocusInlayWindowWithCondition[];
+    continuousFocusPositionToken: Token | undefined;
     warnings: FocusWarning[];
     file: string;
     /** Byte range of the enclosing `focus_tree = { ... }` block, if any (absent for shared/joint focus pseudo-trees). Used as an insertion anchor when the tree has no focuses yet. */
@@ -41,11 +44,32 @@ interface FocusIconWithCondition {
     condition: ConditionComplexExpr;
 }
 
+export interface FocusInlayWindowWithCondition {
+    id: string;
+    position: NumberPositionWithCondition[];
+    token: Token | undefined;
+}
+
+interface NumberPositionWithCondition extends NumberPosition {
+    condition: ConditionComplexExpr;
+}
+
+export interface FocusStyle {
+    name: string;
+    default: boolean;
+    unavailable: string;
+    completed: string;
+    available: string;
+    current: string;
+}
+
 export interface Focus {
     x: number;
     y: number;
     id: string;
     icon: FocusIconWithCondition[];
+    textIcon: string | undefined;
+    searchFilters: string[];
     prerequisite: string[][];
     /** One entry per `prerequisite = { ... }` block, parallel in meaning to `prerequisite` but keeping the block's own span for surgical edits. */
     prerequisiteGroups: FocusRelationGroup[];
@@ -202,16 +226,25 @@ interface FocusTreeDef {
     id: string;
     shared_focus: string[];
     focus: FocusDef[];
-    continuous_focus_position: Position;
+    continuous_focus_position: Position & { _token: Token; };
+    inlay_window: FocusInlayWindowDef[];
     _token?: Token;
     _valueStartToken?: Token;
     _valueEndToken?: Token;
+}
+
+interface FocusInlayWindowDef {
+    id: string;
+    position: NumberPosition;
+    override_position: OffsetDef[];
+    _token: Token;
 }
 
 interface FocusDef {
     id: Raw;
     alternate_icon: string;
     icon: Raw[];
+    text_icon: string;
     x: Raw;
     y: Raw;
     prerequisite: FocusOrORList[];
@@ -265,6 +298,7 @@ interface FocusFile {
     focus_tree: FocusTreeDef[];
     shared_focus: FocusDef[];
     joint_focus: FocusDef[];
+    style: FocusStyle[];
 }
 
 const focusOrORListSchema: SchemaDef<FocusOrORList> = {
@@ -285,6 +319,7 @@ const focusSchema: SchemaDef<FocusDef> = {
         _innerType: 'raw',
         _type: 'array',
     },
+    text_icon: "string",
     x: "raw",
     y: "raw",
     prerequisite: {
@@ -340,6 +375,36 @@ const focusTreeSchema: SchemaDef<FocusTreeDef> = {
         _type: 'array',
     },
     continuous_focus_position: positionSchema,
+    inlay_window: {
+        _innerType: {
+            id: "string",
+            position: {
+                x: "number",
+                y: "number",
+            },
+            override_position: {
+                _innerType: {
+                    x: "number",
+                    y: "number",
+                    trigger: {
+                        _innerType: 'raw',
+                        _type: 'array',
+                    },
+                },
+                _type: 'array',
+            },
+        },
+        _type: 'array',
+    },
+};
+
+const focusStyleSchema: SchemaDef<FocusStyle> = {
+    name: "string",
+    default: "boolean",
+    unavailable: "string",
+    completed: "string",
+    available: "string",
+    current: "string",
 };
 
 const focusFileSchema: SchemaDef<FocusFile> = {
@@ -353,6 +418,10 @@ const focusFileSchema: SchemaDef<FocusFile> = {
     },
     joint_focus: {
         _innerType: focusSchema,
+        _type: "array",
+    },
+    style: {
+        _innerType: focusStyleSchema,
         _type: "array",
     },
 };
@@ -378,12 +447,16 @@ export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFoc
         const conditionExprs: ConditionItem[] = [];
         const warnings: FocusWarning[] = [];
         const focuses = getFocuses([...file.shared_focus, ...file.joint_focus], conditionExprs, filePath, warnings, constants, sourceText);
+        sortConditionExprs(conditionExprs);
         const sharedFocusTree = {
             id: localize('focustree.sharedfocuses', '<Shared focuses>'),
             focuses,
             allowBranchOptions: getAllowBranchOptions(focuses),
             conditionExprs,
             isSharedFocues: true,
+            searchFilters: chain(focuses).flatMap(f => f.searchFilters).uniq().value(),
+            inlayWindows: [],
+            continuousFocusPositionToken: undefined,
             warnings,
             file: filePath,
             // Shared/joint focuses are top-level blocks with no enclosing container, so there is no anchor to append a brand-new focus against when the tree is empty.
@@ -410,14 +483,22 @@ export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFoc
 
         validateRelativePositionId(focuses, warnings);
 
+        const treeId = focusTree.id ?? localize('focustree.ananymous', '<Anonymous focus tree>');
+        const inlayWindows = focusTree.inlay_window
+            .map(w => parseInlayWindow(treeId, w, conditionExprs, warnings))
+            .filter((w): w is FocusInlayWindowWithCondition => w !== undefined);
+        sortConditionExprs(conditionExprs);
         const tree: FocusTree = {
-            id: focusTree.id ?? localize('focustree.ananymous', '<Anonymous focus tree>'),
+            id: treeId,
             focuses,
             allowBranchOptions: getAllowBranchOptions(focuses),
             continuousFocusPositionX: normalizeNumberLike(focusTree.continuous_focus_position?.x, 0) ?? 50,
             continuousFocusPositionY: normalizeNumberLike(focusTree.continuous_focus_position?.y, 0) ?? 1000,
             conditionExprs,
             isSharedFocues: false,
+            searchFilters: chain(focuses).flatMap(f => f.searchFilters).uniq().value(),
+            inlayWindows,
+            continuousFocusPositionToken: focusTree.continuous_focus_position?._token,
             warnings,
             file: filePath,
             treeRange: focusTree._token ?
@@ -427,7 +508,64 @@ export function getFocusTreeWithFocusFile(file: HOIPartial<FocusFile>, sharedFoc
         focusTrees.push(tree);
     }
 
+    focusTrees.sort((a, b) => a.id.localeCompare(b.id));
     return focusTrees;
+}
+
+export function getFocusStyles(file: HOIPartial<FocusFile>): FocusStyle[] {
+    const result: FocusStyle[] = [];
+    for (const style of file.style ?? []) {
+        if (style.available && style.completed && style.current && style.unavailable && style.name) {
+            result.push({
+                name: style.name,
+                available: style.available,
+                completed: style.completed,
+                current: style.current,
+                unavailable: style.unavailable,
+                default: !!style.default,
+            });
+        }
+    }
+    return result;
+}
+
+export function getGfxNameForSearchFilter(filter: string): string {
+    return `GFX_${filter}`;
+}
+
+function parseInlayWindow(focusId: string, inlayWindowDef: HOIPartial<FocusInlayWindowDef>, conditionExprs: ConditionItem[], warnings: FocusWarning[]): FocusInlayWindowWithCondition | undefined {
+    const id = inlayWindowDef.id;
+    if (!id) {
+        warnings.push({
+            text: localize('focustree.warnings.inlaywindownoid', "An inlay window defined in this file don't have ID."),
+            source: focusId,
+        });
+        return undefined;
+    }
+    const positionInDef = inlayWindowDef.position;
+    if (!positionInDef) {
+        warnings.push({
+            text: localize('focustree.warnings.inlaywindownoposition', "Inlay window {0} defined in this file don't have position.", id),
+            source: focusId,
+        });
+        return undefined;
+    }
+    const position: NumberPositionWithCondition[] = [];
+    for (const overridePosition of inlayWindowDef.override_position) {
+        const x = overridePosition.x ?? 0;
+        const y = overridePosition.y ?? 0;
+        const condition = overridePosition.trigger ? extractConditionValues(overridePosition.trigger.filter((v): v is Raw => v !== undefined).map(v => v._raw.value), countryScope, conditionExprs).condition : false;
+        if (condition === false) {
+            warnings.push({
+                text: localize('focustree.warnings.inlaywindowoverridepositionnocondition', "Inlay window {0} defined in this file has an override position that don't have a condition.", id),
+                source: focusId,
+            });
+        } else {
+            position.push({ x, y, condition });
+        }
+    }
+    position.push({ x: positionInDef.x ?? 0, y: positionInDef.y ?? 0, condition: true });
+    return { id, position, token: inlayWindowDef._token };
 }
 
 export function getFocusTree(node: Node, sharedFocusTrees: FocusTree[], filePath: string, sourceText?: string): FocusTree[] {
@@ -559,6 +697,8 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
         file: filePath,
         text,
         overlay,
+        textIcon: hoiFocus.text_icon,
+        searchFilters: searchFilterNames(hoiFocus.search_filters),
         xToken: hoiFocus.x?._valueStartToken === hoiFocus.x?._valueEndToken ? hoiFocus.x?._valueEndToken : undefined,
         yToken: hoiFocus.y?._valueStartToken === hoiFocus.y?._valueEndToken ? hoiFocus.y?._valueEndToken : undefined,
         blockRange,
@@ -581,6 +721,11 @@ function getFocus(hoiFocus: HOIPartial<FocusDef>, conditionExprs: ConditionItem[
             continue_if_invalid: rawBoolean(hoiFocus.continue_if_invalid?._raw),
         },
     };
+}
+
+function searchFilterNames(raw: HOIPartial<Raw> | undefined): string[] {
+    const value = raw?._raw?.value;
+    return Array.isArray(value) ? value.map(n => n.name).filter((n): n is string => !!n) : [];
 }
 
 function rawValue(raw: HOIPartial<Raw> | undefined, sourceText?: string): string {
