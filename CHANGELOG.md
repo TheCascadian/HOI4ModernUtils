@@ -12,6 +12,14 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Ported from upstream: the global index is now cached on disk (per index type) and reused when no vanilla or DLC file is newer than the cache. The localisation cache is invalidated when the preview language changes.
 * Ported from upstream: a GUI index (`gui`) for `containerwindowtype`, `windowtype`, `scrollbartype`, `extendedscrollbartype` and `positiontype` names, enabled through the `indexing` setting.
 * Ported from upstream: GUI file parsing now understands edit boxes, dropdowns, scrollbars, list boxes, overlapping element boxes, `fullscreen` and `show_position`.
+* Ported from upstream: GUI rendering widgets for edit boxes, dropdowns, scrollbars and layout boxes; container windows and grid boxes with the newer GUI schema; sprite types with progress bars; and the scope list updated for HOI4 1.15.
+
+### Fixed
+* Ported from upstream: reads that fail with "EMFILE: too many open files" are retried instead of failing.
+* Ported from upstream: DLC content in `integrated_dlc` is now loaded alongside `dlc`.
+* Ported from upstream: the technology tree preview no longer throws when the selected folder is missing.
+* Ported from upstream: the frame boundary check for cornered tile sprites is no longer off by one.
+* Ported from upstream: `.txt` templates are bundled in the web extension build.
 
 ## [0.4.8]
 

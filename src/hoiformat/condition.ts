@@ -1,7 +1,7 @@
-import { Node, NodeValue } from "./hoiparser";
-import { nodeToString } from "./tostring";
-import { Scope, tryMoveScope } from "./scope";
-import { isEqual } from "lodash";
+import { Node, NodeValue } from './hoiparser';
+import { nodeToString } from './tostring';
+import { Scope, tryMoveScope } from './scope';
+import { isEqual } from 'lodash';
 
 export type ConditionFolderType = 'and' | 'or' | 'ornot' | 'andnot';
 export type ConditionComplexExpr = ConditionFolder | ConditionAmountFolder | ConditionItem | boolean;
@@ -406,4 +406,12 @@ export function stringValueToConditionItem(value: string): ConditionItem {
             nodeContent: value.substring(index + 2),
         };
     }
+}
+
+export function sortConditionExprs(exprs: ConditionItem[]): void {
+    exprs.sort((a, b) => {
+        const aStr = conditionItemToStringValue(a);
+        const bStr = conditionItemToStringValue(b);
+        return aStr.localeCompare(bStr);
+    });
 }

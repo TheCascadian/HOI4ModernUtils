@@ -1,8 +1,8 @@
-import { HOIPartial, toNumberLike, toStringAsSymbolIgnoreCase } from "../../hoiformat/schema";
-import { ParentInfo, calculateBBox } from "./common";
-import { ButtonType } from "../../hoiformat/gui";
+import { HOIPartial, toNumberLike, toStringAsSymbolIgnoreCase } from '../../hoiformat/schema';
+import { calculateBBox, ParentInfo } from './common';
+import { ButtonType } from '../../hoiformat/gui';
 import { RenderNodeCommonOptions, renderSprite } from './nodecommon';
-import { renderInstantTextBox } from "./instanttextbox";
+import { renderInstantTextBox } from './instanttextbox';
 
 export interface RenderButtonOptions extends RenderNodeCommonOptions {
 }
@@ -26,6 +26,7 @@ export async function renderButton(button: HOIPartial<ButtonType>, parentInfo: P
     start="${button._token?.start}"
     end="${button._token?.end}"
     class="
+        ${options.classNames ? options.classNames : ''}
         ${options.enableNavigator ? 'navigator navigator-highlight' : ''}
         ${options.styleTable.style('positionAbsolute', () => `position: absolute;`)}
         ${options.styleTable.oneTimeStyle('button', () => `

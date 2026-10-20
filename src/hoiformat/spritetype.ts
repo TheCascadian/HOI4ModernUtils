@@ -1,12 +1,13 @@
-import { Node, Token } from "./hoiparser";
-import { SchemaDef, convertNodeToJson, DetailValue } from "./schema";
-import { NumberPosition } from "../util/common";
+import { Node, Token } from './hoiparser';
+import { convertNodeToJson, DetailValue, SchemaDef } from './schema';
+import { NumberPosition } from '../util/common';
 
 interface SpriteTypes {
     spritetype: SpriteTypeDef[];
     corneredtilespritetype: CorneredTileSpriteTypeDef[];
     frameanimatedspritetype: SpriteTypeDef[];
     textspritetype: SpriteTypeDef[];
+    progressbartype: ProgressBarTypeDef[];
 }
 
 interface SpriteTypeDef {
@@ -23,6 +24,15 @@ interface CorneredTileSpriteTypeDef {
     size: NumberPosition;
     bordersize: NumberPosition;
     tilingCenter: boolean;
+    _token: Token | undefined;
+}
+
+interface ProgressBarTypeDef {
+    name: DetailValue<string>;
+    texturefile1: string;
+    texturefile2: string;
+    size: NumberPosition;
+    horizontal: boolean;
     _token: Token | undefined;
 }
 
@@ -43,66 +53,95 @@ export interface CorneredTileSpriteType {
     token: Token | undefined;
 }
 
+export interface ProgressBarType {
+    name: string;
+    texturefile: string;
+    texturefile2: string;
+    size: NumberPosition;
+    horizontal: boolean;
+    token: Token | undefined;
+}
+
+export type AnySpriteType = SpriteType | CorneredTileSpriteType | ProgressBarType;
+
 interface SpriteFile {
     spritetypes: SpriteTypes[];
 }
 
 const corneredTileSpriteTypeSchema: SchemaDef<CorneredTileSpriteTypeDef> = {
     name: {
-        _innerType: "string",
-        _type: "detailvalue",
+        _innerType: 'string',
+        _type: 'detailvalue',
     },
-    texturefile: "string",
-    noofframes: "number",
+    texturefile: 'string',
+    noofframes: 'number',
     size: {
-        x: "number",
-        y: "number",
+        x: 'number',
+        y: 'number',
     },
     bordersize: {
-        x: "number",
-        y: "number",
+        x: 'number',
+        y: 'number',
     },
-    tilingCenter: "boolean",
+    tilingCenter: 'boolean',
 };
 
 const spriteTypeSchema: SchemaDef<SpriteTypeDef> = {
     name: {
-        _innerType: "string",
-        _type: "detailvalue",
+        _innerType: 'string',
+        _type: 'detailvalue',
     },
-    texturefile: "string",
-    noofframes: "number",
+    texturefile: 'string',
+    noofframes: 'number',
+};
+
+const progressBarTypeSchema: SchemaDef<ProgressBarTypeDef> = {
+    name: {
+        _innerType: 'string',
+        _type: 'detailvalue',
+    },
+    texturefile1: 'string',
+    texturefile2: 'string',
+    size: {
+        x: 'number',
+        y: 'number',
+    },
+    horizontal: 'boolean',
 };
 
 const spriteTypesSchema: SchemaDef<SpriteTypes> = {
     spritetype: {
         _innerType: spriteTypeSchema,
-        _type: "array",
+        _type: 'array',
     },
     corneredtilespritetype: {
         _innerType: corneredTileSpriteTypeSchema,
-        _type: "array",
+        _type: 'array',
     },
     frameanimatedspritetype: {
         _innerType: spriteTypeSchema,
-        _type: "array",
+        _type: 'array',
     },
     textspritetype: {
         _innerType: spriteTypeSchema,
-        _type: "array",
+        _type: 'array',
+    },
+    progressbartype: {
+        _innerType: progressBarTypeSchema,
+        _type: 'array',
     },
 };
 
 const spriteFileSchema: SchemaDef<SpriteFile> = {
     spritetypes: {
         _innerType: spriteTypesSchema,
-        _type: "array",
+        _type: 'array',
     },
 };
 
-export function getSpriteTypes(node: Node): (SpriteType | CorneredTileSpriteType)[] {
+export function getSpriteTypes(node: Node): AnySpriteType[] {
     const file = convertNodeToJson<SpriteFile>(node, spriteFileSchema);
-    const result: (SpriteType | CorneredTileSpriteType)[] = [];
+    const result: AnySpriteType[] = [];
 
     for (const spritetypes of file.spritetypes) {
         for (const sprite of spritetypes.spritetype.concat(spritetypes.frameanimatedspritetype).concat(spritetypes.textspritetype)) {
@@ -135,6 +174,26 @@ export function getSpriteTypes(node: Node): (SpriteType | CorneredTileSpriteType
                         y: sprite.bordersize?.y ?? 0,
                     },
                     tilingCenter: sprite.tilingCenter ?? false,
+                    token: sprite.name!._startToken,
+                });
+            }
+        }
+
+        for (const sprite of spritetypes.progressbartype) {
+            const name = sprite.name?._value;
+            const texturefile = sprite.texturefile1;
+            const texturefile2 = sprite.texturefile2;
+            if (name && texturefile && texturefile2) {
+                const size = {
+                    x: sprite.size?.x ?? 100,
+                    y: sprite.size?.y ?? 100,
+                };
+                result.push({
+                    name,
+                    texturefile,
+                    texturefile2,
+                    size,
+                    horizontal: sprite.horizontal ?? (size.x >= size.y),
                     token: sprite.name!._startToken,
                 });
             }
