@@ -78,6 +78,12 @@ interface FEWorldMapClassExtra {
         deletedRegions: Array<{ id: number; file: string }>;
     } | undefined;
     getNextStrategicRegionId(): number;
+    mergeStrategicRegions(targetId: number, sourceIds: number[]): {
+        changedRegionIds: number[];
+        deletedFiles: string[];
+        deletedRegions: Array<{ id: number; file: string }>;
+    } | undefined;
+    isOceanStrategicRegion(region: StrategicRegion): boolean;
     snapshotStrategicRegions(srIds: number[]): StrategicRegionSnapshot[];
     restoreStrategicRegions(snapshots: StrategicRegionSnapshot[]): void;
 
@@ -127,6 +133,8 @@ interface FEWorldMapClassExtra {
     forEachStrategicRegion(callback: (strategicRegion: StrategicRegion) => boolean | void): void;
     forEachSupplyArea(callback: (supplyArea: SupplyArea) => boolean | void): void;
     forEachRailway(callback: (railway: Railway) => boolean | void): void;
+    /** Replaces the railway list in memory; the railway editor saves it to disk itself. */
+    setRailways(railways: Railway[]): void;
     forEachSupplyNode(callback: (supplyNode: SupplyNode) => boolean | void): void;
 }
 
@@ -578,6 +586,12 @@ export class FEWorldMapClass implements FEWorldMap {
         }
     }
     
+    public setRailways(railways: Railway[]): void {
+        this.railways = railways;
+        this.railwaysCount = railways.length;
+        this.invalidateLookupIndexes();
+    }
+
     public forEachRailway(callback: (railway: Railway) => boolean | void): void {
         const count = this.railwaysCount;
         for (let i = 0; i < count; i++) {
@@ -1042,6 +1056,41 @@ export class FEWorldMapClass implements FEWorldMap {
             }
         }
         return this.assignProvincesToStrategicRegion(allProvinceIds, targetSRId);
+    }
+
+    /** A region is ocean when none of its provinces is land. */
+    public isOceanStrategicRegion(region: StrategicRegion): boolean {
+        const provinces = region.provinces
+            .map(id => this.getProvinceById(id))
+            .filter((p): p is Province => !!p);
+        return provinces.length > 0 && provinces.every(p => p.type !== 'land');
+    }
+
+    /** Moves every province of the sources into the target and removes the emptied sources. */
+    public mergeStrategicRegions(targetId: number, sourceIds: number[]): {
+        changedRegionIds: number[];
+        deletedFiles: string[];
+        deletedRegions: Array<{ id: number; file: string }>;
+    } | undefined {
+        this.invalidateLookupIndexes();
+        const target = this.getStrategicRegionById(targetId);
+        const sources = Array.from(new Set(sourceIds))
+            .filter(id => id !== targetId)
+            .map(id => this.getStrategicRegionById(id))
+            .filter((region): region is StrategicRegion => !!region);
+        if (!target || sources.length === 0) {
+            return undefined;
+        }
+        if (!target.navalTerrain) {
+            target.navalTerrain = sources.find(source => source.navalTerrain)?.navalTerrain ?? null;
+        }
+        const provinceIds = sources.flatMap(source => source.provinces);
+        const changed = provinceIds.length > 0
+            ? this.assignProvincesToStrategicRegion(provinceIds, targetId, true)
+            : [targetId];
+        const changedRegionIds = Array.from(new Set([targetId, ...sources.map(source => source.id), ...(changed ?? [])]));
+        const removed = this.deleteEmptyStrategicRegions(sources.map(source => source.id));
+        return { changedRegionIds, ...removed };
     }
 
     public snapshotStrategicRegions(srIds: number[]): StrategicRegionSnapshot[] {

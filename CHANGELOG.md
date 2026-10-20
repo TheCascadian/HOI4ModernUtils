@@ -8,6 +8,25 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.14]
+
+### Added
+* World map: building placement. A toolbar button (or Ctrl+Alt+B) opens a panel listing every building in `common/buildings`, with the mod's own buildings grouped first. Click a land province to plop the chosen building: state-based ones use the province's state, province-based ones use the province, and ports pick the nearest adjacent sea province and face it. Placed buildings are drawn as colored, labeled markers with a facing notch, a live ghost shows where and in what state a click lands, and invalid spots explain why. Also: erase mode (or Shift+click), rotation in 45 degree steps, an optional height, search, clear-by-type, and undo/redo. Only the buildings of the hovered or selected state, and of the selected country, are drawn; drawing the whole map is an experimental "Show all buildings" toggle in the Interface menu. Markers are flat and lighter, and shrink to dots when zoomed out. Every edit saves to `map/buildings.txt` on its own; untouched lines are written back unchanged. State building levels in `history/states` are not changed.
+* World map: Merge Strategic Regions (State Tools). Merges the selected strategic region with a chosen region of the same kind (land or ocean). Bulk Merge Strategic Regions merges all land regions, all ocean regions, or every region together as one, into a surviving region you pick. Undoable with Ctrl+Z and redoable with Ctrl+Y; undo restores the removed region blocks and files on disk.
+* World map: railway editor. A toolbar button (or Ctrl+Alt+R) opens a panel and draws every railway on the map, colored by level 1-5. Select mode picks a railway by clicking its line (click again to cycle overlapping ones); Draw mode starts a new railway or extends the selected one from its end or start, filling gaps along the shortest land route (Auto-connect). Also: change level, reverse, split at a node, delete, remove a node (Shift+click), detour through another province (Alt+click), step back by clicking the tip, previous/next railway, a "Next problem" jump to disconnected segments (dashed red), and full undo/redo. Every edit saves to `map/railways.txt` on its own (leading comments are kept), and the editor keeps the map's own railway display in sync.
+
+## [0.4.13]
+
+### Added
+* World map: image export now opens a settings dialog (Shift+Right-click menu, "Export as Image..."). Choose the area (selected region or whole map), a free scale from 0.1 to 16, padding around the region, PNG, JPEG or WebP with a quality slider, a transparent or solid-color background, and the outline's on/off, color and width. A live size readout blocks images too large to render. Settings are remembered per preview.
+* World map: reference image for tracing. A toolbar button loads a png, jpg, bmp, webp or gif (then shows or hides its controls) and draws it at full resolution (one image pixel per map pixel, from the map's top-left corner). It can sit over the map or beneath it, with separate image and map opacity sliders (the map fades on any map, no transparency needed) and show/hide and remove buttons. It no longer depends on paintbrush mode.
+* World map: the reference image panel can now be closed with a close button in its title or Escape (the toolbar button still toggles it). The export dialog also closes when its backdrop is clicked.
+* World map: the reference image panel no longer renders garbled (collapsed buttons, filename overlapping the mode dropdown); the filename now has its own truncated slot and the sliders and dropdown size correctly.
+* Focus Studio: a toolbar button shows or hides the focus editor panel so the whole tree stays visible while a focus is selected. The choice is remembered per preview.
+
+### Fixed
+* World map: unfinished maps no longer hang on "Calculating province edges". A color made of thousands of separate pieces made the edge lookup rebuild quadratically; it is now built once per color.
+
 ## [0.4.12]
 
 ### Fixed

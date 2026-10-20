@@ -148,6 +148,15 @@ export class Renderer extends Subscriber {
                 topBar.paintedPixels$,
                 topBar.paintedPixelDelta$,
                 topBar.brushSize$,
+                topBar.railwayEditor.active$,
+                topBar.railwayEditor.revision$,
+                topBar.buildingEditor.active$,
+                topBar.buildingEditor.revision$,
+                topBar.referenceImage$,
+                topBar.referenceMode$,
+                topBar.referenceOpacity$,
+                topBar.referenceMapOpacity$,
+                topBar.referenceVisible$,
                 topBar.lassoPoints$,
                 topBar.lassoSnapping$,
                 topBar.lassoSnapRadius$,
@@ -160,6 +169,28 @@ export class Renderer extends Subscriber {
                 auditTime(0, animationFrameScheduler)
             ).subscribe(this.renderCanvas)
         );
+    }
+
+    private getActiveReferenceImage(): HTMLImageElement | undefined {
+        return this.topBar.referenceVisible$.value ?
+            this.topBar.referenceImage$.value : undefined;
+    }
+
+    private renderReferenceImage(image: HTMLImageElement, alpha: number) {
+        const context = this.backCanvasContext;
+        const { viewPoint } = this;
+        const worldMap = this.loader.worldMap;
+        const width = image.naturalWidth;
+        const height = image.naturalHeight;
+        context.save();
+        context.imageSmoothingEnabled = false;
+        context.globalAlpha = alpha;
+        Renderer.renderAllOffsets(viewPoint, { x: 0, y: 0, w: width, h: height }, worldMap.width, xOffset => {
+            const left = viewPoint.convertX(xOffset);
+            const top = viewPoint.convertY(0);
+            context.drawImage(image, left, top, viewPoint.convertX(xOffset + width) - left, viewPoint.convertY(height) - top);
+        });
+        context.restore();
     }
 
     private reloadImages = () => {
@@ -186,10 +217,22 @@ export class Renderer extends Subscriber {
         backCanvasContext.fillStyle = 'white';
         backCanvasContext.font = '12px sans-serif';
 
+        const reference = this.getActiveReferenceImage();
+        const underlay = reference !== undefined && this.topBar.referenceMode$.value === 'under';
+        if (reference && underlay) {
+            this.renderReferenceImage(reference, this.topBar.referenceOpacity$.value);
+        }
+
         const mapResult = this.renderMap();
+        // The map is composited from its own canvas, so fading it works on any map; an underlay only shows through that fade.
+        backCanvasContext.globalAlpha = reference ? this.topBar.referenceMapOpacity$.value : 1;
         backCanvasContext.drawImage(this.mapCanvas, 0, 0);
         if (this.webgl2Renderer) {
             backCanvasContext.drawImage(this.mapOverlayCanvas, 0, 0);
+        }
+        backCanvasContext.globalAlpha = 1;
+        if (reference && !underlay) {
+            this.renderReferenceImage(reference, this.topBar.referenceOpacity$.value);
         }
 
         const viewMode = this.topBar.viewMode$.value;
@@ -210,6 +253,14 @@ export class Renderer extends Subscriber {
             case 'country':
                 this.renderCountryHoverSelection(this.loader.worldMap);
                 break;
+        }
+
+        if (this.topBar.railwayEditor.active$.value) {
+            this.topBar.railwayEditor.render(this.backCanvasContext, this.topBar.hoverProvinceId$.value);
+        }
+
+        if (this.topBar.buildingEditor.active$.value) {
+            this.topBar.buildingEditor.render(this.backCanvasContext);
         }
 
         // Render paintbrush overlay

@@ -215,6 +215,7 @@ function fillEdges<T extends ColorContainer>(
     warnings: WorldMapWarning[]
 ): (T & EdgeDef)[] {
     const accessedPixels = new Array<boolean>(colorByPosition.length).fill(false);
+    const edgeLookups = new Map<number, Map<number, ProvinceEdgeGraph>>();
 
     for (const province of provincesWithoutEdges) {
         province.edges = [];
@@ -229,7 +230,7 @@ function fillEdges<T extends ColorContainer>(
                 continue;
             }
 
-            fillEdgesOfProvince(xi, colorToProvince, colorByPosition, accessedPixels, width, height, file, warnings);
+            fillEdgesOfProvince(xi, colorToProvince, colorByPosition, accessedPixels, edgeLookups, width, height, file, warnings);
         }
     }
 
@@ -241,6 +242,7 @@ function fillEdgesOfProvince<T extends EdgeDef>(
     colorToProvince: Record<number, T>,
     colorByPosition: Uint32Array,
     accessedPixels: boolean[],
+    edgeLookups: Map<number, Map<number, ProvinceEdgeGraph>>,
     width: number,
     height: number,
     file: string,
@@ -269,7 +271,12 @@ function fillEdgesOfProvince<T extends EdgeDef>(
     });
 
     const province = colorToProvince[color]!;
-    const edgeByColor = new Map(province.edges.map(edge => [edge.toColor, edge]));
+    // Unfinished maps can have thousands of separate pieces sharing one color; rebuilding this lookup per piece is quadratic.
+    let edgeByColor = edgeLookups.get(color);
+    if (edgeByColor === undefined) {
+        edgeByColor = new Map(province.edges.map(edge => [edge.toColor, edge]));
+        edgeLookups.set(color, edgeByColor);
+    }
     for (const [key, value] of Object.entries(edgePixelsByAdjecentProvince)) {
         const numKey = parseInt(key);
         let edgeSet = edgeByColor.get(numKey);
@@ -279,7 +286,9 @@ function fillEdgesOfProvince<T extends EdgeDef>(
             province.edges.push(edgeSet);
         }
         const concatedEdges = concatEdges(value);
-        edgeSet.path.push(...concatedEdges);
+        for (const path of concatedEdges) {
+            edgeSet.path.push(path);
+        }
     }
 }
 

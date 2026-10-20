@@ -256,7 +256,7 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestVictoryPointNamesMessage | VictoryPointNamesMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStatesResultMessage | PersistStrategicRegionsMessage | PersistStrategicRegionsResultMessage | PersistProvincesMessage | PersistProvincesResultMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | ResolveProvinceWarningsMessage | ResolveProvinceWarningsResultMessage | RunAreaOperationMessage | AreaOperationResultMessage | RunContinentPipelineMessage | ContinentPipelineResultMessage | RemoveAllCoresMessage | RemoveAllCoresResultMessage | ReindexMapMessage | ReindexMapResultMessage | PersistVictoryPointLocalisationMessage | PersistVictoryPointLocalisationResultMessage | SetConfirmNewProvinceCreationMessage | SetAutoCoreTransfersMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage | CreateCountryMessage | CreateCountryResultMessage | WorldMapRuntimeTestReadyMessage | WorldMapRuntimeTestRequestMessage | WorldMapRuntimeTestResultMessage;
+export type WorldMapMessage = LoadedMessage | RequestReferenceImageMessage | ReferenceImageMessage | RequestVictoryPointNamesMessage | VictoryPointNamesMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStatesResultMessage | PersistStrategicRegionsMessage | PersistStrategicRegionsResultMessage | PersistProvincesMessage | PersistProvincesResultMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | ResolveProvinceWarningsMessage | ResolveProvinceWarningsResultMessage | RunAreaOperationMessage | AreaOperationResultMessage | RunContinentPipelineMessage | ContinentPipelineResultMessage | RemoveAllCoresMessage | RemoveAllCoresResultMessage | ReindexMapMessage | ReindexMapResultMessage | PersistVictoryPointLocalisationMessage | PersistVictoryPointLocalisationResultMessage | PersistRailwaysMessage | PersistRailwaysResultMessage | RequestBuildingsMessage | BuildingsMessage | PersistMapBuildingsMessage | PersistMapBuildingsResultMessage | SetConfirmNewProvinceCreationMessage | SetAutoCoreTransfersMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage | CreateCountryMessage | CreateCountryResultMessage | WorldMapRuntimeTestReadyMessage | WorldMapRuntimeTestRequestMessage | WorldMapRuntimeTestResultMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
@@ -393,6 +393,7 @@ export interface OpenFileMessage {
 export interface ExportMapMessage {
     command: 'exportmap' | 'requestexportmap';
     scale?: number;
+    format?: 'png' | 'jpeg' | 'webp';
     dataUrl?: string;
 }
 
@@ -757,6 +758,32 @@ export interface PersistVictoryPointLocalisationMessage {
     overwrite?: boolean;
 }
 
+export interface PersistRailwaysMessage {
+    command: 'persistrailways';
+    requestId: string;
+    /** The complete railway list; map/railways.txt is rewritten from it. */
+    railways: Railway[];
+}
+
+export interface PersistRailwaysResultMessage {
+    command: 'persistrailwaysresult';
+    requestId: string;
+    success: boolean;
+    error?: string;
+}
+
+export interface RequestReferenceImageMessage {
+    command: 'requestreferenceimage';
+}
+
+export interface ReferenceImageMessage {
+    command: 'referenceimage';
+    /** Absent when the user cancelled the picker or loading failed. */
+    dataUri?: string;
+    name?: string;
+    error?: string;
+}
+
 export interface RequestVictoryPointNamesMessage {
     command: 'requestvictorypointnames';
     requestId: string;
@@ -783,3 +810,52 @@ export type MapLoaderExtra = {
     warnings: WorldMapWarning[];
     conditionExprs?: ConditionItem[];
 };
+
+/** A building type from common/buildings. */
+export interface BuildingDef {
+    id: string;
+    /** Placed on a province (first column is a province ID) instead of a state. */
+    provinceBased: boolean;
+    /** Needs an adjacent sea province (naval base style). */
+    isPort: boolean;
+    /** Not defined by the base game, so introduced by the mod. */
+    modded: boolean;
+}
+
+/** One line of map/buildings.txt: owner;id;x;y;z;rotation;sea province. */
+export interface MapBuilding {
+    /** State ID, or province ID for province-based buildings. */
+    owner: number;
+    id: string;
+    x: number;
+    y: number;
+    z: number;
+    rotation: number;
+    seaProvince: number;
+    /** Original line, kept so untouched entries are written back unchanged. */
+    raw?: string;
+}
+
+export interface RequestBuildingsMessage {
+    command: 'requestbuildings';
+}
+
+export interface BuildingsMessage {
+    command: 'buildings';
+    defs: BuildingDef[];
+    placed: MapBuilding[];
+    error?: string;
+}
+
+export interface PersistMapBuildingsMessage {
+    command: 'persistmapbuildings';
+    requestId: string;
+    buildings: MapBuilding[];
+}
+
+export interface PersistMapBuildingsResultMessage {
+    command: 'persistmapbuildingsresult';
+    requestId: string;
+    success: boolean;
+    error?: string;
+}

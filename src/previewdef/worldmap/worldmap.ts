@@ -5,7 +5,7 @@ import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
 import { reportFailure } from '../../util/errorreport';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistProvinceBmpMessage, PersistVictoryPointLocalisationMessage, PersistCountryDiplomacyMessage, CreateCountryMessage, RunAreaOperationMessage, RunContinentPipelineMessage, WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest, WorldMapRuntimeTestResultMessage } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistProvinceBmpMessage, PersistVictoryPointLocalisationMessage, PersistRailwaysMessage, PersistMapBuildingsMessage, BuildingDef, MapBuilding, PersistCountryDiplomacyMessage, CreateCountryMessage, RunAreaOperationMessage, RunContinentPipelineMessage, WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest, WorldMapRuntimeTestResultMessage } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
@@ -14,7 +14,7 @@ import { WorldMapLoader } from './loader/worldmaploader';
 import { isEqual } from 'lodash';
 import { LoaderSession } from '../../util/loader/loader';
 import { TelemetryMessage, sendByMessage } from '../../util/telemetry';
-import { getConfiguration, showQuickPickAnyString } from '../../util/vsccommon';
+import { getConfiguration } from '../../util/vsccommon';
 import { extractProvinceBmpColors, repairAdjacencies, repairRailways, repairSupplyNodes, validateNewProvinceMembership, validateProvinceBmpEdit } from './provincefixes';
 import { clearMapBuildings, clearRailways, clearSupplyHubs, clearWaterCrossings, convertDefinitionsToOcean, partitionLandAndWaterProvinces, partitionMappedMembership, patchStateMembershipPreservingContent, patchStatePreservingUnknownContent, planProvinceMergesByType, removeAllCores, removeProvincesFromRegionBlocks, replaceStateIdsInSupplyAreas, transformSelectedStates } from './areaoperations';
 import { createSequentialIdMap, reindexCountryHistoryFile, reindexDefinitions, reindexMapBuildings, reindexStateFile, reindexStrategicRegionFile, reindexSupplyAreaFile, reindexUnitStacks } from './reindex';
@@ -52,6 +52,7 @@ export class WorldMap {
     private messageQueue: Promise<void> = Promise.resolve();
 
     private lastRequestedExportUri: vscode.Uri | undefined;
+    private lastRequestedExportFormat: 'png' | 'jpeg' | 'webp' = 'png';
     private runtimeTestReady = false;
     private runtimeTestRequestCounter = 0;
     private runtimeTestReadyWaiters: (() => void)[] = [];
@@ -227,7 +228,7 @@ export class WorldMap {
                     await sendByMessage(msg);
                     break;
                 case 'requestexportmap':
-                    await this.requestExportMap();
+                    await this.requestExportMap((msg as any).format);
                     break;
                 case 'setconfirmnewprovincecreation':
                     await this.setConfirmNewProvinceCreation((msg as any).value);
@@ -327,6 +328,55 @@ export class WorldMap {
                             error: await this.failureMessage(e, 'persistvictorypointlocalisationresult'),
                         });
                     }
+                    break;
+                case 'persistrailways':
+                    try {
+                        await this.persistRailways(msg);
+                        await this.postMessageToWebview({
+                            command: 'persistrailwaysresult',
+                            requestId: msg.requestId,
+                            success: true,
+                        });
+                    } catch (e) {
+                        await this.postMessageToWebview({
+                            command: 'persistrailwaysresult',
+                            requestId: msg.requestId,
+                            success: false,
+                            error: await this.failureMessage(e, 'persistrailwaysresult'),
+                        });
+                    }
+                    break;
+                case 'requestbuildings':
+                    try {
+                        await this.postMessageToWebview({ command: 'buildings', ...await this.loadBuildings() });
+                    } catch (e) {
+                        await this.postMessageToWebview({
+                            command: 'buildings',
+                            defs: [],
+                            placed: [],
+                            error: await this.failureMessage(e, 'requestbuildings'),
+                        });
+                    }
+                    break;
+                case 'persistmapbuildings':
+                    try {
+                        await this.persistMapBuildings(msg);
+                        await this.postMessageToWebview({
+                            command: 'persistmapbuildingsresult',
+                            requestId: msg.requestId,
+                            success: true,
+                        });
+                    } catch (e) {
+                        await this.postMessageToWebview({
+                            command: 'persistmapbuildingsresult',
+                            requestId: msg.requestId,
+                            success: false,
+                            error: await this.failureMessage(e, 'persistmapbuildingsresult'),
+                        });
+                    }
+                    break;
+                case 'requestreferenceimage':
+                    await this.pickReferenceImage();
                     break;
                 case 'requestvictorypointnames':
                     {
@@ -675,25 +725,17 @@ export class WorldMap {
         await getConfiguration().update('worldMapConfirmNewProvinceCreation', value, vscode.ConfigurationTarget.Global);
     }
 
-    private async requestExportMap() {
-        const scaleStr = await showQuickPickAnyString(['1', '2', '3', '4'],
-            v => {
-                const pv = parseFloat(v);
-                return !isNaN(pv) && pv >= 1 && pv <= 10;
-            },
-            localize('worldmap.export.scale', 'Scale of the exported image (1 ~ 10)'));
-
-        if (!scaleStr) {
-            return;
-        }
-
-        const uri = await vscode.window.showSaveDialog({ filters: { [localize('pngfile', 'PNG file')]: ['png'] } });
+    private async requestExportMap(format: 'png' | 'jpeg' | 'webp' = 'png') {
+        const extension = format === 'jpeg' ? 'jpg' : format;
+        const label = format === 'png' ? localize('pngfile', 'PNG file') : format === 'jpeg' ? localize('worldmap.export.jpegfile', 'JPEG file') : localize('worldmap.export.webpfile', 'WebP file');
+        const uri = await vscode.window.showSaveDialog({ filters: { [label]: [extension] } });
         this.lastRequestedExportUri = uri;
+        this.lastRequestedExportFormat = format;
         if (!uri) {
             return;
         }
 
-        await this.postMessageToWebview({ command: 'requestexportmap', scale: parseFloat(scaleStr) });
+        await this.postMessageToWebview({ command: 'requestexportmap', format });
     }
 
     /** Records a failed world-map operation, notifies the user with a copyable code, and returns text for the webview. */
@@ -702,13 +744,43 @@ export class WorldMap {
         return `${e instanceof Error ? e.message : String(e)} [${code}]`;
     }
 
+    private async pickReferenceImage(): Promise<void> {
+        const maxBytes = 128 * 1024 * 1024;
+        const mimeByExtension: Record<string, string> = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', bmp: 'image/bmp', webp: 'image/webp', gif: 'image/gif' };
+        const [uri] = await vscode.window.showOpenDialog({
+            canSelectMany: false,
+            openLabel: localize('worldmap.referenceimage.open', 'Use as reference image'),
+            filters: { [localize('worldmap.referenceimage.filter', 'Images')]: Object.keys(mimeByExtension) },
+        }) ?? [];
+        if (!uri) {
+            await this.postMessageToWebview({ command: 'referenceimage' });
+            return;
+        }
+
+        try {
+            const data = await vscode.workspace.fs.readFile(uri);
+            if (data.byteLength > maxBytes) {
+                throw new Error(localize('worldmap.referenceimage.toolarge', 'Image is larger than {0} MB.', maxBytes / 1024 / 1024));
+            }
+            const extension = uri.path.substring(uri.path.lastIndexOf('.') + 1).toLowerCase();
+            const mime = mimeByExtension[extension] ?? 'image/png';
+            await this.postMessageToWebview({
+                command: 'referenceimage',
+                dataUri: `data:${mime};base64,${Buffer.from(data).toString('base64')}`,
+                name: uri.path.substring(uri.path.lastIndexOf('/') + 1),
+            });
+        } catch (e) {
+            await this.postMessageToWebview({ command: 'referenceimage', error: (e as Error)?.message ?? String(e) });
+        }
+    }
+
     private async exportMap(dataUrl?: string) {
         const uri = this.lastRequestedExportUri;
         if (!uri) {
             return;
         }
 
-        const prefix = 'data:image/png;base64,';
+        const prefix = `data:image/${this.lastRequestedExportFormat};base64,`;
         if (!dataUrl || !dataUrl.startsWith(prefix)) {
             vscode.window.showErrorMessage(localize('worldmap.export.error.imgformat', 'Can\'t export world map: Image is not in correct format.'));
             return;
@@ -1159,6 +1231,207 @@ export class WorldMap {
         debug(`Wrote victory point localisation entry ${msg.key} to ${targetFile.fsPath}`);
     }
 
+    private railwayWriteQueue: Promise<unknown> = Promise.resolve();
+
+    /** Writes run one at a time so quick consecutive edits cannot interleave. */
+    private persistRailways(msg: PersistRailwaysMessage): Promise<void> {
+        const run = this.railwayWriteQueue.then(() => this.writeRailways(msg));
+        this.railwayWriteQueue = run.catch(() => undefined);
+        return run;
+    }
+
+    private async writeRailways(msg: PersistRailwaysMessage): Promise<void> {
+        const lines: string[] = [];
+        for (const railway of msg.railways) {
+            const ids = railway.provinces;
+            if (!Number.isInteger(railway.level) || railway.level < 1 || railway.level > 5 ||
+                !Array.isArray(ids) || ids.length < 2 || ids.some(id => !Number.isInteger(id) || id < 1)) {
+                throw new Error('A railway has an invalid level or fewer than two valid provinces; nothing was written.');
+            }
+            lines.push(`${railway.level} ${ids.length} ${ids.join(' ')}`);
+        }
+
+        const relativePath = 'map/railways.txt';
+        const targetFile = await this.resolveTargetFile(relativePath);
+        let existing = '';
+        const snapshot = await this.readOperationalSnapshot(targetFile);
+        if (snapshot) {
+            existing = snapshot.toString('utf-8');
+        } else {
+            try {
+                const [buffer] = await readFileFromModOrHOI4(relativePath);
+                existing = buffer.toString('utf-8');
+            } catch {
+                // No railways file exists anywhere yet; create it.
+            }
+        }
+        existing = existing.replace(/^\uFEFF/, '');
+        const eol = existing.includes('\r\n') ? '\r\n' : '\n';
+        const header: string[] = [];
+        for (const line of existing.split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (trimmed === '' || trimmed.startsWith('#')) {
+                header.push(line);
+            } else {
+                break;
+            }
+        }
+        while (header.length > 0 && header[header.length - 1].trim() === '') {
+            header.pop();
+        }
+
+        const content = [...header, ...lines].join(eol) + (lines.length > 0 ? eol : '');
+        await mkdirs(dirUri(targetFile));
+        await this.writeOperationalFile(targetFile, Buffer.from(content, 'utf-8'));
+        this.cachedWorldMap = undefined;
+        this.worldMapDependencies = undefined;
+        debug(`Wrote ${lines.length} railways to ${targetFile.fsPath}`);
+    }
+
+    private mapBuildingsWriteQueue: Promise<unknown> = Promise.resolve();
+
+    /** Top-level building ids of the text of one common/buildings file. */
+    private parseBuildingDefs(text: string, modded: boolean): BuildingDef[] {
+        const clean = text.replace(/#[^\r\n]*/g, '');
+        const defs: BuildingDef[] = [];
+        const root = /\bbuildings\s*=\s*\{/.exec(clean);
+        if (!root) {
+            return defs;
+        }
+        let depth = 1;
+        let i = root.index + root[0].length;
+        let key = '';
+        let blockStart = -1;
+        let blockKey = '';
+        for (; i < clean.length && depth > 0; i++) {
+            const ch = clean[i];
+            if (ch === '{') {
+                if (depth === 1) {
+                    blockKey = key;
+                    blockStart = i + 1;
+                }
+                depth++;
+            } else if (ch === '}') {
+                depth--;
+                if (depth === 1 && blockStart >= 0 && blockKey) {
+                    const body = clean.slice(blockStart, i);
+                    const flat = body.replace(/\{[^{}]*\}/g, '').replace(/\{[^{}]*\}/g, '');
+                    const flag = (name: string) => new RegExp(`(^|\\s)${name}\\s*=\\s*yes\\b`).test(flat);
+                    defs.push({
+                        id: blockKey,
+                        provinceBased: flag('province_based'),
+                        isPort: flag('is_port'),
+                        modded,
+                    });
+                    blockStart = -1;
+                }
+                key = '';
+            } else if (depth === 1) {
+                if (/[A-Za-z0-9_]/.test(ch)) {
+                    key = /[A-Za-z0-9_]/.test(clean[i - 1] ?? '') ? key + ch : ch;
+                }
+            }
+        }
+        return defs;
+    }
+
+    private parseMapBuildings(text: string): MapBuilding[] {
+        const placed: MapBuilding[] = [];
+        for (const line of text.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+            const fields = line.split(';');
+            if (fields.length < 6) {
+                continue;
+            }
+            const owner = Number.parseInt(fields[0], 10);
+            const id = fields[1].trim();
+            const [x, y, z, rotation] = fields.slice(2, 6).map(Number.parseFloat);
+            if (!Number.isInteger(owner) || !id || [x, y, z, rotation].some(n => !Number.isFinite(n))) {
+                continue;
+            }
+            const seaProvince = Number.parseInt(fields[6] ?? '0', 10);
+            placed.push({ owner, id, x, y, z, rotation, seaProvince: Number.isInteger(seaProvince) ? seaProvince : 0, raw: line });
+        }
+        return placed;
+    }
+
+    private async loadBuildings(): Promise<{ defs: BuildingDef[]; placed: MapBuilding[] }> {
+        const readAll = async (mod: boolean) => {
+            const options = mod ? { mod: true, hoi4: false, dlc: false } : { mod: false };
+            const found: BuildingDef[] = [];
+            const names = Array.from(new Set(await listFilesFromModOrHOI4('common/buildings', options)))
+                .filter(name => name.toLowerCase().endsWith('.txt'));
+            for (const name of names) {
+                try {
+                    const [buffer] = await readFileFromModOrHOI4(`common/buildings/${name}`, options);
+                    found.push(...this.parseBuildingDefs(buffer.toString('utf-8').replace(/^\uFEFF/, ''), !mod));
+                } catch (e) {
+                    debug(`Skipped building file ${name}: ${e}`);
+                }
+            }
+            return found;
+        };
+        const base = await readAll(false);
+        const baseIds = new Set(base.map(def => def.id));
+        const modDefs = (await readAll(true)).map(def => ({ ...def, modded: !baseIds.has(def.id) }));
+        const merged = new Map<string, BuildingDef>();
+        for (const def of [...base, ...modDefs]) {
+            merged.set(def.id, def);
+        }
+
+        let placed: MapBuilding[] = [];
+        const targetFile = await this.resolveTargetFile('map/buildings.txt');
+        const snapshot = await this.readOperationalSnapshot(targetFile);
+        if (snapshot) {
+            placed = this.parseMapBuildings(snapshot.toString('utf-8'));
+        } else {
+            try {
+                placed = this.parseMapBuildings((await readFileFromModOrHOI4('map/buildings.txt'))[0].toString('utf-8'));
+            } catch {
+                // No buildings file anywhere yet.
+            }
+        }
+        return {
+            defs: Array.from(merged.values()).sort((a, b) => Number(b.modded) - Number(a.modded) || a.id.localeCompare(b.id)),
+            placed,
+        };
+    }
+
+    private persistMapBuildings(msg: PersistMapBuildingsMessage): Promise<void> {
+        const run = this.mapBuildingsWriteQueue.then(() => this.writeMapBuildings(msg));
+        this.mapBuildingsWriteQueue = run.catch(() => undefined);
+        return run;
+    }
+
+    private async writeMapBuildings(msg: PersistMapBuildingsMessage): Promise<void> {
+        const fmt = (n: number) => n.toFixed(2);
+        const lines = msg.buildings.map(building => {
+            if (!Number.isInteger(building.owner) || building.owner < 1 || !/^[A-Za-z0-9_]+$/.test(building.id) ||
+                [building.x, building.y, building.z, building.rotation].some(n => !Number.isFinite(n)) ||
+                !Number.isInteger(building.seaProvince) || building.seaProvince < 0) {
+                throw new Error('A building entry is invalid; nothing was written.');
+            }
+            return building.raw ?? `${building.owner};${building.id};${fmt(building.x)};${fmt(building.y)};${fmt(building.z)};${fmt(building.rotation)};${building.seaProvince}`;
+        });
+        const targetFile = await this.resolveTargetFile('map/buildings.txt');
+        let existing = '';
+        const snapshot = await this.readOperationalSnapshot(targetFile);
+        if (snapshot) {
+            existing = snapshot.toString('utf-8');
+        } else {
+            try {
+                existing = (await readFileFromModOrHOI4('map/buildings.txt'))[0].toString('utf-8');
+            } catch {
+                // Created below.
+            }
+        }
+        const eol = existing.includes('\r\n') ? '\r\n' : '\n';
+        await mkdirs(dirUri(targetFile));
+        await this.writeOperationalFile(targetFile, Buffer.from(lines.join(eol) + (lines.length > 0 ? eol : ''), 'utf-8'));
+        this.cachedWorldMap = undefined;
+        this.worldMapDependencies = undefined;
+        debug(`Wrote ${lines.length} map buildings to ${targetFile.fsPath}`);
+    }
+
     private async resolveTargetFile(relativePath: string): Promise<vscode.Uri> {
         // A selected descriptor is the authority for operational writes. The
         // general read resolver searches open workspace folders first, which is
@@ -1498,7 +1771,11 @@ export class WorldMap {
         for (const sr of replacementSRs) {
             const range = this.findStrategicRegionBlockRangeById(text, sr.id);
             if (!range) {
-                throw new Error(`Failed to locate existing strategic region block by id ${sr.id} in ${relativePath}`);
+                // The block was removed earlier (for example by merging regions);
+                // restoring it, as undo does, writes it back from the known fields.
+                const trimmed = text.replace(/\s+$/, '');
+                text = (trimmed === '' ? '' : trimmed + eol + eol) + this.serializeStrategicRegion(sr, eol) + eol;
+                continue;
             }
 
             const original = text.substring(range.start, range.end);

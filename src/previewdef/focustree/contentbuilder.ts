@@ -266,6 +266,7 @@ function renderSecondaryTools(styleTable: StyleTable): string {
 }
 
 function renderFocusDetailsContainer(styleTable: StyleTable): string {
+    styleTable.raw('#toggle-focus-details-button[aria-pressed="false"]', 'opacity:0.5;');
     styleTable.raw('#focusdetails-content details', 'margin: 10px 0; border-top: 1px solid var(--vscode-panel-border); padding-top: 8px;');
     styleTable.raw('#focusdetails-content summary', 'cursor: pointer; font-weight: 600; margin-bottom: 10px;');
     styleTable.raw('#focusdetails-content input[type="text"], #focusdetails-content textarea', 'width: 100%; box-sizing: border-box;');
@@ -417,6 +418,9 @@ async function renderToolBar(focusTrees: FocusTree[], styleTable: StyleTable, gf
             <i class="codicon codicon-screen-full"></i>
         </button>
         <button id="more-focus-tools-button" aria-haspopup="menu" aria-expanded="false" title="${localize('focustree.moretools', 'More focus tools')}"><i class="codicon codicon-ellipsis"></i></button>
+        <button id="toggle-focus-details-button" aria-pressed="true" title="${localize('focustree.toggledetails', 'Show or hide the focus editor panel')}">
+            <i class="codicon codicon-layout-sidebar-right"></i>
+        </button>
         <button id="focustree-help-button" title="${localize(
             'focustree.help',
             'Shortcuts: Ctrl/Cmd+click to multi-select, Delete to remove, Ctrl/Cmd+D to duplicate, arrow keys to nudge, Ctrl/Cmd+0 to fit the tree. Alt+drag from one focus onto another to add a prerequisite; Alt+Shift+drag to add a mutually exclusive relation.'

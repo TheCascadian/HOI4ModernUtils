@@ -68,6 +68,8 @@ const rightButtonDrag: boolean = (window as any).__featureflags.rightButtonDrag;
 const focusTrees: FocusTree[] = (window as any).focusTrees;
 const inlayWindows: Record<string, FocusInlayWindow> = (window as any).inlayWindows ?? {};
 
+/** The focus editor panel can be hidden to see the whole tree; the choice is remembered per preview. */
+let focusDetailsHidden: boolean = getState().focusDetailsHidden ?? false;
 let selectedExprs: ConditionItem[] = getState().selectedExprs ?? [];
 let selectedFocusTreeIndex: number = Math.min(focusTrees.length - 1, getState().selectedFocusTreeIndex ?? 0);
 let allowBranches: DivDropdown | undefined = undefined;
@@ -821,7 +823,7 @@ function renderFocusDetails(): void {
         available_if_capitulated: false, cancel_if_invalid: false, continue_if_invalid: false,
     };
 
-    container.style.display = 'block';
+    container.style.display = focusDetailsHidden ? 'none' : 'block';
     content.innerHTML = `
         <h2 style="margin-top:0">${feLocalize('focustree.details.title', 'Focus properties')}</h2>
         <div class="focusdetails-row"><label for="focusdetails-id">${feLocalize('focustree.details.id', 'ID')}</label>
@@ -1579,6 +1581,19 @@ window.addEventListener('load', tryRun(async function() {
     // Zoom
     const contentElement = document.getElementById('focustreecontent') as HTMLDivElement;
     zoomControl = enableZoom(contentElement, 0, 40);
+
+    // Toggle focus editor panel
+    const toggleDetails = document.getElementById('toggle-focus-details-button') as HTMLButtonElement | null;
+    if (toggleDetails) {
+        const syncToggle = () => toggleDetails.setAttribute('aria-pressed', String(!focusDetailsHidden));
+        syncToggle();
+        toggleDetails.addEventListener('click', () => {
+            focusDetailsHidden = !focusDetailsHidden;
+            setState({ focusDetailsHidden });
+            syncToggle();
+            renderFocusDetails();
+        });
+    }
 
     // Toggle warnings
     const showWarnings = document.getElementById('show-warnings') as HTMLButtonElement;

@@ -16,12 +16,14 @@ import { adjustBrushSizeForWheel, applyBrushStroke, applyLassoAssignment, BrushP
 import { PaintDraftHistory } from "./paintdraft";
 import { isPersistableProvinceDefinition, normalizeEditableProvinceIds, ProvinceSelectionHistory, ProvinceSelectionSnapshot, selectProvinceIds, selectRiverProvinceIds } from "./selection";
 import { OceanTileReadinessIssue, verifyOceanTileReadiness } from "../../src/previewdef/worldmap/areaoperations";
+import { RailwayEditor, RAILWAY_MAX_LEVEL } from "./railwayeditor";
+import { BuildingEditor } from "./buildingeditor";
 import { calculateProvinceIdCap } from "../../src/previewdef/worldmap/maplimits";
 
 export type ViewMode = 'province' | 'state' | 'strategicregion' | 'supplyarea' | 'warnings' | 'country';
 export type ColorSet = 'provinceid' | 'provincetype' | 'terrain' | 'owner' | 'controller' | 'stateid' | 'manpower' |
     'victorypoint' | 'continent' | 'warnings' | 'strategicregionid' | 'supplyareaid' | 'supplyvalue' | 'resources' | 'statecategory';
-type ActiveTool = 'none' | 'paint' | 'transferWand' | 'select';
+type ActiveTool = 'none' | 'paint' | 'transferWand' | 'select' | 'railway' | 'building';
 
 export const topBarHeight = 68;
 
@@ -166,6 +168,25 @@ function getAutoCoreTransfers(): boolean {
     return (window as any)['__autoCoreTransfers'] === true;
 }
 
+interface ExportSettings {
+    scope: 'region' | 'map';
+    scale: number;
+    padding: number;
+    format: 'png' | 'jpeg' | 'webp';
+    quality: number;
+    background: 'transparent' | 'color';
+    backgroundColor: string;
+    outline: boolean;
+    outlineColor: string;
+    outlineWidth: number;
+}
+
+const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
+    scope: 'region', scale: 1, padding: 0, format: 'png', quality: 92,
+    background: 'transparent', backgroundColor: '#000000',
+    outline: true, outlineColor: '#ff3b30', outlineWidth: 3,
+};
+
 export class TopBar extends Subscriber {
     public viewMode$: BehaviorSubject<ViewMode>;
     public colorSet$: BehaviorSubject<ColorSet>;
@@ -246,8 +267,8 @@ export class TopBar extends Subscriber {
 
     public warningsVisible: boolean = false;
     private warningsFilterByViewMode: boolean = false;
-    private exportIncludeBorder: boolean = true;
-    private pendingExport: { bbox: Zone; includeBorder: boolean } | undefined;
+    private exportSettings: ExportSettings = { ...DEFAULT_EXPORT_SETTINGS, ...(getState().exportSettings ?? {}) };
+    private pendingExport: { bbox: Zone; settings: ExportSettings } | undefined;
     private contextMenu: ContextMenu = new ContextMenu();
     private pendingPuppetWrite = false;
     private countryActionMode: 'puppet' | 'annex' | 'transfer' = 'puppet';
@@ -279,6 +300,8 @@ export class TopBar extends Subscriber {
     private paintDraftCanRedo$ = new BehaviorSubject<boolean>(false);
     private paintAllowedProvinceIds: Set<number> | undefined;
     public activeTool$: BehaviorSubject<ActiveTool>;
+    public readonly railwayEditor: RailwayEditor;
+    public readonly buildingEditor: BuildingEditor;
     private transferWandActive = false;
     private transferWandTargetStateId: number | undefined;
     private transferWandOwner: string | undefined;
@@ -467,6 +490,19 @@ export class TopBar extends Subscriber {
         this.mapMutation$ = new BehaviorSubject<number>(0);
         this.paintbrushActive$ = new BehaviorSubject<boolean>(false);
         this.activeTool$ = new BehaviorSubject<ActiveTool>('none');
+        this.railwayEditor = new RailwayEditor(loader, viewPoint, {
+            status: (text, tone) => this.showActionStatus(text, tone),
+            refreshMap: () => this.mapMutation$.next(this.mapMutation$.value + 1),
+            isBusy: () => this.paintbrushActive$.value || this.paintbrushSavePending || this.transferWandActive ||
+                !!this.pendingProvinceMerge || !!this.pendingWaterToLand,
+        });
+        this.buildingEditor = new BuildingEditor(loader, viewPoint, {
+            scopeStateIds: () => this.buildingScopeStateIds(),
+            status: (text, tone) => this.showActionStatus(text, tone),
+            refreshMap: () => this.mapMutation$.next(this.mapMutation$.value + 1),
+            isBusy: () => this.paintbrushActive$.value || this.paintbrushSavePending || this.transferWandActive ||
+                !!this.pendingProvinceMerge || !!this.pendingWaterToLand,
+        });
         this.paintbrushColor$ = new BehaviorSubject<number>(0);
         this.paintedPixels$ = new BehaviorSubject<Map<string, number>>(new Map());
         this.paintedPixelDelta$ = new BehaviorSubject<ReadonlyMap<string, number | undefined>>(new Map());
@@ -769,6 +805,7 @@ export class TopBar extends Subscriber {
         this.loadCountryPuppetModal();
         this.loadCreateCountryModal();
         this.loadMergeStatesModal();
+        this.loadMergeRegionsModal();
         this.loadPersistenceResults();
         this.loadResolveProvinceWarnings();
         this.loadAreaOperationResults();
@@ -776,6 +813,9 @@ export class TopBar extends Subscriber {
         this.loadOceanReadinessModal();
         this.loadWaterToLandModal();
         this.loadVictoryPointRenameModal();
+        this.loadReferenceImageControls();
+        this.loadRailwayEditorControls();
+        this.loadBuildingEditorControls();
         this.initExportMapMessageListener();
     }
 
@@ -856,6 +896,355 @@ export class TopBar extends Subscriber {
         renamed: number;
         ready: boolean;
     };
+
+    private loadRailwayEditorControls() {
+        const editor = this.railwayEditor;
+        const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null;
+        const toolbarBtn = byId<HTMLButtonElement>('toggle-railway');
+        const panel = byId<HTMLDivElement>('railway-panel');
+        const closeBtn = byId<HTMLButtonElement>('railway-panel-close');
+        const selectMode = byId<HTMLButtonElement>('railway-mode-select');
+        const drawMode = byId<HTMLButtonElement>('railway-mode-draw');
+        const level = byId<HTMLSelectElement>('railway-level');
+        const extend = byId<HTMLSelectElement>('railway-extend');
+        const autoConnect = byId<HTMLInputElement>('railway-autoconnect');
+        const info = byId<HTMLDivElement>('railway-info');
+        const hint = byId<HTMLDivElement>('railway-hint');
+        const prev = byId<HTMLButtonElement>('railway-prev');
+        const next = byId<HTMLButtonElement>('railway-next');
+        const problem = byId<HTMLButtonElement>('railway-problem');
+        const reverse = byId<HTMLButtonElement>('railway-reverse');
+        const split = byId<HTMLButtonElement>('railway-split');
+        const del = byId<HTMLButtonElement>('railway-delete');
+        const undo = byId<HTMLButtonElement>('railway-undo');
+        const redo = byId<HTMLButtonElement>('railway-redo');
+        const saveStatus = byId<HTMLSpanElement>('railway-save-status');
+        const retry = byId<HTMLButtonElement>('railway-retry');
+        if (!toolbarBtn || !panel || !closeBtn || !selectMode || !drawMode || !level || !extend || !autoConnect || !info ||
+            !hint || !prev || !next || !problem || !reverse || !split || !del || !undo || !redo || !saveStatus || !retry) {
+            return;
+        }
+
+        // Focus must return to the map so single-key shortcuts keep working after a panel click.
+        const act = (element: HTMLElement, action: () => void) => {
+            this.addSubscription(fromEvent(element, 'click').subscribe(() => {
+                action();
+                element.blur();
+            }));
+        };
+        act(toolbarBtn, () => { editor.toggle(); });
+        act(closeBtn, () => { editor.deactivate(); });
+        act(selectMode, () => editor.setMode('select'));
+        act(drawMode, () => editor.setMode('draw'));
+        act(prev, () => editor.selectRelative(-1));
+        act(next, () => editor.selectRelative(1));
+        act(problem, () => editor.selectNextProblem());
+        act(reverse, () => editor.reverseSelected());
+        act(split, () => editor.splitSelected());
+        act(del, () => editor.deleteSelected());
+        act(undo, () => { editor.undo(); });
+        act(redo, () => { editor.redo(); });
+        act(retry, () => editor.retrySave());
+        this.addSubscription(fromEvent(level, 'change').subscribe(() => {
+            editor.setLevel(Number(level.value));
+            level.blur();
+        }));
+        this.addSubscription(fromEvent(extend, 'change').subscribe(() => {
+            editor.setExtendFrom(extend.value === 'start' ? 'start' : 'end');
+            extend.blur();
+        }));
+        this.addSubscription(fromEvent(autoConnect, 'change').subscribe(() => {
+            editor.setAutoConnect(autoConnect.checked);
+            autoConnect.blur();
+        }));
+
+        this.addSubscription(editor.active$.subscribe(active => {
+            if (active) {
+                this.activeTool$.next('railway');
+            } else if (this.activeTool$.value === 'railway') {
+                this.activeTool$.next('none');
+            }
+        }));
+        this.addSubscription(this.activeTool$.subscribe(tool => {
+            if (tool !== 'railway' && editor.active$.value) {
+                editor.deactivate();
+            }
+        }));
+
+        const sync = () => {
+            const active = editor.active$.value;
+            panel.hidden = !active;
+            toolbarBtn.setAttribute('aria-pressed', String(active));
+            if (!active) {
+                return;
+            }
+            selectMode.setAttribute('aria-pressed', String(editor.mode === 'select'));
+            drawMode.setAttribute('aria-pressed', String(editor.mode === 'draw'));
+            level.value = String(Math.min(RAILWAY_MAX_LEVEL, editor.level));
+            extend.value = editor.extendFrom;
+            autoConnect.checked = editor.autoConnect;
+
+            const railway = editor.getSelected();
+            const worldMap = this.loader.worldMap;
+            if (railway) {
+                const problems = editor.invalidSegments(railway).length;
+                const lines = [feLocalize(
+                    'worldmap.railway.info.selected',
+                    'Railway {0} of {1} · level {2} · {3} provinces',
+                    editor.selected + 1, editor.railwayCount, railway.level, railway.provinces.length
+                )];
+                if (editor.selectedNode >= 0) {
+                    const provinceId = railway.provinces[editor.selectedNode];
+                    const state = worldMap.getStateByProvinceId(provinceId);
+                    lines.push(feLocalize(
+                        'worldmap.railway.info.node',
+                        'Node: province {0}{1}',
+                        provinceId,
+                        state ? ` · ${state.localisedName ?? state.name ?? state.id}` : ''
+                    ));
+                }
+                if (problems > 0) {
+                    lines.push(feLocalize(
+                        'worldmap.railway.info.problems',
+                        '{0} disconnected segment(s), drawn dashed red.',
+                        problems
+                    ));
+                }
+                info.textContent = lines.join('\n');
+                info.style.whiteSpace = 'pre-line';
+            } else {
+                const problems = editor.countProblemRailways();
+                info.textContent = feLocalize('worldmap.railway.info.none', '{0} railways. None selected.', editor.railwayCount) +
+                    (problems > 0 ? '\n' + feLocalize('worldmap.railway.info.problemcount', '{0} railway(s) have disconnected segments.', problems) : '');
+                info.style.whiteSpace = 'pre-line';
+            }
+
+            if (editor.mode === 'select') {
+                hint.textContent = railway
+                    ? feLocalize('worldmap.railway.hint.select.selected', 'Click a node to select it (Shift+click removes it). Alt+click a province to detour through it. Click the line again to cycle overlapping railways. Esc deselects.')
+                    : feLocalize('worldmap.railway.hint.select', 'Click a railway line to select it, or press D and click provinces to draw a new one.');
+            } else if (railway) {
+                hint.textContent = editor.extendFrom === 'end'
+                    ? feLocalize('worldmap.railway.hint.draw.end', 'Click provinces to extend the green end. Click the tip again to step back. Enter finishes.')
+                    : feLocalize('worldmap.railway.hint.draw.start', 'Click provinces to extend the green start. Click the tip again to step back. Enter finishes.');
+            } else if (editor.getPendingStart() !== undefined) {
+                hint.textContent = feLocalize('worldmap.railway.hint.draw.destination', 'Now click the province the railway should reach. Gaps are filled along land provinces.');
+            } else {
+                hint.textContent = feLocalize('worldmap.railway.hint.draw.new', 'Click the first province of a new railway. Level {0} (keys 1-5 change it).', editor.level);
+            }
+
+            const hasSelection = !!railway;
+            prev.disabled = next.disabled = problem.disabled = editor.railwayCount === 0;
+            reverse.disabled = del.disabled = !hasSelection;
+            split.disabled = !editor.canSplit();
+            undo.disabled = !editor.canUndo();
+            redo.disabled = !editor.canRedo();
+
+            saveStatus.classList.toggle('failed', editor.saveState === 'failed');
+            retry.hidden = editor.saveState !== 'failed';
+            switch (editor.saveState) {
+                case 'saving':
+                    saveStatus.textContent = feLocalize('worldmap.railway.save.saving', 'Saving map/railways.txt...');
+                    break;
+                case 'saved':
+                    saveStatus.textContent = feLocalize('worldmap.railway.save.saved', 'All changes saved to map/railways.txt.');
+                    break;
+                case 'dirty':
+                    saveStatus.textContent = feLocalize('worldmap.railway.save.dirty', 'Unsaved changes...');
+                    break;
+                case 'failed':
+                    saveStatus.textContent = editor.saveError || feLocalize('worldmap.railway.savefailed', 'Saving failed.');
+                    break;
+                default:
+                    saveStatus.textContent = feLocalize('worldmap.railway.save.idle', 'Changes save automatically.');
+            }
+        };
+        this.addSubscription(editor.revision$.subscribe(sync));
+        this.addSubscription(editor.active$.subscribe(sync));
+    }
+
+    private buildingScopeStateIds(): ReadonlySet<number> {
+        const ids = new Set<number>(this.selectedStateIds$.value);
+        const selected = this.selectedStateId$.value;
+        if (selected !== undefined) {
+            ids.add(selected);
+        }
+        const tag = this.selectedCountryTag$.value;
+        if (tag) {
+            this.loader.worldMap.forEachState(state => {
+                if (solveWithCondition(state.owner, this.selectedConditions$.value) === tag) {
+                    ids.add(state.id);
+                }
+            });
+        }
+        return ids;
+    }
+
+    private loadBuildingEditorControls() {
+        const editor = this.buildingEditor;
+        const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null;
+        const toolbarBtn = byId<HTMLButtonElement>('toggle-building');
+        const panel = byId<HTMLDivElement>('building-panel');
+        const closeBtn = byId<HTMLButtonElement>('building-panel-close');
+        const placeMode = byId<HTMLButtonElement>('building-mode-place');
+        const eraseMode = byId<HTMLButtonElement>('building-mode-erase');
+        const filter = byId<HTMLInputElement>('building-filter');
+        const list = byId<HTMLSelectElement>('building-list');
+        const detail = byId<HTMLDivElement>('building-detail');
+        const height = byId<HTMLInputElement>('building-height');
+        const rotateLeft = byId<HTMLButtonElement>('building-rotate-left');
+        const rotateRight = byId<HTMLButtonElement>('building-rotate-right');
+        const rotation = byId<HTMLSpanElement>('building-rotation');
+        const undo = byId<HTMLButtonElement>('building-undo');
+        const redo = byId<HTMLButtonElement>('building-redo');
+        const clearType = byId<HTMLButtonElement>('building-cleartype');
+        const hint = byId<HTMLDivElement>('building-hint');
+        const saveStatus = byId<HTMLSpanElement>('building-save-status');
+        const retry = byId<HTMLButtonElement>('building-retry');
+        if (!toolbarBtn || !panel || !closeBtn || !placeMode || !eraseMode || !filter || !list || !detail || !height ||
+            !rotateLeft || !rotateRight || !rotation || !undo || !redo || !clearType || !hint || !saveStatus || !retry) {
+            return;
+        }
+
+        const act = (element: HTMLElement, action: () => void) => {
+            this.addSubscription(fromEvent(element, 'click').subscribe(() => {
+                action();
+                element.blur();
+            }));
+        };
+        act(toolbarBtn, () => { editor.toggle(); });
+        act(closeBtn, () => { editor.deactivate(); });
+        act(placeMode, () => editor.setMode('place'));
+        act(eraseMode, () => editor.setMode('erase'));
+        act(rotateLeft, () => editor.rotate(-45));
+        act(rotateRight, () => editor.rotate(45));
+        act(undo, () => { editor.undo(); });
+        act(redo, () => { editor.redo(); });
+        act(clearType, () => editor.clearType());
+        act(retry, () => editor.retrySave());
+        this.addSubscription(fromEvent(filter, 'input').subscribe(() => editor.setFilter(filter.value)));
+        this.addSubscription(fromEvent(list, 'change').subscribe(() => {
+            editor.setSelected(list.value);
+            list.blur();
+        }));
+        this.addSubscription(fromEvent(height, 'change').subscribe(() => {
+            editor.setHeight(height.value === '' ? undefined : Number(height.value));
+            height.blur();
+        }));
+
+        this.addSubscription(editor.active$.subscribe(active => {
+            if (active) {
+                this.activeTool$.next('building');
+            } else if (this.activeTool$.value === 'building') {
+                this.activeTool$.next('none');
+            }
+        }));
+        this.addSubscription(this.activeTool$.subscribe(tool => {
+            if (tool !== 'building' && editor.active$.value) {
+                editor.deactivate();
+            }
+        }));
+
+        const showAll = byId<HTMLInputElement>('building-showall-toggle');
+        try {
+            editor.showAll = localStorage.getItem('hoi4mu.buildings.showall') === '1';
+        } catch { /* storage unavailable */ }
+        if (showAll) {
+            showAll.checked = editor.showAll;
+            this.addSubscription(fromEvent(showAll, 'change').subscribe(() => {
+                editor.setShowAll(showAll.checked);
+                try {
+                    localStorage.setItem('hoi4mu.buildings.showall', showAll.checked ? '1' : '0');
+                } catch { /* storage unavailable */ }
+            }));
+        }
+
+        let listKey = '';
+        const sync = () => {
+            const active = editor.active$.value;
+            panel.hidden = !active;
+            toolbarBtn.setAttribute('aria-pressed', String(active));
+            if (!active) {
+                return;
+            }
+            placeMode.setAttribute('aria-pressed', String(editor.mode === 'place'));
+            eraseMode.setAttribute('aria-pressed', String(editor.mode === 'erase'));
+            rotation.textContent = `${editor.rotationDegrees}\u00b0`;
+
+            const visible = editor.visibleDefs();
+            const key = `${editor.loadState}|${editor.filter}|${visible.map(def => def.id).join(',')}`;
+            if (key !== listKey) {
+                listKey = key;
+                list.replaceChildren();
+                let group: HTMLOptGroupElement | undefined;
+                let groupModded: boolean | undefined;
+                for (const def of visible) {
+                    if (group === undefined || groupModded !== def.modded) {
+                        group = document.createElement('optgroup');
+                        group.label = def.modded
+                            ? feLocalize('worldmap.building.group.modded', 'Modded')
+                            : feLocalize('worldmap.building.group.vanilla', 'Base game');
+                        groupModded = def.modded;
+                        list.appendChild(group);
+                    }
+                    const option = document.createElement('option');
+                    option.value = def.id;
+                    option.textContent = def.id;
+                    group.appendChild(option);
+                }
+            }
+            list.value = editor.selectedId;
+
+            const def = editor.getDef(editor.selectedId);
+            if (editor.loadState === 'loading') {
+                detail.textContent = feLocalize('worldmap.building.loading', 'Loading building definitions...');
+            } else if (editor.loadState === 'failed') {
+                detail.textContent = editor.loadError || feLocalize('worldmap.building.loadfailed', 'Building definitions could not be loaded.');
+            } else if (def) {
+                const traits = [
+                    def.modded ? feLocalize('worldmap.building.trait.modded', 'modded') : feLocalize('worldmap.building.trait.vanilla', 'base game'),
+                    def.provinceBased ? feLocalize('worldmap.building.trait.province', 'province-based') : feLocalize('worldmap.building.trait.state', 'state-based'),
+                    ...(def.isPort ? [feLocalize('worldmap.building.trait.port', 'needs adjacent sea')] : []),
+                ].join(', ');
+                detail.textContent = feLocalize(
+                    'worldmap.building.detail', '{0} ({1}) · {2} placed · {3} total',
+                    def.id, traits, editor.countOf(def.id), editor.placedCount
+                );
+            } else {
+                detail.textContent = feLocalize('worldmap.building.nomatch', 'No building matches.');
+            }
+
+            const scopeNote = editor.showAll
+                ? feLocalize('worldmap.building.scope.all', 'Showing every building on the map (experimental).')
+                : feLocalize('worldmap.building.scope.selection', 'Showing buildings of the hovered or selected state, and of the selected country.');
+            hint.textContent = scopeNote + ' ' + (editor.mode === 'place'
+                ? feLocalize('worldmap.building.hint.place', 'Click a land province to place the chosen building. Ports face the nearest adjacent sea. [ and ] rotate, Shift+click erases, Esc closes.')
+                : feLocalize('worldmap.building.hint.erase', 'Click directly on a marker to remove it. P switches back to placing.'));
+            undo.disabled = !editor.canUndo();
+            redo.disabled = !editor.canRedo();
+            clearType.disabled = !def || editor.countOf(def.id) === 0;
+            retry.hidden = editor.saveState !== 'failed';
+            saveStatus.classList.toggle('failed', editor.saveState === 'failed');
+            switch (editor.saveState) {
+                case 'saving':
+                    saveStatus.textContent = feLocalize('worldmap.building.save.saving', 'Saving map/buildings.txt...');
+                    break;
+                case 'saved':
+                    saveStatus.textContent = feLocalize('worldmap.building.save.saved', 'All changes saved to map/buildings.txt.');
+                    break;
+                case 'dirty':
+                    saveStatus.textContent = feLocalize('worldmap.building.save.dirty', 'Unsaved changes...');
+                    break;
+                case 'failed':
+                    saveStatus.textContent = editor.saveError || feLocalize('worldmap.building.savefailed', 'Saving failed.');
+                    break;
+                default:
+                    saveStatus.textContent = feLocalize('worldmap.building.save.idle', 'Changes save automatically.');
+            }
+        };
+        this.addSubscription(editor.revision$.subscribe(sync));
+        this.addSubscription(editor.active$.subscribe(sync));
+    }
 
     private loadVictoryPointRenameModal() {
         const modal = document.getElementById('vp-rename-modal') as HTMLDivElement | null;
@@ -1922,6 +2311,130 @@ export class TopBar extends Subscriber {
     /**
      * Wire the floating paintbrush confirmation panel.
      */
+    /** Image to trace while painting. Drawn at native resolution from the map origin. */
+    public readonly referenceImage$ = new BehaviorSubject<HTMLImageElement | undefined>(undefined);
+    public readonly referenceMode$ = new BehaviorSubject<'over' | 'under'>('over');
+    public readonly referenceOpacity$ = new BehaviorSubject<number>(0.5);
+    public readonly referenceMapOpacity$ = new BehaviorSubject<number>(1);
+    public readonly referenceVisible$ = new BehaviorSubject<boolean>(true);
+
+    private loadReferenceImageControls() {
+        const loadBtn = document.getElementById('paintbrush-reference-load') as HTMLButtonElement | null;
+        const nameEl = document.getElementById('paintbrush-reference-name');
+        const visibleBtn = document.getElementById('paintbrush-reference-visible') as HTMLButtonElement | null;
+        const clearBtn = document.getElementById('paintbrush-reference-clear') as HTMLButtonElement | null;
+        const options = document.getElementById('paintbrush-reference-options') as HTMLDivElement | null;
+        const modeSelect = document.getElementById('paintbrush-reference-mode') as HTMLSelectElement | null;
+        const opacityInput = document.getElementById('paintbrush-reference-opacity') as HTMLInputElement | null;
+        const mapRow = document.getElementById('paintbrush-reference-map-row') as HTMLDivElement | null;
+        const mapOpacityInput = document.getElementById('paintbrush-reference-map-opacity') as HTMLInputElement | null;
+        const errorEl = document.getElementById('paintbrush-reference-error') as HTMLDivElement | null;
+        if (!mapRow || !mapOpacityInput || !loadBtn || !nameEl || !visibleBtn || !clearBtn || !options || !modeSelect || !opacityInput || !errorEl) {
+            return;
+        }
+
+        const setSlider = (input: HTMLInputElement, subject: BehaviorSubject<number>, value: number) => {
+            input.value = String(Math.round(value * 100));
+            subject.next(value);
+        };
+        const toolbarBtn = document.getElementById('toggle-reference') as HTMLButtonElement | null;
+        const panel = document.getElementById('reference-panel') as HTMLDivElement | null;
+        const defaultLabel = nameEl.textContent ?? '';
+        const showError = (text: string | undefined) => {
+            errorEl.textContent = text ?? '';
+            errorEl.hidden = !text;
+        };
+        const syncControls = () => {
+            const loaded = this.referenceImage$.value !== undefined;
+            toolbarBtn?.setAttribute('aria-pressed', String(!!panel && !panel.hidden));
+            visibleBtn.hidden = !loaded;
+            clearBtn.hidden = !loaded;
+            options.hidden = !loaded;
+            mapRow.hidden = !loaded;
+            visibleBtn.setAttribute('aria-pressed', String(this.referenceVisible$.value));
+            visibleBtn.firstElementChild?.setAttribute('class', `codicon codicon-eye${this.referenceVisible$.value ? '' : '-closed'}`);
+        };
+
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message.command !== 'referenceimage') {
+                return;
+            }
+            if (message.error) {
+                showError(message.error);
+                return;
+            }
+            if (!message.dataUri) {
+                return;
+            }
+            const image = new Image();
+            image.onload = () => {
+                showError(undefined);
+                nameEl.textContent = `${message.name ?? defaultLabel} (${image.naturalWidth}x${image.naturalHeight})`;
+                this.referenceVisible$.next(true);
+                this.referenceImage$.next(image);
+                if (panel) {
+                    panel.hidden = false;
+                }
+                syncControls();
+            };
+            image.onerror = () => showError(feLocalize('worldmap.reference.decodefailed', 'This image could not be decoded.'));
+            image.src = message.dataUri;
+        }));
+        if (toolbarBtn && panel) {
+            this.addSubscription(fromEvent(toolbarBtn, 'click').subscribe(() => {
+                if (this.referenceImage$.value === undefined) {
+                    vscode.postMessage<WorldMapMessage>({ command: 'requestreferenceimage' } as WorldMapMessage);
+                    return;
+                }
+                panel.hidden = !panel.hidden;
+                syncControls();
+            }));
+        }
+        const closePanel = () => {
+            if (panel) {
+                panel.hidden = true;
+                syncControls();
+            }
+        };
+        const closeBtn = document.getElementById('reference-panel-close');
+        if (closeBtn) {
+            this.addSubscription(fromEvent(closeBtn, 'click').subscribe(closePanel));
+        }
+        this.addSubscription(fromEvent<KeyboardEvent>(document, 'keydown').subscribe(e => {
+            if (e.key === 'Escape' && panel && !panel.hidden && !(e.target instanceof HTMLInputElement && e.target.type === 'text')) {
+                closePanel();
+            }
+        }));
+        this.addSubscription(fromEvent(loadBtn, 'click').subscribe(() => {
+            vscode.postMessage<WorldMapMessage>({ command: 'requestreferenceimage' } as WorldMapMessage);
+        }));
+        this.addSubscription(fromEvent(visibleBtn, 'click').subscribe(() => {
+            this.referenceVisible$.next(!this.referenceVisible$.value);
+            syncControls();
+        }));
+        this.addSubscription(fromEvent(clearBtn, 'click').subscribe(() => {
+            this.referenceImage$.next(undefined);
+            nameEl.textContent = defaultLabel;
+            showError(undefined);
+            syncControls();
+        }));
+        this.addSubscription(fromEvent(modeSelect, 'change').subscribe(() => {
+            const under = modeSelect.value === 'under';
+            this.referenceMode$.next(under ? 'under' : 'over');
+            // Sensible starting points: trace beneath a half-faded map, or over a solid one.
+            setSlider(opacityInput, this.referenceOpacity$, under ? 1 : 0.5);
+            setSlider(mapOpacityInput, this.referenceMapOpacity$, under ? 0.5 : 1);
+        }));
+        this.addSubscription(fromEvent(mapOpacityInput, 'input').subscribe(() => {
+            this.referenceMapOpacity$.next(Math.min(1, Math.max(0, Number(mapOpacityInput.value) / 100)));
+        }));
+        this.addSubscription(fromEvent(opacityInput, 'input').subscribe(() => {
+            this.referenceOpacity$.next(Math.min(1, Math.max(0.05, Number(opacityInput.value) / 100)));
+        }));
+        syncControls();
+    }
+
     private loadPaintbrushPanel() {
         const panel = document.getElementById('paintbrush-panel');
         if (!panel) return;
@@ -2705,6 +3218,144 @@ export class TopBar extends Subscriber {
         }
     }
 
+    private mergeRegionsMode: 'single' | 'bulk' = 'single';
+
+    private regionLabel(id: number): string {
+        const region = this.loader.worldMap.getStrategicRegionById(id);
+        return region?.localisedName ? `${region.localisedName} (${id})` : `${region?.name ?? ''} (${id})`;
+    }
+
+    /** Region ids of the bulk scope, ascending. */
+    private regionsInMergeScope(scope: string): number[] {
+        const ids: number[] = [];
+        this.loader.worldMap.forEachStrategicRegion(region => {
+            if (region.provinces.length === 0) return;
+            const ocean = this.loader.worldMap.isOceanStrategicRegion(region);
+            if (scope === 'all' || (scope === 'ocean' ? ocean : !ocean)) ids.push(region.id);
+        });
+        return ids.sort((a, b) => a - b);
+    }
+
+    private fillRegionSelect(select: HTMLSelectElement, ids: number[], selected?: number) {
+        select.replaceChildren();
+        for (const id of ids) {
+            const option = document.createElement('option');
+            option.value = String(id);
+            option.textContent = this.regionLabel(id);
+            option.selected = id === selected;
+            select.appendChild(option);
+        }
+    }
+
+    private refreshMergeRegionsModal() {
+        const scope = document.getElementById('merge-regions-scope') as HTMLSelectElement | null;
+        const target = document.getElementById('merge-regions-target') as HTMLSelectElement | null;
+        const source = document.getElementById('merge-regions-source') as HTMLSelectElement | null;
+        const summary = document.getElementById('merge-regions-summary');
+        const error = document.getElementById('merge-regions-error');
+        if (!scope || !target || !source) return;
+        if (error) error.textContent = '';
+        if (this.mergeRegionsMode === 'bulk') {
+            const ids = this.regionsInMergeScope(scope.value);
+            this.fillRegionSelect(target, ids, ids[0]);
+            if (summary) summary.textContent = feLocalize(
+                'worldmap.region.merge.bulksummary',
+                '{0} regions will be merged into the surviving region. Weather and other custom content in the merged regions is dropped.',
+                ids.length
+            );
+            return;
+        }
+        const selectedId = this.selectedStrategicRegionId$.value;
+        const selected = this.loader.worldMap.getStrategicRegionById(selectedId);
+        if (!selected) return;
+        const ocean = this.loader.worldMap.isOceanStrategicRegion(selected);
+        const ids = this.regionsInMergeScope('all').filter(id => {
+            const region = this.loader.worldMap.getStrategicRegionById(id);
+            return !!region && this.loader.worldMap.isOceanStrategicRegion(region) === ocean;
+        });
+        this.fillRegionSelect(target, [selected.id], selected.id);
+        this.fillRegionSelect(source, ids.filter(id => id !== selected.id));
+        if (summary) summary.textContent = feLocalize(
+            'worldmap.region.merge.singlesummary',
+            'Moves every province of the chosen region into the selected region and removes the chosen region.'
+        );
+    }
+
+    private loadMergeRegionsModal() {
+        const apply = document.getElementById('merge-regions-apply') as HTMLButtonElement | null;
+        const cancel = document.getElementById('merge-regions-cancel') as HTMLButtonElement | null;
+        const scope = document.getElementById('merge-regions-scope') as HTMLSelectElement | null;
+        const target = document.getElementById('merge-regions-target') as HTMLSelectElement | null;
+        const source = document.getElementById('merge-regions-source') as HTMLSelectElement | null;
+        if (!apply || !cancel || !scope || !target || !source) return;
+        this.addSubscription(fromEvent(cancel, 'click').subscribe(() => this.hideMergeRegionsModal()));
+        this.addSubscription(fromEvent(scope, 'change').subscribe(() => this.refreshMergeRegionsModal()));
+        this.addSubscription(fromEvent(apply, 'click').subscribe(() => {
+            const error = document.getElementById('merge-regions-error');
+            const targetId = Number.parseInt(target.value, 10);
+            let sourceIds: number[];
+            if (this.mergeRegionsMode === 'bulk') {
+                sourceIds = this.regionsInMergeScope(scope.value).filter(id => id !== targetId);
+            } else {
+                const sourceId = Number.parseInt(source.value, 10);
+                sourceIds = Number.isInteger(sourceId) ? [sourceId] : [];
+            }
+            if (!Number.isInteger(targetId) || sourceIds.length === 0) {
+                if (error) error.textContent = feLocalize('worldmap.region.merge.nothing', 'There are no other regions to merge.');
+                return;
+            }
+            if (this.mergeRegionsMode === 'bulk' && !window.confirm(feLocalize(
+                'worldmap.region.merge.bulkconfirm',
+                'Merge {0} strategic regions into region {1}? This can be undone with Ctrl+Z.',
+                sourceIds.length,
+                targetId
+            ))) return;
+            const before = this.loader.worldMap.snapshotStrategicRegions([targetId, ...sourceIds]);
+            const result = this.loader.worldMap.mergeStrategicRegions(targetId, sourceIds);
+            if (!result) {
+                if (error) error.textContent = feLocalize('worldmap.region.merge.invalid', 'One or more regions no longer exist.');
+                return;
+            }
+            const after = this.loader.worldMap.snapshotStrategicRegions(result.changedRegionIds);
+            this.recordMapEdit(before, after, 'strategicregion');
+            this.persistStrategicRegions(result.changedRegionIds, result.deletedFiles, result.deletedRegions);
+            this.selectedStrategicRegionId$.next(targetId);
+            this.mapMutation$.next(this.mapMutation$.value + 1);
+            this.hideMergeRegionsModal();
+            this.showActionStatus(feLocalize(
+                'worldmap.region.merge.done',
+                'Merged {0} strategic regions into region {1}.',
+                sourceIds.length,
+                targetId
+            ));
+        }));
+    }
+
+    private showMergeRegionsModal(mode: 'single' | 'bulk') {
+        const modal = document.getElementById('merge-regions-modal') as HTMLDivElement | null;
+        const scopeRow = document.getElementById('merge-regions-scope-row');
+        const sourceRow = document.getElementById('merge-regions-source-row');
+        if (!modal || !scopeRow || !sourceRow) return;
+        this.mergeRegionsMode = mode;
+        scopeRow.hidden = mode !== 'bulk';
+        sourceRow.hidden = mode !== 'single';
+        const title = document.getElementById('merge-regions-title');
+        if (title) title.textContent = mode === 'bulk'
+            ? feLocalize('worldmap.region.merge.bulktitle', 'Bulk Merge Strategic Regions')
+            : feLocalize('worldmap.region.merge.title', 'Merge Strategic Regions');
+        this.refreshMergeRegionsModal();
+        modal.hidden = false;
+        modal.style.display = 'flex';
+    }
+
+    private hideMergeRegionsModal() {
+        const modal = document.getElementById('merge-regions-modal');
+        if (modal) {
+            modal.hidden = true;
+            modal.style.display = 'none';
+        }
+    }
+
     private toggleAutoCoreTransfers() {
         this.autoCoreTransfers = !this.autoCoreTransfers;
         vscode.postMessage<WorldMapMessage>({ command: 'setautocoretransfers', value: this.autoCoreTransfers });
@@ -3464,17 +4115,142 @@ export class TopBar extends Subscriber {
         return unionZones(zones);
     }
 
-    private exportSelectedRegion(includeBorder: boolean) {
-        this.exportIncludeBorder = includeBorder;
-
-        const bbox = this.getSelectedRegionBoundingBox();
+    private getExportBoundingBox(settings: ExportSettings): Zone | undefined {
+        const worldMap = this.loader.worldMap;
+        let bbox: Zone | undefined;
+        if (settings.scope === 'map') {
+            bbox = worldMap ? { x: 0, y: 0, w: worldMap.width, h: worldMap.height } : undefined;
+        } else {
+            bbox = this.getSelectedRegionBoundingBox();
+        }
         if (!bbox || bbox.w <= 0 || bbox.h <= 0) {
-            this.showActionStatus(feLocalize('worldmap.action.export.noselection', 'Select a province, state, strategic region, or supply area first.'), 'warn');
+            return undefined;
+        }
+        const pad = Math.max(0, Math.round(settings.padding));
+        return { x: bbox.x - pad, y: bbox.y - pad, w: bbox.w + pad * 2, h: bbox.h + pad * 2 };
+    }
+
+    private openExportDialog() {
+        const modal = document.getElementById('export-modal') as HTMLDivElement | null;
+        if (!modal) {
             return;
         }
+        const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+        const scope = get<HTMLSelectElement>('export-scope');
+        const scale = get<HTMLInputElement>('export-scale');
+        const padding = get<HTMLInputElement>('export-padding');
+        const format = get<HTMLSelectElement>('export-format');
+        const quality = get<HTMLInputElement>('export-quality');
+        const background = get<HTMLSelectElement>('export-background');
+        const backgroundColor = get<HTMLInputElement>('export-background-color');
+        const outline = get<HTMLInputElement>('export-outline');
+        const outlineColor = get<HTMLInputElement>('export-outline-color');
+        const outlineWidth = get<HTMLInputElement>('export-outline-width');
+        const info = get<HTMLDivElement>('export-info');
+        const error = get<HTMLDivElement>('export-error');
+        const s = this.exportSettings;
+        if (!this.getSelectedRegionBoundingBox()) {
+            s.scope = 'map';
+        }
+        scope.value = s.scope; scale.value = String(s.scale); padding.value = String(s.padding);
+        format.value = s.format; quality.value = String(s.quality);
+        background.value = s.background; backgroundColor.value = s.backgroundColor;
+        outline.checked = s.outline; outlineColor.value = s.outlineColor; outlineWidth.value = String(s.outlineWidth);
+        (scope.querySelector('option[value="region"]') as HTMLOptionElement).disabled = !this.getSelectedRegionBoundingBox();
 
-        this.pendingExport = { bbox, includeBorder };
-        vscode.postMessage({ command: 'requestexportmap' });
+        const read = (): ExportSettings => {
+            const num = (el: HTMLInputElement, min: number, max: number, fallback: number) => {
+                const v = parseFloat(el.value);
+                return isNaN(v) ? fallback : Math.min(max, Math.max(min, v));
+            };
+            return {
+                scope: scope.value as ExportSettings['scope'],
+                scale: num(scale, 0.1, 16, 1),
+                padding: Math.round(num(padding, 0, 2000, 0)),
+                format: format.value as ExportSettings['format'],
+                quality: Math.round(num(quality, 1, 100, 92)),
+                background: background.value as ExportSettings['background'],
+                backgroundColor: backgroundColor.value,
+                outline: outline.checked,
+                outlineColor: outlineColor.value,
+                outlineWidth: Math.round(num(outlineWidth, 1, 64, 3)),
+            };
+        };
+        const maxSide = 16384;
+        const maxPixels = 200_000_000;
+        const refresh = () => {
+            const cur = read();
+            // JPEG has no alpha, so it always needs a solid background.
+            const jpeg = cur.format === 'jpeg';
+            background.disabled = jpeg;
+            if (jpeg) { background.value = 'color'; cur.background = 'color'; }
+            const colorHidden = cur.background !== 'color';
+            backgroundColor.hidden = colorHidden;
+            (backgroundColor.previousElementSibling as HTMLElement).hidden = colorHidden;
+            quality.disabled = cur.format === 'png';
+            const outlineOff = cur.scope === 'map' || !cur.outline;
+            outline.disabled = cur.scope === 'map';
+            outlineColor.disabled = outlineWidth.disabled = outlineOff;
+            const bbox = this.getExportBoundingBox(cur);
+            error.textContent = '';
+            if (!bbox) {
+                info.textContent = '';
+                return undefined;
+            }
+            const w = Math.max(1, Math.round(bbox.w * cur.scale));
+            const h = Math.max(1, Math.round(bbox.h * cur.scale));
+            info.textContent = w + ' x ' + h + ' px';
+            if (w > maxSide || h > maxSide || w * h > maxPixels) {
+                error.textContent = feLocalize('worldmap.exportdialog.toolarge', 'Image is too large; lower the scale.');
+                return undefined;
+            }
+            return { cur, bbox };
+        };
+        const onInput = () => { refresh(); };
+        const fields = [scope, scale, padding, format, quality, background, backgroundColor, outline, outlineColor, outlineWidth];
+        for (const f of fields) {
+            f.addEventListener('input', onInput);
+            f.addEventListener('change', onInput);
+        }
+        const confirm = get<HTMLButtonElement>('export-confirm');
+        const cancel = get<HTMLButtonElement>('export-cancel');
+        const close = () => {
+            for (const f of fields) {
+                f.removeEventListener('input', onInput);
+                f.removeEventListener('change', onInput);
+            }
+            confirm.removeEventListener('click', onConfirm);
+            cancel.removeEventListener('click', close);
+            modal.removeEventListener('keydown', onKey);
+            modal.removeEventListener('click', onBackdrop);
+            modal.hidden = true;
+            modal.style.display = '';
+        };
+        const onConfirm = () => {
+            const result = refresh();
+            if (!result) {
+                return;
+            }
+            this.exportSettings = result.cur;
+            setState({ exportSettings: result.cur });
+            this.pendingExport = { bbox: result.bbox, settings: result.cur };
+            close();
+            vscode.postMessage({ command: 'requestexportmap', format: result.cur.format });
+        };
+        const onKey = (e: KeyboardEvent) => {
+            e.stopPropagation();
+            if (e.key === 'Escape') { close(); }
+            else if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'SELECT') { onConfirm(); }
+        };
+        const onBackdrop = (e: MouseEvent) => { if (e.target === modal) { close(); } };
+        modal.addEventListener('click', onBackdrop);
+        confirm.addEventListener('click', onConfirm);
+        cancel.addEventListener('click', close);
+        modal.addEventListener('keydown', onKey);
+        modal.hidden = false;
+        modal.style.display = 'flex';
+        refresh();
+        scale.focus();
     }
 
     private initExportMapMessageListener() {
@@ -3485,7 +4261,6 @@ export class TopBar extends Subscriber {
             }
 
             const worldMap = this.loader.worldMap;
-            const exportImageScale = message.scale ?? 1;
             const pendingExport = this.pendingExport;
             this.pendingExport = undefined;
             if (!worldMap || !pendingExport) {
@@ -3493,25 +4268,41 @@ export class TopBar extends Subscriber {
             }
 
             sendEvent('worldmap.export');
-            const { bbox, includeBorder } = pendingExport;
-            const canvas = document.createElement("canvas");
-            canvas.width = Math.max(1, Math.round(bbox.w * exportImageScale));
-            canvas.height = Math.max(1, Math.round(bbox.h * exportImageScale));
-            const viewPoint = new ViewPoint(canvas, this.loader, 0, { x: bbox.x, y: bbox.y, scale: exportImageScale });
-            Renderer.renderMapImpl(canvas, this, viewPoint, worldMap, { preciseEdge: true, overwriteRenderPrecision: 1 });
+            const { bbox, settings } = pendingExport;
+            const scale = settings.scale;
+            const width = Math.max(1, Math.round(bbox.w * scale));
+            const height = Math.max(1, Math.round(bbox.h * scale));
+            const mapCanvas = document.createElement("canvas");
+            mapCanvas.width = width;
+            mapCanvas.height = height;
+            const viewPoint = new ViewPoint(mapCanvas, this.loader, 0, { x: bbox.x, y: bbox.y, scale });
+            Renderer.renderMapImpl(mapCanvas, this, viewPoint, worldMap, { preciseEdge: true, overwriteRenderPrecision: 1 });
 
-            if (includeBorder) {
-                const ctx = canvas.getContext('2d');
-                if (ctx) {
-                    ctx.save();
-                    ctx.strokeStyle = '#ff3b30';
-                    ctx.lineWidth = 3;
-                    ctx.strokeRect(1.5, 1.5, canvas.width - 3, canvas.height - 3);
-                    ctx.restore();
-                }
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+                return;
+            }
+            if (settings.background === 'color' || settings.format === 'jpeg') {
+                ctx.fillStyle = settings.backgroundColor;
+                ctx.fillRect(0, 0, width, height);
+            }
+            ctx.drawImage(mapCanvas, 0, 0);
+
+            if (settings.outline && settings.scope === 'region') {
+                const lw = settings.outlineWidth;
+                ctx.save();
+                ctx.strokeStyle = settings.outlineColor;
+                ctx.lineWidth = lw;
+                ctx.strokeRect(lw / 2, lw / 2, width - lw, height - lw);
+                ctx.restore();
             }
 
-            vscode.postMessage({ command: 'exportmap', dataUrl: canvas.toDataURL() });
+            const mime = 'image/' + settings.format;
+            const dataUrl = settings.format === 'png' ? canvas.toDataURL(mime) : canvas.toDataURL(mime, settings.quality / 100);
+            vscode.postMessage({ command: 'exportmap', dataUrl });
         }));
     }
 
@@ -3652,23 +4443,8 @@ export class TopBar extends Subscriber {
                 submenu: this.buildSelectAllMenuItems(),
             },
             {
-                label: feLocalize('worldmap.contextmenu.export', 'Export as Image (Selected Region)'),
-                disabled: !hasRegion,
-                action: () => this.exportSelectedRegion(this.exportIncludeBorder),
-                submenu: [
-                    {
-                        label: feLocalize('worldmap.contextmenu.export.include', 'Include region outline'),
-                        checked: this.exportIncludeBorder,
-                        disabled: !hasRegion,
-                        action: () => this.exportSelectedRegion(true),
-                    },
-                    {
-                        label: feLocalize('worldmap.contextmenu.export.exclude', 'Exclude region outline'),
-                        checked: !this.exportIncludeBorder,
-                        disabled: !hasRegion,
-                        action: () => this.exportSelectedRegion(false),
-                    },
-                ],
+                label: feLocalize('worldmap.contextmenu.export', 'Export as Image...'),
+                action: () => this.openExportDialog(),
             },
             {
                 label: feLocalize('worldmap.contextmenu.warnings', 'Toggle Warnings'),
@@ -3920,6 +4696,15 @@ export class TopBar extends Subscriber {
                         action: () => this.assignStatesToStrategicRegion(),
                     },
                     {
+                        label: feLocalize('worldmap.contextmenu.statetools.mergeregions', 'Merge Strategic Regions'),
+                        disabled: selectedStrategicRegionId === undefined,
+                        action: () => this.showMergeRegionsModal('single'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.statetools.bulkmergeregions', 'Bulk Merge Strategic Regions'),
+                        action: () => this.showMergeRegionsModal('bulk'),
+                    },
+                    {
                         label: feLocalize('worldmap.contextmenu.statetools.empty', 'Remove All Provinces from Selected State(s)'),
                         disabled: selectedStateIds.size === 0,
                         action: () => this.confirmRemoveAllProvincesFromSelectedStates(),
@@ -3961,7 +4746,7 @@ export class TopBar extends Subscriber {
         ];
         const describeAction = (label: string): string => {
             const value = label.toLowerCase();
-            if (value.includes('export')) return 'Save the selected map rectangle as an image; use the submenu to include or omit its outline.';
+            if (value.includes('export')) return 'Open the export dialog: area, scale, padding, format, quality, background and outline.';
             if (value.includes('warning')) return 'Show, hide, filter, or automatically repair map validation warnings.';
             if (value.includes('apply per continent')) return 'Split the selected-area operation by continent instead of treating the selection as one group.';
             if (value.includes('railway')) return 'Remove railway routes that touch the current selected area.';
@@ -4121,6 +4906,9 @@ export class TopBar extends Subscriber {
                 const { x: mapX, y: mapY } = position;
 
                 this.hoverMapX$.next(mapX);
+                if (this.buildingEditor.active$.value) {
+                    this.buildingEditor.setHover(mapX, mapY);
+                }
                 this.hoverMapY$.next(mapY);
 
                 if (
@@ -4223,6 +5011,8 @@ export class TopBar extends Subscriber {
                         return;
                     }
                     case 'transferWand':
+                    case 'railway':
+                    case 'building':
                         e.preventDefault();
                         return;
                     case 'none':
@@ -4343,6 +5133,30 @@ export class TopBar extends Subscriber {
             switch (this.activeTool$.value) {
                 case 'paint':
                     return;
+                case 'railway': {
+                    const position = this.eventToMapPosition(canvas, e);
+                    if (position) {
+                        this.railwayEditor.handleClick(
+                            position.x,
+                            position.y,
+                            this.loader.worldMap.getProvinceByPosition(position.x, position.y)?.id,
+                            e
+                        );
+                    }
+                    return;
+                }
+                case 'building': {
+                    const position = this.eventToMapPosition(canvas, e);
+                    if (position) {
+                        this.buildingEditor.handleClick(
+                            position.x,
+                            position.y,
+                            this.loader.worldMap.getProvinceByPosition(position.x, position.y)?.id,
+                            e
+                        );
+                    }
+                    return;
+                }
                 case 'transferWand':
                     if (this.viewMode$.value === 'province' || this.viewMode$.value === 'state') {
                         e.preventDefault();
@@ -4411,6 +5225,9 @@ export class TopBar extends Subscriber {
 
         this.addSubscription(fromEvent(canvas, 'dblclick').subscribe(e => {
             e.stopPropagation();
+            if (this.activeTool$.value === 'railway' || this.activeTool$.value === 'building') {
+                return;
+            }
             if (this.viewMode$.value === 'province') {
                 const prov = this.hoverProvinceId$.value;
                 if (prov !== undefined) {
@@ -4443,6 +5260,28 @@ export class TopBar extends Subscriber {
             }
 
             const key = e.key.toLowerCase();
+
+            if (this.buildingEditor.active$.value && this.buildingEditor.handleKey(e)) {
+                e.preventDefault();
+                return;
+            }
+
+            if (e.ctrlKey && e.altKey && !e.shiftKey && key === 'b') {
+                e.preventDefault();
+                this.buildingEditor.toggle();
+                return;
+            }
+
+            if (this.railwayEditor.active$.value && this.railwayEditor.handleKey(e)) {
+                e.preventDefault();
+                return;
+            }
+
+            if (e.ctrlKey && e.altKey && !e.shiftKey && key === 'r') {
+                e.preventDefault();
+                this.railwayEditor.toggle();
+                return;
+            }
 
             if (this.matchesShortcut(e, this.keybinds.mapUndo)) {
                 e.preventDefault();

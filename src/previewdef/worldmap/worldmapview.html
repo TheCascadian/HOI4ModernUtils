@@ -98,6 +98,24 @@
                 </button>
             </div>
 
+            <div class="group" data-overflow-priority="2">
+                <button id="toggle-reference" type="button" aria-pressed="false" title="%worldmap.reference.toolbar.tooltip|Reference image for tracing: load an image, then show its controls%">
+                    <i class="codicon codicon-file-media"></i>
+                </button>
+            </div>
+
+            <div class="group" data-overflow-priority="2">
+                <button id="toggle-railway" type="button" aria-pressed="false" title="%worldmap.railway.toolbar.tooltip|Railway editor: draw, extend, reroute and manage railways (Ctrl+Alt+R)%">
+                    <i class="codicon codicon-milestone"></i>
+                </button>
+            </div>
+
+            <div class="group" data-overflow-priority="2">
+                <button id="toggle-building" type="button" aria-pressed="false" title="%worldmap.building.toolbar.tooltip|Building placement: plop vanilla and modded buildings onto the map (Ctrl+Alt+B)%">
+                    <i class="codicon codicon-home"></i>
+                </button>
+            </div>
+
             <div class="group interface-tools" data-overflow-priority="1">
                 <button id="interface-tools-button" type="button" aria-haspopup="menu" aria-controls="interface-tools-menu" aria-expanded="false" title="Interface and performance options (Ctrl+Alt+I)">
                     <i class="codicon codicon-settings-gear"></i>
@@ -147,6 +165,13 @@
                         <span><strong>%worldmap.topbar.optimizations.coarseprovinces|Coarse provinces%</strong><small>%worldmap.topbar.optimizations.coarseprovinces.detail|Most aggressive province simplification.%</small></span>
                     </label>
                 </div>
+            </div>
+
+            <div class="group building-display-options">
+                <label class="render-optimization-option">
+                    <input id="building-showall-toggle" type="checkbox"/>
+                    <span><strong>%worldmap.building.showall|Show all buildings (experimental)%</strong><small>%worldmap.building.showall.detail|Draw the buildings of the whole map instead of the selected state or country. Slow when zoomed out.%</small></span>
+                </label>
             </div>
 
             <div class="group accessibility-options">
@@ -281,6 +306,108 @@
     <div id="action-status" class="hidden" role="status" aria-live="polite"></div>
     <canvas id="main-canvas" tabindex="0" role="application" aria-label="%worldmap.canvas.label|Interactive Hearts of Iron IV world map. Use Shift+F10 for map tools.%" aria-describedby="map-accessible-status"></canvas>
     <div id="map-accessible-status" class="screen-reader-only" role="status" aria-live="polite"></div>
+    <div id="railway-panel" class="worldmap-modal-card" role="region" aria-label="%worldmap.railway.panel.title|Railway editor%" hidden>
+        <div class="worldmap-modal-title railway-panel-heading"><span>%worldmap.railway.panel.title|Railway editor%</span><button id="railway-panel-close" type="button" title="%worldmap.railway.close|Close the railway editor (Esc)%"><i class="codicon codicon-close"></i></button></div>
+        <div class="railway-panel-body">
+            <div class="railway-row">
+                <button id="railway-mode-select" type="button" class="railway-wide" aria-pressed="true" title="%worldmap.railway.mode.select.tooltip|Pick and modify existing railways (S)%"><i class="codicon codicon-inspect"></i> %worldmap.railway.mode.select|Select%</button>
+                <button id="railway-mode-draw" type="button" class="railway-wide" aria-pressed="false" title="%worldmap.railway.mode.draw.tooltip|Draw a new railway, or extend the selected one (D)%"><i class="codicon codicon-edit"></i> %worldmap.railway.mode.draw|Draw%</button>
+            </div>
+            <div class="railway-row">
+                <label for="railway-level">%worldmap.railway.level|Level%</label>
+                <select id="railway-level" title="%worldmap.railway.level.tooltip|Level of the selected railway, and of new ones (keys 1-5)%">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3">3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                </select>
+                <label for="railway-extend">%worldmap.railway.extend|Extend%</label>
+                <select id="railway-extend" title="%worldmap.railway.extend.tooltip|Which tip of the selected railway Draw adds to (Tab)%">
+                    <option value="end">%worldmap.railway.extend.end|End%</option>
+                    <option value="start">%worldmap.railway.extend.start|Start%</option>
+                </select>
+            </div>
+            <div class="railway-row">
+                <input id="railway-autoconnect" type="checkbox" checked/>
+                <label for="railway-autoconnect" title="%worldmap.railway.autoconnect.tooltip|Fill gaps between clicked provinces along the shortest land route%">%worldmap.railway.autoconnect|Auto-connect gaps%</label>
+            </div>
+            <div id="railway-info" class="railway-info"></div>
+            <div class="railway-row">
+                <button id="railway-prev" type="button" title="%worldmap.railway.prev.tooltip|Previous railway ([)%"><i class="codicon codicon-arrow-left"></i></button>
+                <button id="railway-next" type="button" title="%worldmap.railway.next.tooltip|Next railway (])%"><i class="codicon codicon-arrow-right"></i></button>
+                <button id="railway-problem" type="button" class="railway-wide" title="%worldmap.railway.problem.tooltip|Jump to the next railway with a disconnected segment%"><i class="codicon codicon-warning"></i> %worldmap.railway.problem|Next problem%</button>
+            </div>
+            <div class="railway-row">
+                <button id="railway-reverse" type="button" class="railway-wide" title="%worldmap.railway.reverse.tooltip|Reverse the direction of the selected railway (R)%"><i class="codicon codicon-arrow-swap"></i> %worldmap.railway.reverse|Reverse%</button>
+                <button id="railway-split" type="button" class="railway-wide" title="%worldmap.railway.split.tooltip|Split the selected railway at the selected middle node (X)%"><i class="codicon codicon-split-horizontal"></i> %worldmap.railway.split|Split%</button>
+                <button id="railway-delete" type="button" class="railway-wide" title="%worldmap.railway.delete.tooltip|Delete the selected railway (Delete)%"><i class="codicon codicon-trash"></i> %worldmap.railway.delete|Delete%</button>
+            </div>
+            <div class="railway-row">
+                <button id="railway-undo" type="button" class="railway-wide" title="%worldmap.railway.undo.tooltip|Undo (Ctrl+Z)%"><i class="codicon codicon-discard"></i> %worldmap.railway.undo|Undo%</button>
+                <button id="railway-redo" type="button" class="railway-wide" title="%worldmap.railway.redo.tooltip|Redo (Ctrl+Y)%"><i class="codicon codicon-redo"></i> %worldmap.railway.redo|Redo%</button>
+            </div>
+            <div id="railway-hint" class="railway-hint"></div>
+            <div class="railway-row railway-save-row">
+                <span id="railway-save-status" class="railway-save-status" role="status"></span>
+                <button id="railway-retry" type="button" class="railway-wide" hidden>%worldmap.railway.retry|Retry save%</button>
+            </div>
+        </div>
+    </div>
+    <div id="building-panel" class="worldmap-modal-card" role="region" aria-label="%worldmap.building.panel.title|Building placement%" hidden>
+        <div class="worldmap-modal-title building-panel-heading"><span>%worldmap.building.panel.title|Building placement%</span><button id="building-panel-close" type="button" title="%worldmap.building.close|Close building placement (Esc)%"><i class="codicon codicon-close"></i></button></div>
+        <div class="building-panel-body">
+            <div class="building-row">
+                <button id="building-mode-place" type="button" class="building-wide" aria-pressed="true" title="%worldmap.building.mode.place.tooltip|Click the map to place the chosen building (P). Shift+click erases.%"><i class="codicon codicon-add"></i> %worldmap.building.mode.place|Place%</button>
+                <button id="building-mode-erase" type="button" class="building-wide" aria-pressed="false" title="%worldmap.building.mode.erase.tooltip|Click a placed building to remove it (X)%"><i class="codicon codicon-trash"></i> %worldmap.building.mode.erase|Erase%</button>
+            </div>
+            <div class="building-row">
+                <input id="building-filter" type="search" placeholder="%worldmap.building.filter|Search buildings...%" aria-label="%worldmap.building.filter|Search buildings...%"/>
+            </div>
+            <select id="building-list" size="8" aria-label="%worldmap.building.list|Building type%"></select>
+            <div id="building-detail" class="building-info"></div>
+            <div class="building-row">
+                <label for="building-height">%worldmap.building.height|Height%</label>
+                <input id="building-height" type="number" step="0.05" min="0" placeholder="%worldmap.building.height.auto|auto%" title="%worldmap.building.height.tooltip|Height (Y) of new buildings. Leave empty to match nearby buildings.%"/>
+                <button id="building-rotate-left" type="button" title="%worldmap.building.rotate.left|Rotate counterclockwise ([)%"><i class="codicon codicon-debug-reverse-continue"></i></button>
+                <span id="building-rotation" class="building-rotation"></span>
+                <button id="building-rotate-right" type="button" title="%worldmap.building.rotate.right|Rotate clockwise (])%"><i class="codicon codicon-debug-continue"></i></button>
+            </div>
+            <div class="building-row">
+                <button id="building-undo" type="button" class="building-wide" title="%worldmap.building.undo.tooltip|Undo (Ctrl+Z)%"><i class="codicon codicon-discard"></i> %worldmap.building.undo|Undo%</button>
+                <button id="building-redo" type="button" class="building-wide" title="%worldmap.building.redo.tooltip|Redo (Ctrl+Y)%"><i class="codicon codicon-redo"></i> %worldmap.building.redo|Redo%</button>
+                <button id="building-cleartype" type="button" class="building-wide" title="%worldmap.building.cleartype.tooltip|Remove every placed entry of the chosen building type%"><i class="codicon codicon-clear-all"></i> %worldmap.building.cleartype|Clear type%</button>
+            </div>
+            <div id="building-hint" class="building-hint"></div>
+            <div class="building-row building-save-row">
+                <span id="building-save-status" class="building-save-status" role="status"></span>
+                <button id="building-retry" type="button" class="building-wide" hidden>%worldmap.building.retry|Retry save%</button>
+            </div>
+        </div>
+    </div>
+    <div id="reference-panel" class="worldmap-modal-card" role="region" aria-label="%worldmap.reference.panel.title|Reference image%" hidden>
+        <div class="worldmap-modal-title reference-panel-heading"><span>%worldmap.reference.panel.title|Reference image%</span><button id="reference-panel-close" type="button" title="%worldmap.exportdialog.cancel|Close%"><i class="codicon codicon-close"></i></button></div>
+        <div class="reference-panel-body">
+            <div class="paintbrush-reference-row">
+                <button id="paintbrush-reference-load" type="button" title="%worldmap.reference.load.tooltip|Load an image to trace. It is drawn at full resolution, one image pixel per map pixel, from the map's top-left corner.%"><i class="codicon codicon-folder-opened"></i></button>
+                <span id="paintbrush-reference-name" class="reference-name">%worldmap.reference.load|Reference image...%</span>
+                <button id="paintbrush-reference-visible" type="button" aria-pressed="true" title="%worldmap.reference.visible.tooltip|Show or hide the reference image%" hidden><i class="codicon codicon-eye"></i></button>
+                <button id="paintbrush-reference-clear" type="button" title="%worldmap.reference.clear.tooltip|Remove the reference image%" hidden><i class="codicon codicon-trash"></i></button>
+            </div>
+            <div id="paintbrush-reference-options" class="paintbrush-reference-row" hidden>
+                <select id="paintbrush-reference-mode" title="%worldmap.reference.mode.tooltip|Draw the image above the map, or beneath the faded map%">
+                    <option value="over">%worldmap.reference.mode.over|Over map%</option>
+                    <option value="under">%worldmap.reference.mode.under|Under map%</option>
+                </select>
+                <input id="paintbrush-reference-opacity" type="range" min="5" max="100" step="5" value="50" title="%worldmap.reference.opacity.tooltip|Image opacity%" aria-label="%worldmap.reference.opacity.tooltip|Image opacity%"/>
+            </div>
+            <div id="paintbrush-reference-map-row" class="paintbrush-reference-row" hidden>
+                <label for="paintbrush-reference-map-opacity" title="%worldmap.reference.mapopacity.tooltip|Opacity of the map layer (provinces, borders, labels)%"><i class="codicon codicon-map"></i><span class="screen-reader-only">%worldmap.reference.mapopacity|Map opacity%</span></label>
+                <input id="paintbrush-reference-map-opacity" type="range" min="0" max="100" step="5" value="100" title="%worldmap.reference.mapopacity.tooltip|Opacity of the map layer (provinces, borders, labels)%"/>
+            </div>
+            <div id="paintbrush-reference-error" class="worldmap-modal-error" hidden></div>
+        </div>
+    </div>
     <div id="paintbrush-panel" class="worldmap-modal-card" role="region" aria-label="%worldmap.topbar.paintbrush.title|Paintbrush controls%" hidden>
         <div class="paintbrush-panel-heading">
             <div id="paintbrush-workflow-title" class="worldmap-modal-title">%worldmap.paintbrush.edit.title|Edit province boundary%</div>
@@ -402,6 +529,31 @@
             </div>
         </div>
     </div>
+    <div id="merge-regions-modal" class="worldmap-modal" hidden>
+        <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="merge-regions-title">
+            <div id="merge-regions-title" class="worldmap-modal-title">%worldmap.region.merge.title|Merge Strategic Regions%</div>
+            <div id="merge-regions-summary" class="worldmap-modal-summary"></div>
+            <div id="merge-regions-scope-row">
+                <label for="merge-regions-scope">%worldmap.region.merge.scope|Regions to merge%</label>
+                <select id="merge-regions-scope">
+                    <option value="land">%worldmap.region.merge.scope.land|Land regions only%</option>
+                    <option value="ocean">%worldmap.region.merge.scope.ocean|Ocean regions only%</option>
+                    <option value="all">%worldmap.region.merge.scope.all|All regions together as one%</option>
+                </select>
+            </div>
+            <label for="merge-regions-target">%worldmap.region.merge.target|Surviving region%</label>
+            <select id="merge-regions-target"></select>
+            <div id="merge-regions-source-row">
+                <label for="merge-regions-source">%worldmap.region.merge.source|Region to merge into it%</label>
+                <select id="merge-regions-source"></select>
+            </div>
+            <div id="merge-regions-error" class="worldmap-modal-error" role="alert"></div>
+            <div class="worldmap-modal-actions">
+                <button id="merge-regions-cancel">%worldmap.region.merge.cancel|Cancel%</button>
+                <button id="merge-regions-apply" class="primary">%worldmap.region.merge.apply|Merge Regions%</button>
+            </div>
+        </div>
+    </div>
     <div id="merge-states-modal" class="worldmap-modal" hidden>
         <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="merge-states-title">
             <div id="merge-states-title" class="worldmap-modal-title">%worldmap.state.merge.title|Merge Selected States%</div>
@@ -435,6 +587,49 @@
             <div id="ocean-readiness-summary" class="worldmap-modal-summary worldmap-modal-report"></div>
             <div class="worldmap-modal-actions">
                 <button id="ocean-readiness-close" class="primary">%worldmap.ocean.readiness.close|Close%</button>
+            </div>
+        </div>
+    </div>
+    <div id="export-modal" class="worldmap-modal" hidden>
+        <div class="worldmap-modal-card export-card" role="dialog" aria-modal="true" aria-labelledby="export-title">
+            <div id="export-title" class="worldmap-modal-title">%worldmap.exportdialog.title|Export image%</div>
+            <div class="export-grid">
+                <label for="export-scope">%worldmap.exportdialog.scope|Area%</label>
+                <select id="export-scope">
+                    <option value="region">%worldmap.exportdialog.scope.region|Selected region%</option>
+                    <option value="map">%worldmap.exportdialog.scope.map|Whole map%</option>
+                </select>
+                <label for="export-scale">%worldmap.exportdialog.scale|Scale (0.1 - 16)%</label>
+                <input id="export-scale" type="number" min="0.1" max="16" step="0.1" value="1"/>
+                <label for="export-padding">%worldmap.exportdialog.padding|Padding (map pixels)%</label>
+                <input id="export-padding" type="number" min="0" max="2000" step="1" value="0"/>
+                <label for="export-format">%worldmap.exportdialog.format|Format%</label>
+                <select id="export-format">
+                    <option value="png">PNG</option>
+                    <option value="jpeg">JPEG</option>
+                    <option value="webp">WebP</option>
+                </select>
+                <label for="export-quality">%worldmap.exportdialog.quality|Quality (JPEG / WebP)%</label>
+                <input id="export-quality" type="range" min="1" max="100" step="1" value="92"/>
+                <label for="export-background">%worldmap.exportdialog.background|Background%</label>
+                <select id="export-background">
+                    <option value="transparent">%worldmap.exportdialog.background.transparent|Transparent (PNG / WebP)%</option>
+                    <option value="color">%worldmap.exportdialog.background.color|Solid color%</option>
+                </select>
+                <label for="export-background-color">%worldmap.exportdialog.background.colorlabel|Background color%</label>
+                <input id="export-background-color" type="color" value="#000000"/>
+                <label for="export-outline">%worldmap.exportdialog.outline|Region outline%</label>
+                <input id="export-outline" type="checkbox" checked/>
+                <label for="export-outline-color">%worldmap.exportdialog.outline.color|Outline color%</label>
+                <input id="export-outline-color" type="color" value="#ff3b30"/>
+                <label for="export-outline-width">%worldmap.exportdialog.outline.width|Outline width (px)%</label>
+                <input id="export-outline-width" type="number" min="1" max="64" step="1" value="3"/>
+            </div>
+            <div id="export-info" class="worldmap-modal-summary"></div>
+            <div id="export-error" class="worldmap-modal-error" role="alert"></div>
+            <div class="worldmap-modal-actions">
+                <button id="export-cancel">%worldmap.exportdialog.cancel|Cancel%</button>
+                <button id="export-confirm" class="primary">%worldmap.exportdialog.export|Export%</button>
             </div>
         </div>
     </div>
