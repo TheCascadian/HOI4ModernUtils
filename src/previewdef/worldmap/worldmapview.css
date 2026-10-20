@@ -1261,6 +1261,18 @@ body > ul.select-dropdown[aria-multiselectable="true"] .checkbox {
     animation: worldmap-fade-in 140ms ease-out;
 }
 
+.worldmap-modal.vp-rename-dock {
+    background: none;
+    backdrop-filter: none;
+    align-items: flex-end;
+    pointer-events: none;
+    padding-bottom: 16px;
+}
+
+.vp-rename-dock .worldmap-modal-card {
+    pointer-events: auto;
+}
+
 .worldmap-modal-card {
     box-sizing: border-box;
     width: min(440px, calc(100vw - 32px));

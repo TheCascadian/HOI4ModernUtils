@@ -775,6 +775,7 @@ export class TopBar extends Subscriber {
         this.loadNorthAmericaPipelineModal();
         this.loadOceanReadinessModal();
         this.loadWaterToLandModal();
+        this.loadVictoryPointRenameModal();
         this.initExportMapMessageListener();
     }
 
@@ -845,6 +846,176 @@ export class TopBar extends Subscriber {
                 close();
             }
         }));
+    }
+
+    private vpRename?: {
+        queue: number[];
+        index: number;
+        names: Map<number, string>;
+        requestId: string;
+        renamed: number;
+        ready: boolean;
+    };
+
+    private loadVictoryPointRenameModal() {
+        const modal = document.getElementById('vp-rename-modal') as HTMLDivElement | null;
+        const input = document.getElementById('vp-rename-input') as HTMLInputElement | null;
+        const close = document.getElementById('vp-rename-close') as HTMLButtonElement | null;
+        const prev = document.getElementById('vp-rename-prev') as HTMLButtonElement | null;
+        const skip = document.getElementById('vp-rename-skip') as HTMLButtonElement | null;
+        const save = document.getElementById('vp-rename-save') as HTMLButtonElement | null;
+        if (!modal || !input || !close || !prev || !skip || !save) {
+            return;
+        }
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            const session = this.vpRename;
+            if (message.command !== 'victorypointnames' || !session || message.requestId !== session.requestId) {
+                return;
+            }
+            for (const [id, name] of Object.entries(message.names)) {
+                session.names.set(Number(id), name);
+            }
+            session.ready = true;
+            modal.hidden = false;
+            modal.style.display = 'flex';
+            this.showVictoryPointRenameStep(0);
+        }));
+        this.addSubscription(fromEvent(close, 'click').subscribe(() => this.closeVictoryPointRename()));
+        this.addSubscription(fromEvent(prev, 'click').subscribe(() => this.showVictoryPointRenameStep(-1)));
+        this.addSubscription(fromEvent(skip, 'click').subscribe(() => this.showVictoryPointRenameStep(1)));
+        this.addSubscription(fromEvent(save, 'click').subscribe(() => this.saveVictoryPointRename()));
+        this.addSubscription(fromEvent<KeyboardEvent>(input, 'keydown').subscribe(e => {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                this.saveVictoryPointRename();
+            } else if (e.key === 'Escape') {
+                e.preventDefault();
+                this.closeVictoryPointRename();
+            } else if (e.key === 'ArrowLeft' && e.altKey) {
+                e.preventDefault();
+                this.showVictoryPointRenameStep(-1);
+            } else if (e.key === 'ArrowRight' && e.altKey) {
+                e.preventDefault();
+                this.showVictoryPointRenameStep(1);
+            }
+        }));
+    }
+
+    private showVictoryPointRenameModal() {
+        const worldMap = this.loader.worldMap;
+        const selectedProvinces = this.selectedProvinceIds$.value;
+        const selectedStates = this.selectedStateIds$.value;
+        const queue: number[] = [];
+        const collect = (include: (stateId: number, provinceId: number) => boolean) => {
+            worldMap.forEachState(state => {
+                for (const key of Object.keys(state.victoryPoints)) {
+                    const provinceId = Number(key);
+                    if (state.victoryPoints[provinceId] !== undefined && include(state.id, provinceId)) {
+                        queue.push(provinceId);
+                    }
+                }
+            });
+        };
+        collect((_, provinceId) => selectedProvinces.has(provinceId));
+        if (queue.length === 0 && selectedStates.size > 0) {
+            collect(stateId => selectedStates.has(stateId));
+        }
+        if (queue.length === 0 && selectedProvinces.size === 0 && selectedStates.size === 0) {
+            collect(() => true);
+        }
+        if (queue.length === 0) {
+            this.showActionStatus(feLocalize(
+                'worldmap.vprename.none',
+                'No victory points to rename. Select provinces or states that have them, or clear the selection to rename all.'
+            ), 'warn');
+            return;
+        }
+        const unique = Array.from(new Set(queue)).sort((a, b) => a - b);
+        const requestId = `vpnames-${Date.now()}`;
+        this.vpRename = { queue: unique, index: 0, names: new Map(), requestId, renamed: 0, ready: false };
+        vscode.postMessage<WorldMapMessage>({
+            command: 'requestvictorypointnames',
+            requestId,
+            provinceIds: unique,
+        } as WorldMapMessage);
+    }
+
+    private closeVictoryPointRename() {
+        const modal = document.getElementById('vp-rename-modal') as HTMLDivElement | null;
+        if (modal) {
+            modal.hidden = true;
+            modal.style.display = 'none';
+        }
+        this.vpRename = undefined;
+    }
+
+    /** Moves by `delta` (0 re-renders the current entry) and focuses the name box on that victory point. */
+    private showVictoryPointRenameStep(delta: number) {
+        const session = this.vpRename;
+        const input = document.getElementById('vp-rename-input') as HTMLInputElement | null;
+        const progress = document.getElementById('vp-rename-progress');
+        const info = document.getElementById('vp-rename-info');
+        const error = document.getElementById('vp-rename-error');
+        if (!session || !input || !progress || !info || !error) {
+            return;
+        }
+        const next = session.index + delta;
+        if (next >= session.queue.length) {
+            this.showActionStatus(feLocalize(
+                'worldmap.vprename.done',
+                'Renamed {0} victory point(s). All done.',
+                session.renamed
+            ));
+            this.closeVictoryPointRename();
+            return;
+        }
+        session.index = Math.max(0, next);
+        const provinceId = session.queue[session.index];
+        const worldMap = this.loader.worldMap;
+        const state = worldMap.getStateByProvinceId(provinceId);
+        const province = worldMap.getProvinceById(provinceId);
+        progress.textContent = feLocalize('worldmap.vprename.progress', '{0} of {1}', session.index + 1, session.queue.length);
+        info.textContent = feLocalize(
+            'worldmap.vprename.info',
+            'Province {0} · State {1} · Value {2}',
+            provinceId,
+            state ? (state.localisedName ?? state.name ?? state.id) : '?',
+            state?.victoryPoints[provinceId] ?? '?'
+        );
+        error.textContent = '';
+        input.value = session.names.get(provinceId) ?? '';
+        input.placeholder = `Victory Point ${provinceId}`;
+        if (province) {
+            this.setSelectedProvinceIds(new Set([provinceId]), false);
+            this.viewPoint.centerPoint(province.centerOfMass);
+        }
+        input.focus();
+        input.select();
+    }
+
+    private saveVictoryPointRename() {
+        const session = this.vpRename;
+        const input = document.getElementById('vp-rename-input') as HTMLInputElement | null;
+        if (!session || !session.ready || !input) {
+            return;
+        }
+        const provinceId = session.queue[session.index];
+        const value = input.value.replace(/[\r\n]+/g, ' ').trim();
+        if (value && value !== session.names.get(provinceId)) {
+            session.names.set(provinceId, value);
+            session.renamed++;
+            vscode.postMessage<WorldMapMessage>({
+                command: 'persistvictorypointlocalisation',
+                requestId: this.beginPersistence('victory point localisation'),
+                key: `VICTORY_POINTS_${provinceId}`,
+                value,
+                stateId: this.loader.worldMap.getStateByProvinceId(provinceId)?.id ?? 0,
+                overwrite: true,
+            } as WorldMapMessage);
+        }
+        this.showVictoryPointRenameStep(1);
     }
 
     private showWaterToLandModal() {
@@ -3684,6 +3855,14 @@ export class TopBar extends Subscriber {
                         action: () => this.showWaterToLandModal(),
                     },
                     {
+                        label: feLocalize('worldmap.contextmenu.provincetools.vprename', 'Rename Victory Points...'),
+                        tooltip: feLocalize(
+                            'worldmap.contextmenu.provincetools.vprename.tooltip',
+                            'Step through victory points one at a time and set their names. Uses selected provinces or states, or every victory point when nothing is selected.'
+                        ),
+                        action: () => this.showVictoryPointRenameModal(),
+                    },
+                    {
                         label: feLocalize('worldmap.contextmenu.provincetools.createstate', 'State from Selected Provinces'),
                         disabled: selectedProvinceIds.size === 0,
                         action: () => this.createStateFromSelection(),
@@ -3796,6 +3975,7 @@ export class TopBar extends Subscriber {
             if (value.includes('verify ocean')) return 'Check whether selected provinces satisfy loaded ocean-tile requirements without changing files.';
             if (value.includes('ocean')) return 'Convert selected provinces to ocean and rebuild affected map memberships.';
             if (value.includes('merge selected provinces')) return 'Transfer every selected province pixel into the first selected province and repair references.';
+            if (value.includes('rename victory points')) return 'Step through victory points one at a time and set their names.';
             if (value.includes('state from selected')) return 'Create a new state containing the selected provinces.';
             if (value.includes('assign selected provinces')) return 'Move selected provinces into the currently selected existing state.';
             if (value.includes('new strat region')) return 'Move exactly the selected provinces into a newly created strategic region.';
@@ -4771,12 +4951,12 @@ export class TopBar extends Subscriber {
             this.recordMapEdit(before, after);
             this.persistStates([state.id]);
             this.mapMutation$.next(this.mapMutation$.value + 1);
-            const localisationKey = `VICTORY_POINT_${state.id}`;
+            const localisationKey = `VICTORY_POINTS_${provinceId}`;
             vscode.postMessage<WorldMapMessage>({
                 command: 'persistvictorypointlocalisation',
                 requestId: this.beginPersistence('victory point localisation'),
                 key: localisationKey,
-                value: `Victory Point ${state.id}`,
+                value: `Victory Point ${provinceId}`,
                 stateId: state.id,
             } as WorldMapMessage);
             this.showActionStatus(feLocalize('TODO', 'Added victory point (value=1) to province {0} in state {1}. Localisation key: {2}', provinceId, state.id, localisationKey));

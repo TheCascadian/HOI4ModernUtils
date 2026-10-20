@@ -8,6 +8,15 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.11]
+
+### Added
+* World map: "Rename Victory Points..." (province tools menu) steps through victory points one at a time. A docked panel centers the map on each one and focuses the name box; Enter saves and advances, Skip and Previous move without saving, Esc closes. It uses the selected provinces or states, or every victory point when nothing is selected.
+
+### Fixed
+* World map: provinces rendered as speckled, shattered shapes with black holes in 0.4.10. The province loader merged cover zones into non-square strips that the renderers skip or shrink at lower zoom. Provinces are back to square zones.
+* New victory points now get the localisation key the game reads (`VICTORY_POINTS_<province id>`) instead of one based on the state ID, and the victory point localisation file is written with a UTF-8 BOM.
+
 ## [0.4.10]
 
 ### Fixed

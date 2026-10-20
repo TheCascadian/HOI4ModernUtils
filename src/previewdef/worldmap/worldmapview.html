@@ -438,6 +438,22 @@
             </div>
         </div>
     </div>
+    <div id="vp-rename-modal" class="worldmap-modal vp-rename-dock" hidden>
+        <div class="worldmap-modal-card" role="dialog" aria-labelledby="vp-rename-title">
+            <div id="vp-rename-title" class="worldmap-modal-title">%worldmap.vprename.title|Rename Victory Points%</div>
+            <div id="vp-rename-progress" class="worldmap-modal-summary"></div>
+            <div id="vp-rename-info" class="worldmap-modal-summary"></div>
+            <input id="vp-rename-input" type="text" autocomplete="off" spellcheck="false"/>
+            <div class="worldmap-modal-summary">%worldmap.vprename.hint|Enter saves and moves to the next one. Alt+Left goes back, Esc closes. An empty name keeps the current one.%</div>
+            <div id="vp-rename-error" class="worldmap-modal-error" role="alert"></div>
+            <div class="worldmap-modal-actions">
+                <button id="vp-rename-close">%worldmap.vprename.close|Close%</button>
+                <button id="vp-rename-prev">%worldmap.vprename.prev|Previous%</button>
+                <button id="vp-rename-skip">%worldmap.vprename.skip|Skip%</button>
+                <button id="vp-rename-save" class="primary">%worldmap.vprename.save|Save &amp; Next%</button>
+            </div>
+        </div>
+    </div>
     <div id="water-to-land-modal" class="worldmap-modal" hidden>
         <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="water-to-land-title">
             <div id="water-to-land-title" class="worldmap-modal-title">%worldmap.waterland.title|Convert Water Provinces to Land%</div>

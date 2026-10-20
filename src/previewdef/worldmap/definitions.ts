@@ -256,7 +256,7 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStatesResultMessage | PersistStrategicRegionsMessage | PersistStrategicRegionsResultMessage | PersistProvincesMessage | PersistProvincesResultMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | ResolveProvinceWarningsMessage | ResolveProvinceWarningsResultMessage | RunAreaOperationMessage | AreaOperationResultMessage | RunContinentPipelineMessage | ContinentPipelineResultMessage | RemoveAllCoresMessage | RemoveAllCoresResultMessage | ReindexMapMessage | ReindexMapResultMessage | PersistVictoryPointLocalisationMessage | PersistVictoryPointLocalisationResultMessage | SetConfirmNewProvinceCreationMessage | SetAutoCoreTransfersMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage | CreateCountryMessage | CreateCountryResultMessage | WorldMapRuntimeTestReadyMessage | WorldMapRuntimeTestRequestMessage | WorldMapRuntimeTestResultMessage;
+export type WorldMapMessage = LoadedMessage | RequestVictoryPointNamesMessage | VictoryPointNamesMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStatesResultMessage | PersistStrategicRegionsMessage | PersistStrategicRegionsResultMessage | PersistProvincesMessage | PersistProvincesResultMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | ResolveProvinceWarningsMessage | ResolveProvinceWarningsResultMessage | RunAreaOperationMessage | AreaOperationResultMessage | RunContinentPipelineMessage | ContinentPipelineResultMessage | RemoveAllCoresMessage | RemoveAllCoresResultMessage | ReindexMapMessage | ReindexMapResultMessage | PersistVictoryPointLocalisationMessage | PersistVictoryPointLocalisationResultMessage | SetConfirmNewProvinceCreationMessage | SetAutoCoreTransfersMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage | CreateCountryMessage | CreateCountryResultMessage | WorldMapRuntimeTestReadyMessage | WorldMapRuntimeTestRequestMessage | WorldMapRuntimeTestResultMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
@@ -753,6 +753,21 @@ export interface PersistVictoryPointLocalisationMessage {
     key: string;
     value: string;
     stateId: number;
+    /** Replace the text of an existing key instead of leaving it untouched. */
+    overwrite?: boolean;
+}
+
+export interface RequestVictoryPointNamesMessage {
+    command: 'requestvictorypointnames';
+    requestId: string;
+    provinceIds: number[];
+}
+
+export interface VictoryPointNamesMessage {
+    command: 'victorypointnames';
+    requestId: string;
+    /** Localised names keyed by province ID; provinces without a defined name are omitted. */
+    names: Record<number, string>;
 }
 
 export interface PersistVictoryPointLocalisationResultMessage {

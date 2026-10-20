@@ -18,6 +18,7 @@ import { getConfiguration, showQuickPickAnyString } from '../../util/vsccommon';
 import { extractProvinceBmpColors, repairAdjacencies, repairRailways, repairSupplyNodes, validateNewProvinceMembership, validateProvinceBmpEdit } from './provincefixes';
 import { clearMapBuildings, clearRailways, clearSupplyHubs, clearWaterCrossings, convertDefinitionsToOcean, partitionLandAndWaterProvinces, partitionMappedMembership, patchStateMembershipPreservingContent, patchStatePreservingUnknownContent, planProvinceMergesByType, removeAllCores, removeProvincesFromRegionBlocks, replaceStateIdsInSupplyAreas, transformSelectedStates } from './areaoperations';
 import { createSequentialIdMap, reindexCountryHistoryFile, reindexDefinitions, reindexMapBuildings, reindexStateFile, reindexStrategicRegionFile, reindexSupplyAreaFile, reindexUnitStacks } from './reindex';
+import { localisationIndex } from '../../indexing/localisationindex';
 import { addReplacePathsToDescriptor } from '../../util/replacepath';
 import { buildClippedRiverOceanEdit } from './riverconversion';
 import { applyEntriesWithRollback } from './transactionjournal';
@@ -324,6 +325,22 @@ export class WorldMap {
                             requestId: msg.requestId,
                             success: false,
                             error: await this.failureMessage(e, 'persistvictorypointlocalisationresult'),
+                        });
+                    }
+                    break;
+                case 'requestvictorypointnames':
+                    {
+                        const names: Record<number, string> = {};
+                        for (const provinceId of msg.provinceIds) {
+                            const entry = localisationIndex.get(`VICTORY_POINTS_${provinceId}`);
+                            if (entry) {
+                                names[provinceId] = entry.value;
+                            }
+                        }
+                        await this.postMessageToWebview({
+                            command: 'victorypointnames',
+                            requestId: msg.requestId,
+                            names,
                         });
                     }
                     break;
@@ -1110,7 +1127,7 @@ export class WorldMap {
 
         const localisationDir = vscode.Uri.joinPath(workspaceFolder.uri, 'localisation');
         const targetFile = vscode.Uri.joinPath(localisationDir, 'victory_points_l_english.yml');
-        const entryText = ` ${msg.key}:0 "${msg.value}"`;
+        const entryText = ` ${msg.key}:0 "${this.escapeLocalisation(msg.value)}"`;
 
         let existingContent = '';
         try {
@@ -1122,13 +1139,15 @@ export class WorldMap {
 
         const eol = existingContent.includes('\r\n') ? '\r\n' : '\n';
 
-        if (existingContent.includes(`${msg.key}:`)) {
-            debug(`Localisation key ${msg.key} already exists; skipping.`);
-            return;
-        }
-
+        const keyPattern = new RegExp(`^[ \\t]*${msg.key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:.*$`, 'm');
         let newContent: string;
-        if (existingContent.length === 0) {
+        if (keyPattern.test(existingContent)) {
+            if (!msg.overwrite) {
+                debug(`Localisation key ${msg.key} already exists; skipping.`);
+                return;
+            }
+            newContent = existingContent.replace(keyPattern, () => entryText);
+        } else if (existingContent.length === 0) {
             newContent = `l_english:${eol}${entryText}${eol}`;
         } else {
             const trimmed = existingContent.replace(/\s+$/, '');
@@ -1136,7 +1155,7 @@ export class WorldMap {
         }
 
         await mkdirs(localisationDir);
-        await this.writeOperationalFile(targetFile, Buffer.from(newContent, 'utf-8'));
+        await this.writeOperationalFile(targetFile, Buffer.from('\uFEFF' + newContent, 'utf-8'));
         debug(`Wrote victory point localisation entry ${msg.key} to ${targetFile.fsPath}`);
     }
 
