@@ -9,6 +9,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ## [Unreleased]
 
 ### Added
+* Ported from upstream: the GFX preview has a refresh button, and the shared stylesheet gains toolbar rows, button hover and active states, and clipped dropdown options.
+* Ported from upstream: a preview panel now closes when its document's last editor tab closes, using the tab API (falls back to the old behavior on VS Code versions without it).
 * Ported from upstream: world map shows demilitarized zones as a hatched overlay (new "Show demilitarized zone" display option) and tooltips list "Demilitarized zone" and "Claim by". State history now reads `set_demilitarized_zone`, `add_claim_by`, `remove_claim_by`, `add_state_claim` and `remove_state_claim`, including dated and conditional entries.
 * Ported from upstream: world map warns about provinces smaller than `MINIMUM_PROVINCE_SIZE_IN_PIXELS` (read from `common/defines`, default 8).
 * Ported from upstream: the global index is now cached on disk (per index type) and reused when no vanilla or DLC file is newer than the cache. The localisation cache is invalidated when the preview language changes.

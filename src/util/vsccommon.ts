@@ -189,3 +189,14 @@ export function getLanguageIdInYml(): string {
 export function getLocalisationFolderName(): string {
     return languageFolderDict[getLanguage()] ?? languageFolderDict['English'];
 }
+
+export function openedTabsContains(uri: vscode.Uri): boolean {
+    for (const group of vscode.window.tabGroups.all) {
+        for (const tab of group.tabs) {
+            if (tab.input instanceof vscode.TabInputText && tab.input.uri.toString() === uri.toString()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}

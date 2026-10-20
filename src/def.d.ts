@@ -15,6 +15,31 @@ declare module 'vscode' {
     }
 }
 
+declare module 'vscode' {
+    // Tab API (VS Code 1.67+); declared locally because @types/vscode targets 1.52.
+    export class TabInputText {
+        readonly uri: Uri;
+    }
+    export interface Tab {
+        readonly input: unknown;
+    }
+    export interface TabGroup {
+        readonly tabs: readonly Tab[];
+    }
+    export interface TabChangeEvent {
+        readonly opened: readonly Tab[];
+        readonly closed: readonly Tab[];
+        readonly changed: readonly Tab[];
+    }
+    export interface TabGroups {
+        readonly all: readonly TabGroup[];
+        readonly onDidChangeTabs: Event<TabChangeEvent>;
+    }
+    namespace window {
+        export const tabGroups: TabGroups;
+    }
+}
+
 declare module '*.html' {
     const _default: string;
     export default _default;

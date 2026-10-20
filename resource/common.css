@@ -17,6 +17,7 @@ div.select > div.option {
     display: block;
     height: 0;
     opacity: 0;
+    overflow: hidden;
 }
 
 div.select.multiple-select > div.option {
@@ -113,6 +114,7 @@ ul.select-dropdown {
     z-index: 100;
     max-height: 300px;
     overflow-y: auto;
+    overscroll-behavior: none;
 }
 
 ul.select-dropdown li {
@@ -122,11 +124,18 @@ ul.select-dropdown li {
 
 ul.select-dropdown li:hover, ul.select-dropdown li:focus {
     outline: none;
-    background: var(--vscode-list-focusBackground);
+    background: var(--vscode-list-focusBackground, var(--vscode-list-activeSelectionBackground));
+    color: var(--vscode-list-focusForeground, var(--vscode-list-activeSelectionForeground));
 }
 
 input[type=checkbox].hidden {
-    display: none;
+    display: block;
+    width: 0;
+    max-width: 0;
+    height: 0;
+    max-height: 0;
+    overflow: hidden;
+    margin: 0;
 }
 
 label.hidden {
@@ -247,6 +256,16 @@ ul.context-menu .context-menu-arrow {
     flex-shrink: 0;
 }
 
+.toolbar-row {
+    display: flex;
+    flex-direction: row;
+    margin: 4px 0;
+}
+
+.toolbar-row > * {
+    flex-shrink: 0;
+}
+
 button {
     background: transparent;
     border: none;
@@ -257,6 +276,7 @@ button {
     width: 20px;
     display: inline-block;
     text-align: center;
+    border-radius: 5px;
     transition: transform 0.05s;
 }
 
@@ -264,8 +284,12 @@ button:focus {
     outline: none;
 }
 
-button:active {
-    transform: scale(1.2720);
+button:hover:not([disabled]) {
+    background: var(--vscode-toolbar-hoverBackground);
+}
+
+button:active:not([disabled]), button.active:not([disabled]) {
+    background: var(--vscode-toolbar-activeBackground);
 }
 
 button > .codicon {
@@ -273,12 +297,8 @@ button > .codicon {
 }
 
 button[disabled] {
-    color: rgba(127, 127, 127, 0.7);
+    color: var(--vscode-disabledForeground);
     cursor: unset;
-}
-
-button[disabled]:active {
-    transform: none;
 }
 
 .navigator {
