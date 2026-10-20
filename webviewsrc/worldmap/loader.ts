@@ -719,6 +719,8 @@ export class FEWorldMapClass implements FEWorldMap {
             controller: template?.controller ?? [],
             provinces: [],
             cores: [...(template?.cores ?? [])],
+            claimBy: [],
+            isDemilitarizedZone: [],
             impassable: template?.impassable ?? false,
             victoryPoints: {},
             resources: {},

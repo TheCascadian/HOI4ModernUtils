@@ -124,6 +124,8 @@ export interface State extends Region, TokenInFile {
     owner: WithCondition<string>[]; // return the first matching country tag
     controller: WithCondition<string>[]; // return the first matching country tag
     provinces: number[];
+    claimBy: WithCondition<string>[]; // each item is a country tag with a condition, representing a claim on the state
+    isDemilitarizedZone: WithCondition<boolean>[]; // return the first matching boolean value
     cores: WithCondition<string>[];  // each item is a country tag with a condition, representing the core of the state
     impassable: boolean;
     victoryPoints: Record<number, number | undefined>;

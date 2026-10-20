@@ -55,6 +55,7 @@ interface RenderContext {
     edgeSampleBase?: number;
     optimizations?: ReadonlySet<WorldMapRuntimeTestOptimization>;
     warningIndex?: WarningIndex;
+    demilitarizedZonePattern?: CanvasPattern;
     riverDevicePixels?: Set<string>;
     labelGridCells?: Set<string>;
     extraState: any;
@@ -266,6 +267,7 @@ export class Renderer extends Subscriber {
             fastRendering: displayOptions.includes('fastrending'),
             supplyVisible: displayOptions.includes('supply'),
             riverVisible: displayOptions.includes('river'),
+            demilitarizedZoneVisible: displayOptions.includes('demilitarizedzone'),
             renderOptimizations: Array.from(this.topBar.renderOptimizations$.value).sort().join(','),
             mapMutation: this.topBar.mapMutation$.value,
             ...this.viewPoint.toJson(),
@@ -527,6 +529,8 @@ export class Renderer extends Subscriber {
             renderedProvincesByOffset: {},
             renderedProvincesById: {},
             extraState: undefined,
+            demilitarizedZonePattern: topBar.display.selectedValues$.value.includes('demilitarizedzone') ?
+                mapCanvasContext.createPattern(createSlashPattern(), 'repeat') ?? undefined : undefined,
             ...otherRenderContext,
         };
     }
@@ -595,7 +599,11 @@ export class Renderer extends Subscriber {
     }
 
     private static renderMapForeground(worldMap: FEWorldMap, xOffset: number, renderContext: RenderContext) {
-        const { mapCanvasContext: context, topBar, viewPoint } = renderContext;
+        const { mapCanvasContext: context, topBar, viewPoint, demilitarizedZonePattern } = renderContext;
+
+        if (demilitarizedZonePattern) {
+            Renderer.renderDemilitarizedZones(renderContext, worldMap, context, xOffset);
+        }
 
         if (Renderer.isRiverVisible(topBar, viewPoint)) {
             Renderer.renderRivers(renderContext, worldMap, context, xOffset);
@@ -1205,6 +1213,36 @@ export class Renderer extends Subscriber {
         });
     }
 
+    private static renderDemilitarizedZones(
+        renderContext: RenderContext,
+        worldMap: FEWorldMap,
+        context: CanvasRenderingContext2D,
+        xOffset: number) {
+        const { demilitarizedZonePattern } = renderContext;
+        if (!demilitarizedZonePattern) {
+            return;
+        }
+
+        context.fillStyle = demilitarizedZonePattern;
+        const { viewPoint, provinceToState, topBar } = renderContext;
+        const scale = viewPoint.scale;
+        const renderedProvinces = renderContext.renderedProvincesByOffset[xOffset] ?? [];
+        const stateIdToDemilitarized: Record<number, boolean> = {};
+        for (const province of renderedProvinces) {
+            const stateId = provinceToState[province.id];
+            if (stateId === undefined) {
+                continue;
+            }
+            if (stateIdToDemilitarized[stateId] === undefined) {
+                const state = worldMap.getStateById(stateId);
+                stateIdToDemilitarized[stateId] = solveWithCondition(state?.isDemilitarizedZone, topBar.selectedConditions$.value) ?? false;
+            }
+            if (stateIdToDemilitarized[stateId]) {
+                Renderer.renderProvince(viewPoint, context, province, scale, xOffset);
+            }
+        }
+    }
+
     private static renderRivers(
         renderContext: RenderContext,
         worldMap: FEWorldMap,
@@ -1405,10 +1443,13 @@ export class Renderer extends Subscriber {
         const controller = solveWithCondition(stateObject?.controller, selectedConditions);
         const compact = this.isCompactTooltipEnabled();
         const cores = solveWithConditionAsSet(stateObject?.cores, selectedConditions);
+        const claimBy = solveWithConditionAsSet(stateObject?.claimBy, selectedConditions);
+        const isDemilitarizedZone = solveWithCondition(stateObject?.isDemilitarizedZone, selectedConditions);
         const adjacencies = province.edges.filter(e => e.type !== 'impassable' && e.to !== -1).map(e => e.to);
 
         this.renderTooltip(`
 ${stateObject?.impassable ? '|r|' + feLocalize('worldmap.tooltip.impassable', 'Impassable') : ''}
+${isDemilitarizedZone ? '|r|' + feLocalize('worldmap.tooltip.demilitarizedzone', 'Demilitarized zone') : ''}
 ${feLocalize('worldmap.tooltip.province', 'Province')}=${province.id}
 ${vp ? `${feLocalize('worldmap.tooltip.victorypoint', 'Victory point')}=${vp}` : ''}
 ${stateObject ? `
@@ -1431,6 +1472,7 @@ ${stateObject ? `
 ${feLocalize('worldmap.tooltip.owner', 'Owner')}=${owner}
 ${controller && owner !== controller ? `${feLocalize('worldmap.tooltip.controller', 'Controller')}=${controller}` : ''}
 ${feLocalize('worldmap.tooltip.coreof', 'Core of')}=${compact ? `${cores.length} countr${cores.length === 1 ? 'y' : 'ies'}` : cores.join(',')}
+${claimBy.length > 0 ? feLocalize('worldmap.tooltip.claimby', 'Claim by') + '=' + (compact ? `${claimBy.length} countr${claimBy.length === 1 ? 'y' : 'ies'}` : claimBy.join(',')) : ''}
 ${feLocalize('worldmap.tooltip.manpower', 'Manpower')}=${toCommaDivideNumber(stateObject.manpower)}` : ''
 }
 ${supplyArea ? `
@@ -1684,8 +1726,11 @@ ${feLocalize('worldmap.tooltip.victorypoints', 'Victory points')}=${toCommaDivid
         const controller = solveWithCondition(state.controller, selectedConditions);
         const compact = this.isCompactTooltipEnabled();
         const cores = solveWithConditionAsSet(state.cores, selectedConditions);
+        const claimBy = solveWithConditionAsSet(state.claimBy, selectedConditions);
+        const isDemilitarizedZone = solveWithCondition(state.isDemilitarizedZone, selectedConditions);
         this.renderTooltip(`
 ${state.impassable ? '|r|' + feLocalize('worldmap.tooltip.impassable', 'Impassable') : ''}
+${isDemilitarizedZone ? '|r|' + feLocalize('worldmap.tooltip.demilitarizedzone', 'Demilitarized zone') : ''}
 ${feLocalize('worldmap.tooltip.state', 'State')}=${state.localisedName ? `${state.localisedName} (${state.id})` : state.id}
 ${supplyArea ? `
 ${feLocalize('worldmap.tooltip.supplyarea', 'Supply area')}=${supplyArea.id}
@@ -1693,6 +1738,7 @@ ${feLocalize('worldmap.tooltip.supplyarea', 'Supply area')}=${supplyArea.id}
 ${feLocalize('worldmap.tooltip.owner', 'Owner')}=${owner}
 ${controller && owner !== controller ? `${feLocalize('worldmap.tooltip.controller', 'Controller')}=${controller}` : ''}
 ${feLocalize('worldmap.tooltip.coreof', 'Core of')}=${compact ? `${cores.length} countr${cores.length === 1 ? 'y' : 'ies'}` : cores.join(',')}
+${claimBy.length > 0 ? feLocalize('worldmap.tooltip.claimby', 'Claim by') + '=' + (compact ? `${claimBy.length} countr${claimBy.length === 1 ? 'y' : 'ies'}` : claimBy.join(',')) : ''}
 ${feLocalize('worldmap.tooltip.manpower', 'Manpower')}=${toCommaDivideNumber(state.manpower)}
 ${feLocalize('worldmap.tooltip.category', 'Category')}=${state.category}
 ${supplyArea ? `
@@ -2215,4 +2261,24 @@ function defaultColor(province: Province) {
 
 function toCommaDivideNumber(value: number): string {
     return value.toString(10).replace(/(?<!^)(\d{3})(?=(?:\d{3})*$)/g, ',$1');
+}
+
+function createSlashPattern(): HTMLCanvasElement {
+    const patCanvas = document.createElement('canvas');
+    const patCtx = patCanvas.getContext('2d') as CanvasRenderingContext2D;
+    const patSize = 14;
+    patCanvas.width = patSize;
+    patCanvas.height = patSize;
+
+    patCtx.strokeStyle = '#ff0000';
+    patCtx.lineWidth = 1;
+    patCtx.beginPath();
+    patCtx.moveTo(0, patSize / 2);
+    patCtx.lineTo(patSize / 2, 0);
+    patCtx.stroke();
+    patCtx.beginPath();
+    patCtx.moveTo(patSize / 2, patSize);
+    patCtx.lineTo(patSize, patSize / 2);
+    patCtx.stroke();
+    return patCanvas;
 }

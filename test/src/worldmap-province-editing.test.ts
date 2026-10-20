@@ -41,6 +41,8 @@ function state(id: number, provinces: number[]): State {
         controller: [],
         provinces,
         cores: [],
+        claimBy: [],
+        isDemilitarizedZone: [],
         impassable: false,
         victoryPoints: {},
         resources: {},
