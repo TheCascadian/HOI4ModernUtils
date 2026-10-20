@@ -9,6 +9,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 ## [Unreleased]
 
 ### Added
+* World map export now asks for an image scale (1 ~ 10) before saving.
+* World map warns about one-pixel provinces, and merges adjacent coverage zones of each province before computing size warnings.
 * Russian, Korean and Simplified Chinese translations for the focus tree editor and validation, world map painting, lasso and error scan, and the new settings and commands. Upstream's own translations were reused where they exist.
 * Ported from upstream: the GFX preview has a refresh button, and the shared stylesheet gains toolbar rows, button hover and active states, and clipped dropdown options.
 * Ported from upstream: a preview panel now closes when its document's last editor tab closes, using the tab API (falls back to the old behavior on VS Code versions without it).

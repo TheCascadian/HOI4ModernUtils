@@ -392,6 +392,7 @@ export interface OpenFileMessage {
 
 export interface ExportMapMessage {
     command: 'exportmap' | 'requestexportmap';
+    scale?: number;
     dataUrl?: string;
 }
 

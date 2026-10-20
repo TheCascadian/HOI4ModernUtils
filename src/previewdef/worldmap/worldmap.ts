@@ -14,7 +14,7 @@ import { WorldMapLoader } from './loader/worldmaploader';
 import { isEqual } from 'lodash';
 import { LoaderSession } from '../../util/loader/loader';
 import { TelemetryMessage, sendByMessage } from '../../util/telemetry';
-import { getConfiguration } from '../../util/vsccommon';
+import { getConfiguration, showQuickPickAnyString } from '../../util/vsccommon';
 import { extractProvinceBmpColors, repairAdjacencies, repairRailways, repairSupplyNodes, validateNewProvinceMembership, validateProvinceBmpEdit } from './provincefixes';
 import { clearMapBuildings, clearRailways, clearSupplyHubs, clearWaterCrossings, convertDefinitionsToOcean, partitionLandAndWaterProvinces, partitionMappedMembership, patchStateMembershipPreservingContent, patchStatePreservingUnknownContent, planProvinceMergesByType, removeAllCores, removeProvincesFromRegionBlocks, replaceStateIdsInSupplyAreas, transformSelectedStates } from './areaoperations';
 import { createSequentialIdMap, reindexCountryHistoryFile, reindexDefinitions, reindexMapBuildings, reindexStateFile, reindexStrategicRegionFile, reindexSupplyAreaFile, reindexUnitStacks } from './reindex';
@@ -659,13 +659,24 @@ export class WorldMap {
     }
 
     private async requestExportMap() {
+        const scaleStr = await showQuickPickAnyString(['1', '2', '3', '4'],
+            v => {
+                const pv = parseFloat(v);
+                return !isNaN(pv) && pv >= 1 && pv <= 10;
+            },
+            localize('worldmap.export.scale', 'Scale of the exported image (1 ~ 10)'));
+
+        if (!scaleStr) {
+            return;
+        }
+
         const uri = await vscode.window.showSaveDialog({ filters: { [localize('pngfile', 'PNG file')]: ['png'] } });
         this.lastRequestedExportUri = uri;
         if (!uri) {
             return;
         }
 
-        await this.postMessageToWebview({ command: 'requestexportmap' });
+        await this.postMessageToWebview({ command: 'requestexportmap', scale: parseFloat(scaleStr) });
     }
 
     /** Records a failed world-map operation, notifies the user with a copyable code, and returns text for the webview. */

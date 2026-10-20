@@ -3314,6 +3314,7 @@ export class TopBar extends Subscriber {
             }
 
             const worldMap = this.loader.worldMap;
+            const exportImageScale = message.scale ?? 1;
             const pendingExport = this.pendingExport;
             this.pendingExport = undefined;
             if (!worldMap || !pendingExport) {
@@ -3323,9 +3324,9 @@ export class TopBar extends Subscriber {
             sendEvent('worldmap.export');
             const { bbox, includeBorder } = pendingExport;
             const canvas = document.createElement("canvas");
-            canvas.width = Math.max(1, Math.round(bbox.w));
-            canvas.height = Math.max(1, Math.round(bbox.h));
-            const viewPoint = new ViewPoint(canvas, this.loader, 0, { x: bbox.x, y: bbox.y, scale: 1 });
+            canvas.width = Math.max(1, Math.round(bbox.w * exportImageScale));
+            canvas.height = Math.max(1, Math.round(bbox.h * exportImageScale));
+            const viewPoint = new ViewPoint(canvas, this.loader, 0, { x: bbox.x, y: bbox.y, scale: exportImageScale });
             Renderer.renderMapImpl(canvas, this, viewPoint, worldMap, { preciseEdge: true, overwriteRenderPrecision: 1 });
 
             if (includeBorder) {
