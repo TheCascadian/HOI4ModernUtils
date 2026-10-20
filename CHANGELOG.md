@@ -8,10 +8,10 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ## [Unreleased]
 
+## [0.4.10]
+
 ### Fixed
 * The Heart of Iron IV install path is no longer lost on relaunch. It is now also kept in extension storage, saved only after the settings write completes, and restored when the setting is empty (except when you clear it on purpose).
-
-## [0.4.10]
 
 ### Added
 * World map export now asks for an image scale (1 ~ 10) before saving.
