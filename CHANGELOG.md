@@ -14,6 +14,8 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 * Ported from upstream: GUI file parsing now understands edit boxes, dropdowns, scrollbars, list boxes, overlapping element boxes, `fullscreen` and `show_position`.
 * Ported from upstream: GUI rendering widgets for edit boxes, dropdowns, scrollbars and layout boxes; container windows and grid boxes with the newer GUI schema; sprite types with progress bars; and the scope list updated for HOI4 1.15.
 * Ported from upstream: focus tree previews are rendered through the game's own `national_focus_item` GUI (focus styles, overlays, text icons, grid spacing from `focus_spacing`), with the previous rendering kept as a fallback when that GUI is unavailable. Logic view still shows plain focus IDs.
+* Ported from upstream: the event tree preview was rewritten with event details, `after` and `immediate` blocks, trigger and AI-chance display, and virtualized rendering. The technology tree and MIO previews and their schemas were brought up to date.
+* Ported from upstream: dropdown options can carry HTML (used for the focus filter icons), and scrolling inside a side panel no longer zooms the canvas.
 * Ported from upstream: continuous focus windows and focus inlay windows (`common/focus_inlay_windows`) are drawn in the focus tree preview, with override positions and visibility conditions.
 * Ported from upstream: focus `search_filters` can be filtered from the toolbar, and focus trees are sorted by ID.
 

@@ -107,6 +107,7 @@ class Dropdown extends Subscriber {
             if (!option.hidden) {
                 optionForDropdownMenu.push({
                     text: option.textContent ?? '',
+                    html: undefined,
                     value: option.value,
                     selected: option.value === this.select.value,
                 });
@@ -148,10 +149,10 @@ class Dropdown extends Subscriber {
     }
 }
 
-export class DivDropdown extends Subscriber {
+export class DivDropdown<T extends string = string> extends Subscriber {
     private closeDropdown: (() => void) | undefined = undefined;
 
-    public selectedValues$ = new BehaviorSubject<readonly string[]>([]);
+    public selectedValues$ = new BehaviorSubject<readonly T[]>([]);
 
     constructor(readonly select: HTMLDivElement, private multiSelection: boolean = false) {
         super();
@@ -164,23 +165,26 @@ export class DivDropdown extends Subscriber {
 
     public selectAll() {
         const options = this.getOptions();
-        const values: string[] = [];
+        const values: T[] = [];
         options.forEach(option => {
             option.selected = true;
-            values.push(option.value);
+            values.push(option.value as T);
         });
 
         this.selectedValues$.next(values);
     }
 
-    public setupOptions(options: { value: string; text: string }[]) {
+    public setupOptions(options: { value: T; text: string, html?: string }[]) {
         const select = this.select;
         select.innerHTML = '<span class="value"></span>';
-        for (const { value, text } of options) {
+        for (const { value, text, html } of options) {
             const option = document.createElement('div');
             option.classList.add('option');
             option.setAttribute('value', value);
             option.textContent = text;
+            if (html) {
+                option.innerHTML = html;
+            }
             select.appendChild(option);
         }
         this.syncTriggerWidth();
@@ -227,7 +231,7 @@ export class DivDropdown extends Subscriber {
 
         dropdownMenuSubscriptions.push(toDisposable(dropdownMenu.options$.subscribe(options => {
             this.updateSelectedValue(options);
-            this.selectedValues$.next(options.filter(o => o.selected).map(o => o.value));
+            this.selectedValues$.next(options.filter(o => o.selected).map(o => o.value as T));
             if (!this.multiSelection) {
                 this.closeDropdown?.apply(this);
                 setTimeout(() => this.select.focus(), 0);
@@ -266,6 +270,7 @@ export class DivDropdown extends Subscriber {
                 const value = option.getAttribute('value');
                 optionForDropdownMenu.push({
                     text: option.textContent ?? '',
+                    html: option.innerHTML,
                     value: value ?? '',
                     selected: value !== null ? selectedValues!.includes(value) : false,
                 });
@@ -293,7 +298,7 @@ export class DivDropdown extends Subscriber {
     }
 }
 
-type Option = { text: string, value: string, selected: boolean };
+type Option = { text: string, html: string | undefined, value: string, selected: boolean };
 class DropdownMenu extends Subscriber {
     private writableOptions$: Subject<Option[]>;
     public options$: Observable<Option[]>;
@@ -394,7 +399,7 @@ class DropdownMenu extends Subscriber {
             checkbox.checked = option.selected;
 
             item.appendChild(checkbox);
-            const checkboxItem = new Checkbox(checkbox, option.text);
+            const checkboxItem = new Checkbox(checkbox, option.text, option.html);
             this.addSubscription(checkboxItem);
 
             fromEvent(checkbox, 'change').subscribe(() => {

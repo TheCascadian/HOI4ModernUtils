@@ -1,8 +1,9 @@
-import { Node, Token } from "../../hoiformat/hoiparser";
-import { Raw, SchemaDef, convertNodeToJson, HOIPartial, isSymbolNode, NumberLike } from "../../hoiformat/schema";
-import { extractEffectValue, EffectItem, EffectComplexExpr } from "../../hoiformat/effect";
-import { Scope, ScopeType } from "../../hoiformat/scope";
-import { uniqBy } from "lodash";
+import { Node, Token } from '../../hoiformat/hoiparser';
+import { convertNodeToJson, HOIPartial, isSymbolNode, NumberLike, Raw, SchemaDef } from '../../hoiformat/schema';
+import { EffectComplexExpr, EffectItem, extractEffectValue } from '../../hoiformat/effect';
+import { Scope, ScopeType } from '../../hoiformat/scope';
+import { nodeToString } from '../../hoiformat/tostring';
+import { uniqBy } from 'lodash';
 
 export interface HOIEvents {
     eventItemsByNamespace: Record<string, HOIEvent[]>;
@@ -10,13 +11,20 @@ export interface HOIEvents {
 
 export type HOIEventType = 'country' | 'state' | 'unit_leader' | 'news' | 'operative_leader';
 
+export interface HOIEventDescription {
+    text: string;
+    trigger?: string;
+}
+
 export interface HOIEvent {
     type: HOIEventType;
     id: string;
     title: string;
+    descriptions: HOIEventDescription[];
     namespace: string;
     picture?: string;
     immediate: HOIEventOption;
+    after: HOIEventOption;
     options: HOIEventOption[];
     token: Token | undefined;
     major: boolean;
@@ -29,7 +37,11 @@ export interface HOIEvent {
 
 export interface HOIEventOption {
     name?: string;
+    type: 'immediate' | 'after' | 'option';
+    aiChanceScript?: string;
+    originalRecipientOnly: boolean;
     childEvents: ChildEvent[];
+    trigger?: string;
     token: Token | undefined;
 }
 
@@ -54,6 +66,7 @@ interface EventFile {
 interface EventDef {
     id: string;
     title: string;
+    desc: Raw[];
     picture: string;
     is_triggered_only: boolean;
     major: boolean;
@@ -62,6 +75,7 @@ interface EventDef {
     fire_only_once: boolean;
     option: Raw[];
     immediate: Raw;
+    after: Raw;
     _token: Token;
 }
 
@@ -76,9 +90,14 @@ interface MeanTimeToHappen {
 interface EventOptionDef {
     name: string;
     trigger: Raw;
-    ai_chance: string;
+    ai_chance: Raw;
     original_recipient_only: boolean;
     _token: Token;
+}
+
+interface EventDescriptionDef {
+    text: string;
+    trigger: Raw;
 }
 
 interface EventEffectDef {
@@ -91,68 +110,78 @@ interface EventEffectDef {
 }
 
 const eventOptionDefSchema: SchemaDef<EventOptionDef> = {
-    name: "string",
-    trigger: "raw",
-    ai_chance: "string",
-    original_recipient_only: "boolean",
+    name: 'string',
+    trigger: 'raw',
+    ai_chance: 'raw',
+    original_recipient_only: 'boolean',
+};
+
+const eventDescriptionDefSchema: SchemaDef<EventDescriptionDef> = {
+    text: 'string',
+    trigger: 'raw',
 };
 
 const eventDefSchema: SchemaDef<EventDef> = {
-    id: "string",
-    title: "string",
-    picture: "string",
-    is_triggered_only: "boolean",
-    major: "boolean",
-    hidden: "boolean",
-    fire_only_once: "boolean",
+    id: 'string',
+    title: 'string',
+    desc: {
+        _innerType: 'raw',
+        _type: 'array',
+    },
+    picture: 'string',
+    is_triggered_only: 'boolean',
+    major: 'boolean',
+    hidden: 'boolean',
+    fire_only_once: 'boolean',
     mean_time_to_happen: {
-        base: "number",
-        factor: "number",
-        days: "number",
-        months: "number",
-        years: "number",
+        base: 'number',
+        factor: 'number',
+        days: 'number',
+        months: 'number',
+        years: 'number',
     },
     option: {
-        _innerType: "raw",
-        _type: "array",
+        _innerType: 'raw',
+        _type: 'array',
     },
-    immediate: "raw",
+    immediate: 'raw',
+    after: 'raw',
 };
 
 const eventFileSchema: SchemaDef<EventFile> = {
     add_namespace: {
-        _innerType: "string",
-        _type: "array",
+        _innerType: 'string',
+        _type: 'array',
     },
     country_event: {
         _innerType: eventDefSchema,
-        _type: "array",
+        _type: 'array',
     },
     news_event: {
         _innerType: eventDefSchema,
-        _type: "array",
+        _type: 'array',
     },
     unit_leader_event: {
         _innerType: eventDefSchema,
-        _type: "array",
+        _type: 'array',
     },
     state_event: {
         _innerType: eventDefSchema,
-        _type: "array",
+        _type: 'array',
     },
     operative_leader_event: {
         _innerType: eventDefSchema,
-        _type: "array",
+        _type: 'array',
     },
 };
 
 const eventEffectDefSchema: SchemaDef<EventEffectDef> = {
-    id: "string",
-    days: "number",
-    hours: "number",
-    random: "number",
-    random_hours: "number",
-    random_days: "number",
+    id: 'string',
+    days: 'number',
+    hours: 'number',
+    random: 'number',
+    random_hours: 'number',
+    random_days: 'number',
 };
 
 export function getEvents(node: Node, filePath: string): HOIEvents {
@@ -216,8 +245,13 @@ function convertEvent<T extends HOIEventType>(eventDef: HOIPartial<EventDef>, fi
     const scopeType = eventTypeToScopeType(type);
     const scope: Scope = { scopeName: `{event_target}`, scopeType };
 
-    const immediate = convertOption(eventDef.immediate, scope);
-    const options = eventDef.option.map(o => convertOption(o, scope));
+    const descriptions = eventDef.desc
+        .filter((desc): desc is Raw => desc !== undefined)
+        .map(convertDescription)
+        .filter((desc): desc is HOIEventDescription => desc !== undefined);
+    const immediate = convertOption(eventDef.immediate, scope, 'immediate');
+    const after = convertOption(eventDef.after, scope, 'after');
+    const options = eventDef.option.map(o => convertOption(o, scope, 'option'));
 
     const meanTimeToHappenBase = eventDef.mean_time_to_happen ?
         Math.floor(eventDef.mean_time_to_happen.factor ??
@@ -232,10 +266,12 @@ function convertEvent<T extends HOIEventType>(eventDef: HOIPartial<EventDef>, fi
         type,
         id,
         title,
+        descriptions,
         namespace,
         picture,
         file,
         immediate,
+        after,
         options,
         token: eventDef._token,
         major: !!eventDef.major,
@@ -246,24 +282,49 @@ function convertEvent<T extends HOIEventType>(eventDef: HOIPartial<EventDef>, fi
     };
 }
 
-function convertOption(optionRaw: Raw | undefined, scope: Scope): HOIEventOption {
+function convertDescription(descriptionRaw: Raw): HOIEventDescription | undefined {
+    const descriptionNode = descriptionRaw._raw;
+    if (isSymbolNode(descriptionNode.value)) {
+        return { text: descriptionNode.value.name };
+    }
+    if (typeof descriptionNode.value === 'string') {
+        return { text: descriptionNode.value };
+    }
+
+    const descriptionDef = convertNodeToJson<EventDescriptionDef>(descriptionNode, eventDescriptionDefSchema);
+    const text = descriptionDef.text;
+    if (text !== undefined) {
+        const trigger = descriptionDef.trigger ? nodeToString(descriptionDef.trigger?._raw) : undefined;
+        return { text, trigger };
+    }
+
+    return undefined;
+}
+
+function convertOption(optionRaw: Raw | undefined, scope: Scope, type: 'immediate' | 'after' | 'option'): HOIEventOption {
     if (optionRaw === undefined) {
-        return { childEvents: [], token: undefined };
+        return {
+            type,
+            originalRecipientOnly: false,
+            childEvents: [],
+            token: undefined,
+        };
     }
 
     const optionDef = convertNodeToJson<EventOptionDef>(optionRaw._raw, eventOptionDefSchema);
-    const name = optionDef.name;
-    
     const effect = extractEffectValue(optionRaw._raw.value, scope);
-    const childEventItems = findChildEventItems(effect.effect);
-    const childEvents = childEventItems
+    const childEvents = findChildEventItems(effect.effect)
         .map(effectItemToChildEvent)
         .filter((e): e is ChildEvent => e !== undefined);
     const uniqueChildEvents = uniqBy(childEvents, e => e.eventName + '@' + e.scopeName);
 
     return {
-        name,
+        type,
+        name: optionDef.name,
+        aiChanceScript: optionDef.ai_chance ? nodeToString(optionDef.ai_chance._raw) : undefined,
+        originalRecipientOnly: !!optionDef.original_recipient_only,
         childEvents: uniqueChildEvents,
+        trigger: optionDef.trigger ? nodeToString(optionDef.trigger._raw) : undefined,
         token: optionDef._token,
     };
 }

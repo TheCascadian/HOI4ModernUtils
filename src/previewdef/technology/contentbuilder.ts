@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { i18nTableAsScript, localize } from '../../util/i18n';
-import { Technology, TechnologyTree, TechnologyFolder, RenderedTechnologyFolder, RenderedTechnologyFolderGridBox } from './schema';
+import { RenderedTechnologyFolder, RenderedTechnologyFolderGridBox, Technology, TechnologyFolder, TechnologyTree } from './schema';
 import { getSpriteByGfxName, Sprite } from '../../util/image/imagecache';
 import { forceError, randomString, UserError } from '../../util/common';
 import { HOIPartial } from '../../hoiformat/schema';
@@ -10,14 +10,14 @@ import { getGridBoxCommonChildParentInfo } from '../../util/hoi4gui/gridbox';
 import { renderInstantTextBox } from '../../util/hoi4gui/instanttextbox';
 import { renderIcon } from '../../util/hoi4gui/icon';
 import { html, htmlEscape } from '../../util/html';
-import { ContainerWindowType, GridBoxType, IconType, InstantTextBoxType, Format } from '../../hoiformat/gui';
+import { ContainerWindowType, Format, GridBoxType, IconType, InstantTextBoxType } from '../../hoiformat/gui';
 import { TechnologyTreeLoader, TechnologyTreeLoaderResult } from './loader';
 import { LoaderSession } from '../../util/loader/loader';
 import { debug } from '../../util/debug';
-import { flatMap, uniq, range } from 'lodash';
+import { flatMap, range, uniq } from 'lodash';
 import { StyleTable } from '../../util/styletable';
 import { renderBackground, RenderNodeCommonOptions } from '../../util/hoi4gui/nodecommon';
-import { featureFlagsAsScript } from "../../util/featureflags";
+import { featureFlagsAsScript } from '../../util/featureflags';
 import { indexManager } from '../../indexing/indexmanager';
 import { localisationIndex } from '../../indexing/localisationindex';
 
@@ -83,7 +83,7 @@ async function renderTechnologyFolders(
     const containerWindowTypes = flatMap(guiTypes, t => t.containerwindowtype);
     const techTreeViews = containerWindowTypes.filter(c => c.name?.toLowerCase() === techTreeViewName || c.name?.toLowerCase() === doctrineTreeViewName);
     if (techTreeViews.length === 0) {
-        throw new UserError(localize('techtree.cantfindviewin', "Can't find {0} in {1}.", techTreeViewName + "," + doctrineTreeViewName, guiFiles));
+        throw new UserError(localize('techtree.cantfindviewin', "Can't find {0} in {1}.", techTreeViewName + ',' + doctrineTreeViewName, guiFiles));
     }
 
     const gfxFiles = loadResult.gfxFiles;
@@ -147,7 +147,7 @@ async function renderToolbar(folders: string[], styleTable: StyleTable): Promise
         <div id="condition-container">
             <label for="conditions" class="${styleTable.style('conditionsLabel', () => `margin-right:5px`)}">${localize('miopreview.conditions', 'Conditions: ')}</label>
             <div class="select-container ${styleTable.style('marginRight10', () => `margin-right:10px`)}">
-                <div id="conditions" class="select multiple-select" tabindex="0" role="combobox" class="${styleTable.style('conditionsLabel', () => `max-width:400px`)}">
+                <div id="conditions" class="select multiple-select ${styleTable.style('conditions', () => `max-width:400px`)}" tabindex="0" role="combobox">
                     <span class="value"></span>
                 </div>
             </div>
@@ -158,6 +158,9 @@ async function renderToolbar(folders: string[], styleTable: StyleTable): Promise
             ${indexManager.isIndexEnabled('localisation') ? renderPreviewLabelModeControl(styleTable) : ''}
             ${folderSelect}
             ${conditions}
+            <button id="refresh" title="${localize('common.topbar.refresh.title', 'Refresh')}">
+                <i class="codicon codicon-refresh"></i>
+            </button>
         </div>
     </div>`;
 }

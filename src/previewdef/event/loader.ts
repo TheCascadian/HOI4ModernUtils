@@ -1,10 +1,10 @@
-import { HOIEvents, getEvents } from "./schema";
-import { ContentLoader, Dependency, LoadResultOD, LoaderSession, mergeInLoadResult } from "../../util/loader/loader";
-import { parseHoi4File } from "../../hoiformat/hoiparser";
-import { localize } from "../../util/i18n";
-import { uniq, flatten, chain } from "lodash";
-import { gfxIndex } from "../../indexing/gfxindex";
-import { eventIndex } from "../../indexing/eventindex";
+import { getEvents, HOIEvents } from './schema';
+import { ContentLoader, Dependency, LoaderSession, LoadResultOD, mergeInLoadResult } from '../../util/loader/loader';
+import { parseHoi4File } from '../../hoiformat/hoiparser';
+import { localize } from '../../util/i18n';
+import { chain, flatten, uniq } from 'lodash';
+import { gfxIndex } from '../../indexing/gfxindex';
+import { eventIndex } from '../../indexing/eventindex';
 
 export interface EventsLoaderResult {
     events: HOIEvents;
@@ -25,7 +25,7 @@ export class EventsLoader extends ContentLoader<EventsLoaderResult> {
 
         const childEventFiles = chain(Object.values(events.eventItemsByNamespace))
             .flatMap(e => e)
-            .flatMap(e => e.options)
+            .flatMap(e => [e.immediate, e.after, ...e.options])
             .flatMap(o => o.childEvents)
             .map(ce => eventIndex.get(ce.eventName))
             .uniq()

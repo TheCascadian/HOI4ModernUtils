@@ -105,6 +105,14 @@ export function enableZoom(contentElement: HTMLDivElement, xOffset: number, yOff
             return;
         }
 
+        const hoveredScrollableElement = getHoveredScrollableElement();
+        if (hoveredScrollableElement &&
+            hoveredScrollableElement !== document.body &&
+            hoveredScrollableElement !== document.documentElement &&
+            !contentElement.contains(hoveredScrollableElement)) {
+            return;
+        }
+
         e.preventDefault();
         const oldScale = scale;
 
@@ -142,6 +150,19 @@ export function enableZoom(contentElement: HTMLDivElement, xOffset: number, yOff
             }
         },
     };
+}
+
+function getHoveredScrollableElement(): Element | undefined {
+    const hoveredAll = document.querySelectorAll(':hover');
+    let hovered: Element | null = hoveredAll[hoveredAll.length - 1];
+    while (hovered) {
+        if (hovered.scrollHeight > hovered.clientHeight) {
+            return hovered;
+        }
+        hovered = hovered.parentElement;
+    }
+
+    return undefined;
 }
 
 function navigateText(start: number | undefined, end: number | undefined, file: string | undefined): void {
