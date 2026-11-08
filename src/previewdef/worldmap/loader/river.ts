@@ -74,58 +74,67 @@ function findRiverPointsList(riversImage: BMP): River[] {
 }
 
 function findRiverPoints(startX: number, startY: number, riversImage: BMP): River {
-    const colors: Record<number, number> = {};
+    const { width, height, bytesPerRow, data } = riversImage;
+    // Pixels are packed as y * width + x so the flood fill allocates no per-pixel objects.
+    const stack: number[] = [ startY * width + startX ];
+    const pointIndices: number[] = [];
+    const pointColors: number[] = [];
     const ends: number[] = [];
-    const boundingBox: Zone = { x: startX, y: startY, w: 1, h: 1 };
-    const stack: { x: number; y: number; }[] = [];
-    stack.push({ x: startX, y: startY });
+    let minX = startX;
+    let maxX = startX;
+    let minY = startY;
+    let maxY = startY;
     let firstPoint = true;
 
     while (stack.length > 0) {
-        const point = stack.pop()!;
-        const { x, y } = point;
-        const si = (riversImage.height - 1 - y) * riversImage.bytesPerRow + x;
-        const di = y * riversImage.width + x;
-        colors[di] = riversImage.data[si];
-        riversImage.data[si] = 255;
+        const di = stack.pop()!;
+        const y = (di / width) | 0;
+        const x = di - y * width;
+        const si = (height - 1 - y) * bytesPerRow + x;
+        const color = data[si];
+        if (color === 255) {
+            continue;
+        }
+        pointIndices.push(di);
+        pointColors.push(color);
+        data[si] = 255;
         let adjecents = 0;
-        if (x > 0 && riversImage.data[si - 1] <= 11) {
-            stack.push({ x: x - 1, y });
+        if (x > 0 && data[si - 1] <= 11) {
+            stack.push(di - 1);
             adjecents++;
         }
-        if (x < riversImage.width - 1 && riversImage.data[si + 1] <= 11) {
-            stack.push({ x: x + 1, y });
+        if (x < width - 1 && data[si + 1] <= 11) {
+            stack.push(di + 1);
             adjecents++;
         }
-        if (y > 0 && riversImage.data[si + riversImage.bytesPerRow] <= 11) {
-            stack.push({ x, y: y - 1 });
+        if (y > 0 && data[si + bytesPerRow] <= 11) {
+            stack.push(di - width);
             adjecents++;
         }
-        if (y < riversImage.height - 1 && riversImage.data[si - riversImage.bytesPerRow] <= 11) {
-            stack.push({ x, y: y + 1 });
+        if (y < height - 1 && data[si - bytesPerRow] <= 11) {
+            stack.push(di + width);
             adjecents++;
         }
         if (adjecents === 0 || (adjecents === 1 && firstPoint)) {
             ends.push(di);
         }
-        addPointToZone(boundingBox, point);
+        if (x < minX) { minX = x; } else if (x > maxX) { maxX = x; }
+        if (y < minY) { minY = y; } else if (y > maxY) { maxY = y; }
         firstPoint = false;
     }
 
+    const boundingBox: Zone = { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
     const convertedColors: Record<number, number> = {};
-    for (const key in colors) {
-        const value = colors[key];
-        const di = parseInt(key, 10);
-        const x = di % riversImage.width;
-        const y = Math.floor(di / riversImage.width);
-        convertedColors[(y - boundingBox.y) * boundingBox.w + (x - boundingBox.x)] = value;
+    for (let i = 0; i < pointIndices.length; i++) {
+        const di = pointIndices[i];
+        const y = (di / width) | 0;
+        convertedColors[(y - minY) * boundingBox.w + (di - y * width - minX)] = pointColors[i];
     }
 
     const convertedEnds: number[] = [];
     for (const end of ends) {
-        const x = end % riversImage.width;
-        const y = Math.floor(end / riversImage.width);
-        convertedEnds.push((y - boundingBox.y) * boundingBox.w + (x - boundingBox.x));
+        const y = (end / width) | 0;
+        convertedEnds.push((y - minY) * boundingBox.w + (end - y * width - minX));
     }
 
     return {

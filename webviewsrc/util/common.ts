@@ -5,10 +5,19 @@ import { sendException } from './telemetry';
 import { forceError } from '../../src/util/common';
 export { arrayToMap } from '../../src/util/common';
 
+const stateListeners: Array<(changed: Record<string, any>) => void> = [];
+
+export function addStateListener(listener: (changed: Record<string, any>) => void): void {
+    stateListeners.push(listener);
+}
+
 export function setState(obj: Record<string, any>): void {
     const state = getState();
     Object.assign(state, obj);
     vscode.setState(state);
+    for (const listener of stateListeners) {
+        listener(obj);
+    }
 }
 
 export function getState(): Record<string, any> {

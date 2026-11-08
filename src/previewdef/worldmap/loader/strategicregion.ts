@@ -217,7 +217,7 @@ function validateProvincesInStrategicRegions(
     badStrategicRegionsCount: number,
     warnings: WorldMapWarning[]
 ) {
-    const provinceToStrategicRegion: Record<number, number> = {};
+    const provinceToStrategicRegion = new Map<number, number>();
 
     for (let i = badStrategicRegionsCount; i < strategicRegions.length; i++) {
         const strategicRegion = strategicRegions[i];
@@ -227,21 +227,22 @@ function validateProvincesInStrategicRegions(
 
         strategicRegion.provinces.forEach(p => {
             const province = provinces[p];
-            if (provinceToStrategicRegion[p] !== undefined) {
+            const existingRegionId = provinceToStrategicRegion.get(p);
+            if (existingRegionId !== undefined) {
                 if (!province) {
                     return;
                 }
 
                 warnings.push({
                     source: [
-                        ...[strategicRegion.id, provinceToStrategicRegion[p]].map<WorldMapWarningSource>(id => ({ type: 'strategicregion', id })),
+                        ...[strategicRegion.id, existingRegionId].map<WorldMapWarningSource>(id => ({ type: 'strategicregion', id })),
                         { type: 'province', id: p, color: province.color }
                     ],
-                    relatedFiles: [strategicRegion.file, strategicRegions[provinceToStrategicRegion[p]]!.file],
-                    text: localize('worldmap.warnings.provinceinmultiplestrategicregions', 'Province {0} exists in multiple strategic regions: {1}, {2}.', p, provinceToStrategicRegion[p], strategicRegion.id),
+                    relatedFiles: [strategicRegion.file, strategicRegions[existingRegionId]!.file],
+                    text: localize('worldmap.warnings.provinceinmultiplestrategicregions', 'Province {0} exists in multiple strategic regions: {1}, {2}.', p, existingRegionId, strategicRegion.id),
                 });
             } else {
-                provinceToStrategicRegion[p] = strategicRegion.id;
+                provinceToStrategicRegion.set(p, strategicRegion.id);
             }
         });
     }
@@ -251,7 +252,7 @@ function validateProvincesInStrategicRegions(
         if (!province) {
             continue;
         }
-        if (!(i in provinceToStrategicRegion)) {
+        if (!provinceToStrategicRegion.has(i)) {
             warnings.push({
                 source: [{ type: 'province', id: i, color: province.color }],
                 relatedFiles: [],
@@ -266,17 +267,19 @@ function validateProvincesInStrategicRegions(
             continue;
         }
 
-        const strategicRegionId = state.provinces
-            .filter(p => provinces[p])
-            .map<[number, number]>(p => [p, provinceToStrategicRegion[p]])
-            .filter(p => p[1] !== undefined);
-
-        const strategicRegionIdCount: Record<number, number> = {};
-        strategicRegionId.forEach(([_, sr]) => strategicRegionIdCount[sr] = (strategicRegionIdCount[sr] ?? 0) + 1);
-        const entries = Object.entries(strategicRegionIdCount);
+        const strategicRegionId: [number, number][] = [];
+        const strategicRegionIdCount = new Map<number, number>();
+        for (const p of state.provinces) {
+            const sr = provinces[p] ? provinceToStrategicRegion.get(p) : undefined;
+            if (sr !== undefined) {
+                strategicRegionId.push([p, sr]);
+                strategicRegionIdCount.set(sr, (strategicRegionIdCount.get(sr) ?? 0) + 1);
+            }
+        }
+        const entries = Array.from(strategicRegionIdCount.entries());
         if (entries.length > 1) {
             entries.sort((a, b) => b[1] - a[1]);
-            const mostStrategicRegionId = parseInt(entries[0][0]);
+            const mostStrategicRegionId = entries[0][0];
             const badProvinces = strategicRegionId.filter(([_, sr]) => sr !== mostStrategicRegionId).map(v => v[0]);
             warnings.push({
                 source: [

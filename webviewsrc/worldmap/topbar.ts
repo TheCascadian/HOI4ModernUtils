@@ -1,5 +1,6 @@
 import { Subscriber, toBehaviorSubject } from "../util/event";
-import { Loader, FEWorldMap, StateSnapshot, StrategicRegionSnapshot, ProvinceSnapshot } from "./loader";
+import { Loader, FEWorldMap, StateSnapshot, StrategicRegionSnapshot, ProvinceSnapshot, ProvinceMergeGroup } from "./loader";
+import { dropOverlappingGroups, planClusterMergeGroups, planStateMergeGroups } from "./mergeplanning";
 import { ViewPoint } from "./viewpoint";
 import { vscode } from "../util/vscode";
 import { PersistedState, WorldMapMessage, WorldMapWarning, ProvinceDraft, WorldMapRuntimeTestOptimization } from "../../src/previewdef/worldmap/definitions";
@@ -187,6 +188,15 @@ const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
     outline: true, outlineColor: '#ff3b30', outlineWidth: 3,
 };
 
+interface PendingMergeWrites {
+    stateIds?: number[];
+    deletedStateFiles?: string[];
+    deletedStates?: Array<{ id: number; file: string }>;
+    changedIds: number[];
+    deletedFiles: string[];
+    deletedRegions: Array<{ id: number; file: string }>;
+}
+
 export class TopBar extends Subscriber {
     public viewMode$: BehaviorSubject<ViewMode>;
     public colorSet$: BehaviorSubject<ColorSet>;
@@ -246,7 +256,8 @@ export class TopBar extends Subscriber {
     public paintbrushCanUndo$: BehaviorSubject<boolean>;
     /** Whether a paintbrush save is pending backend acknowledgment */
     private paintbrushSavePending = false;
-    private pendingProvinceMerge: { targetId: number; sourceCount: number; ocean: boolean } | undefined;
+    private pendingProvinceMerge: { targetId: number; sourceCount: number; ocean: boolean; groupCount?: number } | undefined;
+    private stagedMerges: ProvinceMergeGroup[] = [];
     private pendingWaterToLand: { provinceCount: number } | undefined;
     /** Whether to refresh after the pending paintbrush save completes */
     private refreshAfterPaintbrushSave = false;
@@ -634,7 +645,14 @@ export class TopBar extends Subscriber {
                 if (shouldRefresh) {
                     this.loader.refresh();
                 }
-                if (completedProvinceMerge) {
+                if (completedProvinceMerge?.groupCount !== undefined) {
+                    this.showActionStatus(feLocalize(
+                        'worldmap.mergestage.done',
+                        'Merged {0} provinces in {1} staged merge(s) and updated state/strategic-region membership.',
+                        completedProvinceMerge.sourceCount,
+                        completedProvinceMerge.groupCount
+                    ));
+                } else if (completedProvinceMerge) {
                     this.showActionStatus(
                         feLocalize(
                             completedProvinceMerge.ocean
@@ -806,6 +824,7 @@ export class TopBar extends Subscriber {
         this.loadCreateCountryModal();
         this.loadMergeStatesModal();
         this.loadMergeRegionsModal();
+        this.loadMergeStaging();
         this.loadPersistenceResults();
         this.loadResolveProvinceWarnings();
         this.loadAreaOperationResults();
@@ -3430,6 +3449,8 @@ export class TopBar extends Subscriber {
             'clear-supply-hubs': 'remove every supply hub in the area',
             'clear-water-crossings': 'remove every strait, canal, and other water-based crossing touching the area',
             'clear-resources': 'remove all resource blocks from affected states',
+            'clear-victory-points': 'remove every victory point from affected states',
+            'wipe-map-data': 'remove all buildings, water crossings, victory points, resources, railways, and supply hubs in the area',
             'lowest-development': `set every affected state to ${this.areaIncludeWasteland ? 'wasteland' : 'the lowest non-wasteland level'}`,
             'convert-to-ocean': riverIds.length > 0
                 ? 'extract the exact selected rivers.bmp pixels into new ocean provinces without converting the land provinces underneath'
@@ -3450,7 +3471,9 @@ export class TopBar extends Subscriber {
         );
     }
 
-    private runGlobalAreaOperation(operation: 'clear-water-crossings' | 'clear-resources' | 'clear-buildings') {
+    private runGlobalAreaOperation(
+        operation: 'clear-water-crossings' | 'clear-resources' | 'clear-buildings' | 'clear-victory-points' | 'wipe-map-data'
+    ) {
         const worldMap = this.loader.worldMap;
         const provinceIds: number[] = [];
         worldMap.forEachProvince(province => {provinceIds.push(province.id);});
@@ -3460,8 +3483,12 @@ export class TopBar extends Subscriber {
             ? 'remove every strait, canal, and water-based crossing from the loaded map'
             : operation === 'clear-resources'
                 ? 'remove every resource block from every loaded state'
-                : 'remove every province and state building from the loaded map';
-        const scope = operation === 'clear-buildings'
+                : operation === 'clear-victory-points'
+                    ? 'remove every victory point from every loaded state'
+                    : operation === 'wipe-map-data'
+                        ? 'remove all buildings, water crossings, victory points, resources, railways, and supply hubs'
+                        : 'remove every province and state building from the loaded map';
+        const scope = operation === 'clear-buildings' || operation === 'wipe-map-data'
             ? `${provinceIds.length} provinces and ${stateIds.length} states across the entire loaded map`
             : 'the entire loaded map';
         this.showAreaOperationConfirmation(
@@ -3469,7 +3496,7 @@ export class TopBar extends Subscriber {
             provinceIds,
             stateIds,
             false,
-            operation !== 'clear-buildings',
+            operation === 'clear-water-crossings' || operation === 'clear-resources',
             description,
             scope,
             [],
@@ -4563,6 +4590,18 @@ export class TopBar extends Subscriber {
                         action: () => this.runGlobalAreaOperation('clear-buildings'),
                     },
                     {
+                        label: feLocalize('worldmap.contextmenu.removeallvps', 'REMOVE ALL VICTORY POINTS'),
+                        tooltip: feLocalize('worldmap.contextmenu.removeallvps.tooltip', 'Remove every victory_points block from all loaded state history files.'),
+                        disabled: this.areaOperationPending,
+                        action: () => this.runGlobalAreaOperation('clear-victory-points'),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.wipemapdata', 'DELETE ALL MAP DATA (BUILDINGS, CROSSINGS, VPs, RESOURCES, RAILWAYS, SUPPLY HUBS)'),
+                        tooltip: feLocalize('worldmap.contextmenu.wipemapdata.tooltip', 'One workflow that removes all buildings, water crossings, victory points, resources, railways, and supply hubs from the entire loaded map.'),
+                        disabled: this.areaOperationPending,
+                        action: () => this.runGlobalAreaOperation('wipe-map-data'),
+                    },
+                    {
                         label: feLocalize('worldmap.contextmenu.reindexall', 'REINDEX ALL PROVINCES AND STATES'),
                         tooltip: feLocalize('worldmap.contextmenu.reindexall.tooltip', 'Renumber all loaded provinces and states sequentially from 1 and rewrite map, state, strategic-region, supply-area, capital, railway, supply-node, adjacency, and building references.'),
                         disabled: this.areaOperationPending || this.continentPipelinePending || this.reindexPending,
@@ -4597,6 +4636,35 @@ export class TopBar extends Subscriber {
                         disabled: selectedProvinceIds.size < 2 || this.paintbrushActive$.value ||
                             this.paintbrushSavePending || !!this.pendingProvinceMerge || !!this.pendingWaterToLand,
                         action: () => this.mergeSelectedProvinces(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.provincetools.stagemerge', 'Stage Merge of Selected Provinces'),
+                        tooltip: feLocalize(
+                            'worldmap.contextmenu.provincetools.stagemerge.tooltip',
+                            'Queue merging the selected provinces into the first selected, without changing the map. Stage several merges, then apply them together.'
+                        ),
+                        disabled: selectedProvinceIds.size < 2 || this.paintbrushActive$.value ||
+                            this.paintbrushSavePending || !!this.pendingProvinceMerge || !!this.pendingWaterToLand,
+                        action: () => this.stageSelectedProvinceMerge(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.provincetools.stagescope', 'Stage Merges for Country / States...'),
+                        tooltip: feLocalize(
+                            'worldmap.contextmenu.provincetools.stagescope.tooltip',
+                            'Queue merging the connected land provinces of every state in the selected country, the selected states, or the whole map.'
+                        ),
+                        disabled: this.paintbrushActive$.value || this.paintbrushSavePending ||
+                            !!this.pendingProvinceMerge || !!this.pendingWaterToLand,
+                        action: () => this.showMergeScopeModal(),
+                    },
+                    {
+                        label: feLocalize('worldmap.contextmenu.provincetools.automergeall', 'Auto-Merge All Countries...'),
+                        tooltip: feLocalize(
+                            'worldmap.contextmenu.provincetools.automergeall.tooltip',
+                            'For every country: move all its provinces into one new strategic region, then merge each connected block of its land provinces into one province, folding their states together.'
+                        ),
+                        disabled: this.mergeBusy(),
+                        action: () => this.confirmAutoMergeAllCountries(),
                     },
                     {
                         label: selectedProvinceIds.size >= 2
@@ -6082,6 +6150,375 @@ export class TopBar extends Subscriber {
             feLocalize('worldmap.action.consolidateocean.apply', 'Consolidate Ocean'),
             () => this.mergeSelectedProvinces(true)
         );
+    }
+
+    private mergeBusy(): boolean {
+        return this.paintbrushActive$.value || this.paintbrushSavePending ||
+            !!this.pendingProvinceMerge || !!this.pendingWaterToLand;
+    }
+
+    private refreshMergeStagePanel() {
+        const panel = document.getElementById('merge-stage-panel') as HTMLDivElement | null;
+        const summary = document.getElementById('merge-stage-summary');
+        if (!panel) return;
+        const removed = this.stagedMerges.reduce((sum, group) => sum + group.sourceIds.length, 0);
+        const show = this.stagedMerges.length > 0;
+        panel.hidden = !show;
+        panel.style.display = show ? 'flex' : 'none';
+        if (summary) summary.textContent = feLocalize(
+            'worldmap.mergestage.summary',
+            '{0} merge(s) staged, removing {1} province(s). The map changes only when you apply them.',
+            this.stagedMerges.length,
+            removed
+        );
+    }
+
+    private clearStagedMerges() {
+        this.stagedMerges = [];
+        this.refreshMergeStagePanel();
+    }
+
+    private stageSelectedProvinceMerge() {
+        const worldMap = this.loader.worldMap;
+        const selectedIds = normalizeEditableProvinceIds(worldMap, Array.from(this.selectedProvinceIds$.value));
+        if (selectedIds.length < 2 || this.mergeBusy()) return;
+        const provinces = selectedIds.map(id => worldMap.getProvinceById(id));
+        const target = provinces[0];
+        if (!target || provinces.some(province => !province || province.type !== target.type)) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.mergeprovinces.mixedtypes', 'Land, sea, and lake provinces cannot be merged together.'),
+                'warn'
+            );
+            return;
+        }
+        const stateId = worldMap.getStateByProvinceId(selectedIds[0])?.id;
+        const regionId = worldMap.getStrategicRegionByProvinceId(selectedIds[0])?.id;
+        if (selectedIds.some(id => worldMap.getStateByProvinceId(id)?.id !== stateId)) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.mergeprovinces.mixedstates', 'Selected provinces must belong to the same state before merging.'),
+                'warn'
+            );
+            return;
+        }
+        if (selectedIds.some(id => worldMap.getStrategicRegionByProvinceId(id)?.id !== regionId)) {
+            this.showActionStatus(
+                feLocalize('worldmap.action.mergeprovinces.mixedregions', 'Selected provinces must belong to the same strategic region before merging.'),
+                'warn'
+            );
+            return;
+        }
+        const { accepted, skipped } = dropOverlappingGroups(
+            this.stagedMerges,
+            [{ targetId: selectedIds[0], sourceIds: selectedIds.slice(1) }]
+        );
+        if (skipped > 0) {
+            this.showActionStatus(
+                feLocalize('worldmap.mergestage.overlap', 'Some of these provinces are already in a staged merge.'),
+                'warn'
+            );
+            return;
+        }
+        this.stagedMerges.push(...accepted);
+        this.refreshMergeStagePanel();
+        this.showActionStatus(feLocalize('worldmap.mergestage.staged', 'Staged. Apply the staged merges when ready.'));
+    }
+
+    private autoMergeCountryProvinces(): Map<string, number[]> {
+        const byCountry = new Map<string, number[]>();
+        this.loader.worldMap.forEachState(state => {
+            const tag = solveWithCondition(state.owner, this.selectedConditions$.value);
+            if (tag === undefined) return;
+            const ids = byCountry.get(tag) ?? [];
+            for (const id of state.provinces) {
+                if (this.loader.worldMap.getProvinceById(id)?.type === 'land') ids.push(id);
+            }
+            byCountry.set(tag, ids);
+        });
+        for (const [tag, ids] of byCountry) {
+            if (ids.length === 0) byCountry.delete(tag);
+        }
+        return byCountry;
+    }
+
+    private confirmAutoMergeAllCountries() {
+        if (this.mergeBusy()) return;
+        const countries = this.autoMergeCountryProvinces();
+        if (countries.size === 0) {
+            this.showActionStatus(feLocalize('worldmap.automerge.none', 'No country owns any land provinces.'), 'warn');
+            return;
+        }
+        this.showDestructiveActionConfirmation(
+            feLocalize('worldmap.automerge.title', 'Auto-Merge All Countries'),
+            feLocalize(
+                'worldmap.automerge.confirm',
+                'For {0} countries: move all of each country\'s land provinces into one new strategic region, then merge each connected block of the country\'s land provinces into one province, folding the states it spans into one state? This rewrites provinces.bmp, definition.csv and the state, strategic-region, adjacency, railway and supply files. Ctrl+Z undoes the merge and each region step.',
+                countries.size
+            ),
+            feLocalize('worldmap.automerge.apply', 'Auto-Merge'),
+            () => this.applyAutoMergeAllCountries()
+        );
+    }
+
+    private applyAutoMergeAllCountries() {
+        if (this.mergeBusy()) return;
+        const worldMap = this.loader.worldMap;
+        let regionsCreated = 0;
+        const regionWrites: PendingMergeWrites = { changedIds: [], deletedFiles: [], deletedRegions: [] };
+        for (const provinceIds of this.autoMergeCountryProvinces().values()) {
+            const beforeIds = new Set<number>([worldMap.getNextStrategicRegionId()]);
+            for (const provinceId of provinceIds) {
+                const source = worldMap.getStrategicRegionByProvinceId(provinceId);
+                if (source) beforeIds.add(source.id);
+            }
+            const before = worldMap.snapshotStrategicRegions(Array.from(beforeIds));
+            const created = worldMap.createStrategicRegionFromProvinces(provinceIds);
+            if (!created) continue;
+            this.recordMapEdit(before, worldMap.snapshotStrategicRegions(created.changedRegionIds), 'strategicregion');
+            regionWrites.changedIds.push(...created.changedRegionIds);
+            regionWrites.deletedFiles.push(...created.deletedFiles);
+            regionWrites.deletedRegions.push(...created.deletedRegions);
+            regionsCreated++;
+        }
+        this.mapMutation$.next(this.mapMutation$.value + 1);
+        this.stagedMerges = [];
+        for (const provinceIds of this.autoMergeCountryProvinces().values()) {
+            this.stagedMerges.push(...planClusterMergeGroups(worldMap, provinceIds));
+        }
+        // Region files are written together with the province merge so the two
+        // writes cannot race over the same strategic-region files.
+        let merging = false;
+        let reason = '';
+        if (this.stagedMerges.length === 0) {
+            let landProvinces = 0;
+            let withEdges = 0;
+            worldMap.forEachProvince(province => {
+                if (province.type !== 'land') return;
+                landProvinces++;
+                if (province.edges.some(edge => edge.to > 0)) withEdges++;
+            });
+            reason = feLocalize(
+                'worldmap.automerge.noplan',
+                'No mergeable provinces found ({0} land provinces, {1} with known neighbors).',
+                landProvinces,
+                withEdges
+            );
+        } else if (this.mergeBusy()) {
+            reason = feLocalize('worldmap.automerge.busy', 'Another province edit is still saving, so the merge was not started.');
+        } else if (this.applyStagedMerges(regionWrites)) {
+            merging = true;
+        } else {
+            reason = feLocalize('worldmap.automerge.rejected', 'The province merge was rejected by the map editor.');
+        }
+        if (!merging) {
+            this.stagedMerges = [];
+            this.refreshMergeStagePanel();
+            this.persistStrategicRegions(regionWrites.changedIds, regionWrites.deletedFiles, regionWrites.deletedRegions);
+            this.showActionStatus(feLocalize(
+                'worldmap.automerge.regionsonly',
+                'Created {0} country strategic region(s). {1}',
+                regionsCreated,
+                reason
+            ), 'warn');
+        }
+    }
+
+    private mergeScopeStateIds(scope: string): number[] {
+        const ids: number[] = [];
+        if (scope === 'states') {
+            this.selectedStateIds$.value.forEach(id => ids.push(id));
+        } else {
+            const tag = this.selectedCountryTag$.value;
+            this.loader.worldMap.forEachState(state => {
+                if (scope === 'all' ||
+                    (tag !== undefined && solveWithCondition(state.owner, this.selectedConditions$.value) === tag)) {
+                    ids.push(state.id);
+                }
+            });
+        }
+        return ids;
+    }
+
+    private planMergeScope(scope: string) {
+        const planned = planStateMergeGroups(this.loader.worldMap, this.mergeScopeStateIds(scope));
+        return dropOverlappingGroups(this.stagedMerges, planned);
+    }
+
+    private refreshMergeScopeModal() {
+        const scope = document.getElementById('merge-scope-select') as HTMLSelectElement | null;
+        const summary = document.getElementById('merge-scope-summary');
+        const error = document.getElementById('merge-scope-error');
+        const stage = document.getElementById('merge-scope-stage') as HTMLButtonElement | null;
+        if (!scope || !summary || !stage) return;
+        if (error) error.textContent = '';
+        const countryOption = scope.querySelector<HTMLOptionElement>('option[value="country"]');
+        if (countryOption) {
+            const tag = this.selectedCountryTag$.value;
+            countryOption.disabled = tag === undefined;
+            countryOption.textContent = tag === undefined
+                ? feLocalize('worldmap.mergescope.scope.country', 'Selected country')
+                : feLocalize('worldmap.mergescope.scope.countrytag', 'Selected country ({0})', tag);
+        }
+        const stateOption = scope.querySelector<HTMLOptionElement>('option[value="states"]');
+        if (stateOption) stateOption.disabled = this.selectedStateIds$.value.size === 0;
+        if (scope.selectedOptions[0]?.disabled) {
+            scope.value = 'all';
+        }
+        const { accepted } = this.planMergeScope(scope.value);
+        const removed = accepted.reduce((sum, group) => sum + group.sourceIds.length, 0);
+        summary.textContent = feLocalize(
+            'worldmap.mergescope.summary',
+            '{0} merge(s) would remove {1} province(s).',
+            accepted.length,
+            removed
+        );
+        stage.disabled = accepted.length === 0;
+    }
+
+    private showMergeScopeModal() {
+        const modal = document.getElementById('merge-scope-modal') as HTMLDivElement | null;
+        const scope = document.getElementById('merge-scope-select') as HTMLSelectElement | null;
+        if (!modal || !scope) return;
+        scope.value = this.selectedCountryTag$.value !== undefined ? 'country'
+            : this.selectedStateIds$.value.size > 0 ? 'states' : 'all';
+        this.refreshMergeScopeModal();
+        modal.hidden = false;
+        modal.style.display = 'flex';
+    }
+
+    private hideMergeScopeModal() {
+        const modal = document.getElementById('merge-scope-modal');
+        if (modal) {
+            modal.hidden = true;
+            modal.style.display = 'none';
+        }
+    }
+
+    private loadMergeStaging() {
+        const scope = document.getElementById('merge-scope-select') as HTMLSelectElement | null;
+        const stage = document.getElementById('merge-scope-stage') as HTMLButtonElement | null;
+        const cancel = document.getElementById('merge-scope-cancel') as HTMLButtonElement | null;
+        const apply = document.getElementById('merge-stage-apply') as HTMLButtonElement | null;
+        const clear = document.getElementById('merge-stage-clear') as HTMLButtonElement | null;
+        if (!scope || !stage || !cancel || !apply || !clear) return;
+        this.addSubscription(fromEvent(cancel, 'click').subscribe(() => this.hideMergeScopeModal()));
+        this.addSubscription(fromEvent(scope, 'change').subscribe(() => this.refreshMergeScopeModal()));
+        this.addSubscription(fromEvent(stage, 'click').subscribe(() => {
+            const { accepted, skipped } = this.planMergeScope(scope.value);
+            if (accepted.length === 0) return;
+            this.stagedMerges.push(...accepted);
+            this.refreshMergeStagePanel();
+            this.hideMergeScopeModal();
+            this.showActionStatus(feLocalize(
+                'worldmap.mergescope.staged',
+                'Staged {0} merge(s). {1} were skipped because their provinces were already staged.',
+                accepted.length,
+                skipped
+            ));
+        }));
+        this.addSubscription(fromEvent(clear, 'click').subscribe(() => this.clearStagedMerges()));
+        this.addSubscription(fromEvent(apply, 'click').subscribe(() => {
+            if (this.stagedMerges.length === 0 || this.mergeBusy()) return;
+            const removed = this.stagedMerges.reduce((sum, group) => sum + group.sourceIds.length, 0);
+            this.showDestructiveActionConfirmation(
+                feLocalize('worldmap.mergestage.confirmtitle', 'Apply Staged Province Merges'),
+                feLocalize(
+                    'worldmap.mergestage.confirm',
+                    'Apply {0} staged merge(s), removing {1} province(s) and rewriting provinces.bmp, definition.csv and the affected state, strategic-region, adjacency, railway and supply files? Ctrl+Z undoes it.',
+                    this.stagedMerges.length,
+                    removed
+                ),
+                feLocalize('worldmap.mergestage.apply', 'Apply Staged Merges'),
+                () => this.applyStagedMerges()
+            );
+        }));
+    }
+
+    private applyStagedMerges(regionWrites?: PendingMergeWrites): boolean {
+        if (this.stagedMerges.length === 0 || this.mergeBusy()) return false;
+        const groups = this.stagedMerges;
+        const previousProvinces = this.collectCurrentProvinceDefs();
+        const stateOf = (provinceId: number) => this.loader.worldMap.getStateByProvinceId(provinceId)?.id;
+        const groupStates = groups.map(group => ({
+            targetStateId: stateOf(group.targetId),
+            sourceStateIds: new Set(
+                group.sourceIds.map(stateOf).filter((id): id is number => id !== undefined)
+            ),
+        }));
+        const result = this.loader.worldMap.mergeProvinceGroups(groups);
+        this.clearStagedMerges();
+        if (!result) {
+            this.showActionStatus(
+                feLocalize('worldmap.mergestage.stale', 'None of the staged merges are still valid. The map was not changed.'),
+                'warn'
+            );
+            return false;
+        }
+
+        // States left without provinces by the merge fold into the state that
+        // kept the surviving province.
+        const stateWrites: Required<Pick<PendingMergeWrites, 'stateIds' | 'deletedStateFiles' | 'deletedStates'>> & {
+            stateReplacements: Record<number, number>;
+        } = { stateIds: [], deletedStateFiles: [], deletedStates: [], stateReplacements: {} };
+        const foldedStates = new Set<number>();
+        for (const { targetStateId, sourceStateIds } of groupStates) {
+            if (targetStateId === undefined) continue;
+            const emptied = Array.from(sourceStateIds).filter(id => {
+                const state = this.loader.worldMap.getStateById(id);
+                return id !== targetStateId && !foldedStates.has(id) && !!state && state.provinces.length === 0;
+            });
+            if (emptied.length === 0) continue;
+            const folded = this.loader.worldMap.mergeStates(targetStateId, emptied);
+            if (!folded) continue;
+            emptied.forEach(id => {
+                foldedStates.add(id);
+                stateWrites.stateReplacements[id] = targetStateId;
+            });
+            stateWrites.stateIds.push(...folded.changedStateIds);
+            stateWrites.deletedStateFiles.push(...folded.deletedFiles);
+            stateWrites.deletedStates.push(...folded.deletedStates);
+        }
+
+        this.setSelectedProvinceIds(new Set(), true);
+        this.mapMutation$.next(this.mapMutation$.value + 1);
+        this.refreshAfterPaintbrushSave = true;
+        this.pendingProvinceMerge = {
+            targetId: result.targetProvinceIds[0],
+            sourceCount: result.deletedProvinceIds.length,
+            ocean: false,
+            groupCount: result.targetProvinceIds.length,
+        };
+
+        vscode.postMessage<WorldMapMessage>({
+            command: 'persistprovincebmp',
+            requestId: this.beginPersistence('province BMP'),
+            paintedPixels: [],
+            colorRemap: result.colorRemap,
+            width: this.loader.worldMap.width,
+            height: this.loader.worldMap.height,
+            provinces: this.collectCurrentProvinceDefs(),
+            previousProvinces,
+            deletedProvinceIds: result.deletedProvinceIds,
+            provinceReplacements: result.provinceReplacements,
+            targetProvinceId: result.targetProvinceIds[0],
+            targetProvinceIds: result.targetProvinceIds,
+            states: this.collectPersistedStates([...result.changedStateIds, ...stateWrites.stateIds]),
+            deletedStateFiles: stateWrites.deletedStateFiles,
+            deletedStates: stateWrites.deletedStates,
+            stateReplacements: stateWrites.stateReplacements,
+            strategicRegions: this.collectPersistedStrategicRegions(
+                [...result.changedStrategicRegionIds, ...(regionWrites?.changedIds ?? [])]
+            ),
+            deletedStrategicRegionFiles: [
+                ...result.deletedStrategicRegionFiles,
+                ...(regionWrites?.deletedFiles ?? []),
+            ],
+            deletedStrategicRegions: [
+                ...result.deletedStrategicRegions,
+                ...(regionWrites?.deletedRegions ?? []),
+            ],
+        });
+        this.showActionStatus(feLocalize('worldmap.mergestage.pending', 'Saving staged province merges...'));
+        return true;
     }
 
     private mergeSelectedProvinces(oceanConsolidation = false) {

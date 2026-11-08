@@ -174,11 +174,22 @@
                 </label>
             </div>
 
+            <div class="group remember-settings-options">
+                <label class="render-optimization-option">
+                    <input id="remember-performance-toggle" type="checkbox"/>
+                    <span><strong>%worldmap.remember.performance|Remember performance settings%</strong><small>%worldmap.remember.performance.detail|Reuse the performance options and overlay in new World Map views.%</small></span>
+                </label>
+                <label class="render-optimization-option">
+                    <input id="remember-visibility-toggle" type="checkbox"/>
+                    <span><strong>%worldmap.remember.visibility|Remember visibility settings%</strong><small>%worldmap.remember.visibility.detail|Reuse the display layers and warning filter in new World Map views.%</small></span>
+                </label>
+            </div>
+
+            <div class="interface-tools-section">%worldmap.settings.interface|Interface%</div>
             <div class="group accessibility-options">
-                <button id="accessibility-options-button" type="button" role="menuitem" aria-haspopup="dialog" aria-controls="accessibility-options-menu" aria-expanded="false" title="%worldmap.accessibility.title|Accessibility and interface preferences (Ctrl+Alt+A)%">
+                <button id="accessibility-options-button" type="button" role="menuitem" aria-haspopup="dialog" aria-controls="accessibility-options-menu" aria-expanded="false" data-keybind-hint="openAccessibilityMenu" title="%worldmap.accessibility.title|Accessibility and interface preferences%">
                     <i class="codicon codicon-accessibility"></i>
-                    <span class="responsive-button-label">%worldmap.accessibility|Accessibility%</span>
-                    <span class="menu-keybind">Ctrl+Alt+A</span><i class="codicon codicon-chevron-right"></i>
+                    <span class="responsive-button-label">%worldmap.accessibility|Accessibility%</span><i class="codicon codicon-chevron-right"></i>
                 </button>
                 <div id="accessibility-options-menu" class="accessibility-options-menu" role="dialog" aria-label="%worldmap.accessibility.heading|Interface accessibility%" hidden>
                     <div class="accessibility-options-heading">%worldmap.accessibility.heading|Interface accessibility%</div>
@@ -564,6 +575,34 @@
             <div class="worldmap-modal-actions">
                 <button id="merge-states-cancel">%worldmap.state.merge.cancel|Cancel%</button>
                 <button id="merge-states-apply" class="primary">%worldmap.state.merge.apply|Merge States%</button>
+            </div>
+        </div>
+    </div>
+    <div id="merge-scope-modal" class="worldmap-modal" hidden>
+        <div class="worldmap-modal-card" role="dialog" aria-modal="true" aria-labelledby="merge-scope-title">
+            <div id="merge-scope-title" class="worldmap-modal-title">%worldmap.mergescope.title|Stage Province Merges by Scope%</div>
+            <div class="worldmap-modal-summary">%worldmap.mergescope.intro|Plans one merge per connected cluster of land provinces inside each state and strategic region. Nothing is changed until the staged merges are applied.%</div>
+            <label for="merge-scope-select">%worldmap.mergescope.scope|Scope%</label>
+            <select id="merge-scope-select">
+                <option value="country">%worldmap.mergescope.scope.country|Selected country%</option>
+                <option value="states">%worldmap.mergescope.scope.states|Selected states%</option>
+                <option value="all">%worldmap.mergescope.scope.all|Every state%</option>
+            </select>
+            <div id="merge-scope-summary" class="worldmap-modal-summary"></div>
+            <div id="merge-scope-error" class="worldmap-modal-error" role="alert"></div>
+            <div class="worldmap-modal-actions">
+                <button id="merge-scope-cancel">%worldmap.mergescope.cancel|Cancel%</button>
+                <button id="merge-scope-stage" class="primary">%worldmap.mergescope.stage|Stage Merges%</button>
+            </div>
+        </div>
+    </div>
+    <div id="merge-stage-panel" class="worldmap-modal vp-rename-dock" hidden>
+        <div class="worldmap-modal-card" role="region" aria-labelledby="merge-stage-title">
+            <div id="merge-stage-title" class="worldmap-modal-title">%worldmap.mergestage.title|Staged Province Merges%</div>
+            <div id="merge-stage-summary" class="worldmap-modal-summary"></div>
+            <div class="worldmap-modal-actions">
+                <button id="merge-stage-clear">%worldmap.mergestage.clear|Discard%</button>
+                <button id="merge-stage-apply" class="primary">%worldmap.mergestage.apply|Apply Staged Merges%</button>
             </div>
         </div>
     </div>

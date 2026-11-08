@@ -7,6 +7,7 @@ import { FileLoader, LoadResult, LoadResultOD, mergeRegions } from "./common";
 import { DefinesLoader } from "./defines";
 import { LoaderSession } from "../../../util/loader/loader";
 import { concatEdges } from "./edgeutils";
+import { computeCoverZones } from "../coverzones";
 
 export class ProvinceBmpLoader extends FileLoader<ProvinceBmp> {
     private definesLoader = new DefinesLoader();
@@ -80,21 +81,23 @@ function getProvincesByPosition(provinceMapImage: BMP): { colorByPosition: Uint3
     const bitmapData = provinceMapImage.data;
     const provinces: ColorContainer[] = [];
     const colorToProvince: Record<number, ColorContainer> = {};
+    const seen = new Set<number>();
+    let lastColor = -1;
 
     for (let y = provinceMapImage.height - 1, sy = 0, dy = (provinceMapImage.height - 1) * provinceMapImage.width;
         y >= 0;
         y--, sy += provinceMapImage.bytesPerRow, dy -= provinceMapImage.width) {
         for (let x = 0, sx = sy, dx = dy; x < provinceMapImage.width; x++, sx += 3, dx++) {
             const color = (bitmapData[sx + 2] << 16) | (bitmapData[sx + 1] << 8) | bitmapData[sx];
-            const province = colorToProvince[color];
-            if (province === undefined) {
-                const newProvince: ColorContainer = { color, warnings: [] };
-
-                provinces.push(newProvince);
-                colorToProvince[color] = newProvince;
-                colorByPosition[dx] = color;
-            } else {
-                colorByPosition[dx] = province.color;
+            colorByPosition[dx] = color;
+            if (color !== lastColor) {
+                lastColor = color;
+                if (!seen.has(color)) {
+                    const newProvince: ColorContainer = { color, warnings: [] };
+                    seen.add(color);
+                    provinces.push(newProvince);
+                    colorToProvince[color] = newProvince;
+                }
             }
         }
     }
@@ -117,50 +120,12 @@ function fillProvinceZones<T extends ColorContainer>(
     minimumProvinceSize: number,
     warnings: WorldMapWarning[],
 ): (T & ProvinceZoneDef)[] {
-    const blockStack: Zone[] = [];
-    const blockSize = 256;
-    for (let x = 0; x < width; x += blockSize) {
-        for (let y = 0; y < height; y += blockSize) {
-            blockStack.push({ x, y, w: blockSize, h: blockSize });
-        }
-    }
-    
+    const zonesByColor = computeCoverZones(colorByPosition, width, height);
     for (const province of provincesWithoutCoverZones) {
-        province.coverZones = [];
+        province.coverZones = zonesByColor.get(province.color) ?? [];
     }
 
     const provinces = provincesWithoutCoverZones as (T & Partial<ProvinceZoneDef> & { coverZones: Zone[] })[];
-
-    while (blockStack.length > 0) {
-        const block = blockStack.pop()!;
-        const t = block.y;
-        const l = block.x;
-        const b = block.y + block.h;
-        const r = block.x + block.w;
-        const color = colorByPosition[t * width + l];
-        let sameColor = true;
-        for (let y = t, yi = t * width; y < b; y++, yi += width) {
-            for (let x = l, xi = yi + l; x < r; x++, xi++) {
-                if (colorByPosition[xi] !== color) {
-                    sameColor = false;
-                    break;
-                }
-            }
-            if (!sameColor) {
-                break;
-            }
-        }
-
-        if (sameColor) {
-            colorToProvince[color].coverZones!.push(block);
-        } else {
-            const blockSize = block.w >> 1;
-            blockStack.push({ ...block, w: blockSize, h: blockSize });
-            blockStack.push({ ...block, x: block.x + blockSize, w: blockSize, h: blockSize });
-            blockStack.push({ ...block, y: block.y + blockSize, w: blockSize, h: blockSize });
-            blockStack.push({ x: block.x + blockSize, y: block.y + blockSize, w: blockSize, h: blockSize });
-        }
-    }
 
     for (const provinceWithoutRegion of provinces) {
         const province = Object.assign(provinceWithoutRegion, mergeRegions(provinceWithoutRegion.coverZones, width));
@@ -214,7 +179,7 @@ function fillEdges<T extends ColorContainer>(
     file: string,
     warnings: WorldMapWarning[]
 ): (T & EdgeDef)[] {
-    const accessedPixels = new Array<boolean>(colorByPosition.length).fill(false);
+    const accessedPixels = new Uint8Array(colorByPosition.length);
     const edgeLookups = new Map<number, Map<number, ProvinceEdgeGraph>>();
 
     for (const province of provincesWithoutEdges) {
@@ -226,7 +191,7 @@ function fillEdges<T extends ColorContainer>(
 
     for (let y = 0, yi = 0; y < height; y++, yi += width) {
         for (let x = 0, xi = yi; x < width; x++, xi++) {
-            if (accessedPixels[xi]) {
+            if (accessedPixels[xi] !== 0) {
                 continue;
             }
 
@@ -241,7 +206,7 @@ function fillEdgesOfProvince<T extends EdgeDef>(
     index: number,
     colorToProvince: Record<number, T>,
     colorByPosition: Uint32Array,
-    accessedPixels: boolean[],
+    accessedPixels: Uint8Array,
     edgeLookups: Map<number, Map<number, ProvinceEdgeGraph>>,
     width: number,
     height: number,
@@ -298,7 +263,12 @@ const indicesToOffset: [number, number][][] = [
     [[1, 0], [1, 1]],
     [[1, 1], [0, 1]],
 ];
-function findEdgePixels(index: number, accessedPixels: boolean[], color: number, colorByPosition: Uint32Array, width: number, height: number) {
+function edgeSegment(x: number, y: number, i: number): [Point, Point] {
+    const o = indicesToOffset[i];
+    return [{ x: x + o[0][0], y: y + o[0][1] }, { x: x + o[1][0], y: y + o[1][1] }];
+}
+
+function findEdgePixels(index: number, accessedPixels: Uint8Array, color: number, colorByPosition: Uint32Array, width: number, height: number) {
     const edgePixels: [number, [Point, Point]][] = [];
     const pixelStack: number[] = [ index ];
     const indices: number[] = new Array(4);
@@ -306,12 +276,12 @@ function findEdgePixels(index: number, accessedPixels: boolean[], color: number,
 
     while (pixelStack.length > 0) {
         const pixelIndex = pixelStack.pop()!;
-        if (accessedPixels[pixelIndex]) {
+        if (accessedPixels[pixelIndex] !== 0) {
             continue;
         }
 
         const x = pixelIndex % width;
-        const y = Math.floor(pixelIndex / width);
+        const y = (pixelIndex / width) | 0;
 
         indices[0] = x === 0 ? pixelIndex + width - 1 : pixelIndex - 1;
         indices[1] = pixelIndex - width;
@@ -321,18 +291,18 @@ function findEdgePixels(index: number, accessedPixels: boolean[], color: number,
         for (let i = 0; i < 4; i++) {
             const adjecentIndex = indices[i];
             if (adjecentIndex < 0) {
-                edgePixels.push([-1, indicesToOffset[i].map(([xOff, yOff]) => ({ x: x + xOff, y: y + yOff })) as [Point, Point]]);
+                edgePixels.push([-1, edgeSegment(x, y, i)]);
             } else {
                 const adjecentColor = colorByPosition[adjecentIndex];
                 if (color !== adjecentColor) {
-                    edgePixels.push([adjecentColor, indicesToOffset[i].map(([xOff, yOff]) => ({ x: x + xOff, y: y + yOff })) as [Point, Point]]);
+                    edgePixels.push([adjecentColor, edgeSegment(x, y, i)]);
                 } else {
                     pixelStack.push(adjecentIndex);
                 }
             }
         }
 
-        accessedPixels[pixelIndex] = true;
+        accessedPixels[pixelIndex] = 1;
         pixelCount++;
     }
 
@@ -340,18 +310,20 @@ function findEdgePixels(index: number, accessedPixels: boolean[], color: number,
 }
 
 function validateProvince(colorByPosition: Uint32Array, width: number, height: number, file: string, warnings: WorldMapWarning[]) {
-    const i = new Array(4);
-    for (let y = 1, y0 = width, index = width; y < height; y++, y0 += width) {
+    for (let y = 1, index = width; y < height; y++) {
         for (let x = 0; x < width; x++, index++) {
-            i[0] = index;
-            i[1] = index + (x === width - 1 ? -width : 0) + 1;
-            i[2] = i[0] - width;
-            i[3] = i[1] - width;
-            i.forEach((v, i0) => {
-                i[i0] = colorByPosition[v];
-            });
-            if (i[0] !== i[1] && i[0] !== i[2] && i[0] !== i[3] && i[1] !== i[2] && i[1] !== i[3] && i[2] !== i[3]) {
-                const colors = i.filter((v, i, a) => a.indexOf(v) === i);
+            const c0 = colorByPosition[index];
+            const c1 = colorByPosition[index + (x === width - 1 ? -width : 0) + 1];
+            if (c0 === c1) {
+                continue;
+            }
+            const c2 = colorByPosition[index - width];
+            if (c0 === c2 || c1 === c2) {
+                continue;
+            }
+            const c3 = colorByPosition[index + (x === width - 1 ? -width : 0) + 1 - width];
+            if (c0 !== c3 && c1 !== c3 && c2 !== c3) {
+                const colors = [c0, c1, c2, c3];
                 warnings.push({
                     source: colors.map(color => ({ color, id: -1, type: 'province' })),
                     relatedFiles: [file],

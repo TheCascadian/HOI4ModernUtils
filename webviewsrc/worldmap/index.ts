@@ -6,10 +6,13 @@ import { Renderer } from './renderer';
 import { fromEvent } from 'rxjs';
 import { registerWorldMapRuntimeTest } from './runtimetest';
 import { PerformanceDebugOverlay } from './performanceoverlay';
+import { applyRememberedSettings, setupRememberedSettings } from './rememberedsettings';
 
 fromEvent(window, 'load').subscribe(function() {
     hideBySupplyAreaFlag((window as any)['__enableSupplyArea']);
 
+    applyRememberedSettings();
+    setupRememberedSettings();
     const state = getState();
     const loader = new Loader();
     const mainCanvas = document.getElementById('main-canvas') as HTMLCanvasElement;

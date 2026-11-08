@@ -256,11 +256,13 @@ export interface TokenInFile {
     token: Token | null;
 }
 
-export type WorldMapMessage = LoadedMessage | RequestReferenceImageMessage | ReferenceImageMessage | RequestVictoryPointNamesMessage | VictoryPointNamesMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStatesResultMessage | PersistStrategicRegionsMessage | PersistStrategicRegionsResultMessage | PersistProvincesMessage | PersistProvincesResultMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | ResolveProvinceWarningsMessage | ResolveProvinceWarningsResultMessage | RunAreaOperationMessage | AreaOperationResultMessage | RunContinentPipelineMessage | ContinentPipelineResultMessage | RemoveAllCoresMessage | RemoveAllCoresResultMessage | ReindexMapMessage | ReindexMapResultMessage | PersistVictoryPointLocalisationMessage | PersistVictoryPointLocalisationResultMessage | PersistRailwaysMessage | PersistRailwaysResultMessage | RequestBuildingsMessage | BuildingsMessage | PersistMapBuildingsMessage | PersistMapBuildingsResultMessage | SetConfirmNewProvinceCreationMessage | SetAutoCoreTransfersMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage | CreateCountryMessage | CreateCountryResultMessage | WorldMapRuntimeTestReadyMessage | WorldMapRuntimeTestRequestMessage | WorldMapRuntimeTestResultMessage;
+export type WorldMapMessage = LoadedMessage | RequestReferenceImageMessage | ReferenceImageMessage | RequestVictoryPointNamesMessage | VictoryPointNamesMessage | RequestMapItemMessage | MapItemMessage | ErrorMessage | ProgressMessage | ProvinceMapSummaryMessage | OpenFileMessage | ExportMapMessage | PersistStatesMessage | PersistStatesResultMessage | PersistStrategicRegionsMessage | PersistStrategicRegionsResultMessage | PersistProvincesMessage | PersistProvincesResultMessage | PersistProvinceBmpMessage | RequestProvinceBmpMessage | ProvinceBmpDataMessage | UndoProvinceBmpMessage | RedoProvinceBmpMessage | ProvinceBmpUpdatedMessage | ResolveProvinceWarningsMessage | ResolveProvinceWarningsResultMessage | RunAreaOperationMessage | AreaOperationResultMessage | RunContinentPipelineMessage | ContinentPipelineResultMessage | RemoveAllCoresMessage | RemoveAllCoresResultMessage | ReindexMapMessage | ReindexMapResultMessage | PersistVictoryPointLocalisationMessage | PersistVictoryPointLocalisationResultMessage | PersistRailwaysMessage | PersistRailwaysResultMessage | RequestBuildingsMessage | BuildingsMessage | PersistMapBuildingsMessage | PersistMapBuildingsResultMessage | SetConfirmNewProvinceCreationMessage | SetAutoCoreTransfersMessage | RunWorldMapActionMessage | WorldMapContextMessage | PersistCountryDiplomacyMessage | CountryDiplomacyUpdatedMessage | CreateCountryMessage | CreateCountryResultMessage | WorldMapRuntimeTestReadyMessage | WorldMapRuntimeTestRequestMessage | WorldMapRuntimeTestResultMessage;
 
 export interface LoadedMessage {
     command: 'loaded';
     force: boolean;
+    /** The webview discarded its map, so the host must send everything instead of a diff. */
+    fresh?: boolean;
 }
 
 export interface WorldMapRuntimeTestViewport {
@@ -407,6 +409,20 @@ export interface SetAutoCoreTransfersMessage {
     value: boolean;
 }
 
+export interface RunWorldMapActionMessage {
+    command: 'runworldmapaction';
+    action: string;
+}
+
+export interface WorldMapContextMessage {
+    command: 'worldmapcontext';
+    /** Active World Map tool, or undefined when no tool is active. */
+    tool?: string;
+    /** True while focus is inside a form control or menu, where single-key bindings must stay quiet. */
+    keyboardOwned?: boolean;
+}
+
+
 export interface ResolveProvinceWarningsMessage {
     command: 'resolveprovincewarnings';
     requestId: string;
@@ -422,7 +438,7 @@ export interface ResolveProvinceWarningsResultMessage {
 
 export type AreaOperation = 'clear-railways' | 'clear-buildings' | 'one-population-per-state' |
     'clear-supply-hubs' | 'clear-water-crossings' | 'clear-resources' |
-    'lowest-development' | 'convert-to-ocean';
+    'lowest-development' | 'convert-to-ocean' | 'clear-victory-points' | 'wipe-map-data';
 
 export interface RunAreaOperationMessage {
     command: 'runareaoperation';
@@ -631,6 +647,11 @@ export interface PersistProvinceBmpMessage {
     requestId: string;
     /** Painted pixels as an array of [x, y, newColor] triplets */
     paintedPixels: number[][];
+    /**
+     * Whole-map color replacements as [fromColor, toColor] pairs, applied after
+     * paintedPixels. Used by large merges so every pixel need not be listed.
+     */
+    colorRemap?: number[][];
     width: number;
     height: number;
     /** Province definitions to update in definition.csv */

@@ -15,7 +15,7 @@ import { isEqual } from 'lodash';
 import { LoaderSession } from '../../util/loader/loader';
 import { TelemetryMessage, sendByMessage } from '../../util/telemetry';
 import { getConfiguration } from '../../util/vsccommon';
-import { extractProvinceBmpColors, repairAdjacencies, repairRailways, repairSupplyNodes, validateNewProvinceMembership, validateProvinceBmpEdit } from './provincefixes';
+import { extractProvinceBmpColors, repairAdjacencies, repairRailways, repairStateProvinceBuildings, repairSupplyNodes, validateNewProvinceMembership, validateProvinceBmpEdit } from './provincefixes';
 import { clearMapBuildings, clearRailways, clearSupplyHubs, clearWaterCrossings, convertDefinitionsToOcean, partitionLandAndWaterProvinces, partitionMappedMembership, patchStateMembershipPreservingContent, patchStatePreservingUnknownContent, planProvinceMergesByType, removeAllCores, removeProvincesFromRegionBlocks, replaceStateIdsInSupplyAreas, transformSelectedStates } from './areaoperations';
 import { createSequentialIdMap, reindexCountryHistoryFile, reindexDefinitions, reindexMapBuildings, reindexStateFile, reindexStrategicRegionFile, reindexSupplyAreaFile, reindexUnitStacks } from './reindex';
 import { localisationIndex } from '../../indexing/localisationindex';
@@ -198,28 +198,28 @@ export class WorldMap {
                     }
                     break;
                 case 'loaded':
-                    await this.sendProvinceMapSummaryToWebview(msg.force);
+                    await this.sendProvinceMapSummaryToWebview(msg.force, msg.fresh);
                     break;
                 case 'requestprovinces':
-                    await this.sendMapData('provinces', msg, (await this.worldMapLoader.getWorldMap()).provinces);
+                    await this.sendMapData('provinces', msg, (await this.getLoadedWorldMap()).provinces);
                     break;
                 case 'requeststates':
-                    await this.sendMapData('states', msg, (await this.worldMapLoader.getWorldMap()).states);
+                    await this.sendMapData('states', msg, (await this.getLoadedWorldMap()).states);
                     break;
                 case 'requestcountries':
-                    await this.sendMapData('countries', msg, (await this.worldMapLoader.getWorldMap()).countries);
+                    await this.sendMapData('countries', msg, (await this.getLoadedWorldMap()).countries);
                     break;
                 case 'requeststrategicregions':
-                    await this.sendMapData('strategicregions', msg, (await this.worldMapLoader.getWorldMap()).strategicRegions);
+                    await this.sendMapData('strategicregions', msg, (await this.getLoadedWorldMap()).strategicRegions);
                     break;
                 case 'requestsupplyareas':
-                    await this.sendMapData('supplyareas', msg, (await this.worldMapLoader.getWorldMap()).supplyAreas);
+                    await this.sendMapData('supplyareas', msg, (await this.getLoadedWorldMap()).supplyAreas);
                     break;
                 case 'requestrailways':
-                    await this.sendMapData('railways', msg, (await this.worldMapLoader.getWorldMap()).railways);
+                    await this.sendMapData('railways', msg, (await this.getLoadedWorldMap()).railways);
                     break;
                 case 'requestsupplynodes':
-                    await this.sendMapData('supplynodes', msg, (await this.worldMapLoader.getWorldMap()).supplyNodes);
+                    await this.sendMapData('supplynodes', msg, (await this.getLoadedWorldMap()).supplyNodes);
                     break;
                 case 'openfile':
                     await this.openFile(msg.file, msg.type, msg.start, msg.end);
@@ -455,10 +455,20 @@ export class WorldMap {
         }
     }
 
+    /** Serves chunk requests from the map just sent to the webview instead of re-validating every dependency per chunk. */
+    private async getLoadedWorldMap(): Promise<WorldMapData> {
+        return this.cachedWorldMap ?? await this.worldMapLoader.getWorldMap();
+    }
+
     private sendMapData(command: MapItemMessage['command'], msg: RequestMapItemMessage, value: unknown[]) {
+        let items = slice(value, msg.start, msg.end);
+        if (command === 'provinces') {
+            // Cover zones are about two thirds of the payload; the webview rebuilds them from the raster it already has.
+            items = items.map(item => item ? { ...(item as object), coverZones: undefined } : item);
+        }
         return this.postMessageToWebview({
             command: command,
-            data: JSON.stringify(slice(value, msg.start, msg.end)),
+            data: JSON.stringify(items),
             start: msg.start,
             end: msg.end,
         } as WorldMapMessage);
@@ -472,7 +482,7 @@ export class WorldMap {
         } as WorldMapMessage);
     };
 
-    private async sendProvinceMapSummaryToWebview(force: boolean) {
+    private async sendProvinceMapSummaryToWebview(force: boolean, fresh: boolean = false) {
         try {
             this.worldMapLoader.shallowForceReload();
             const oldCachedWorldMap = this.cachedWorldMap;
@@ -481,7 +491,7 @@ export class WorldMap {
             this.worldMapDependencies = dependencies;
             this.cachedWorldMap = worldMap;
 
-            if (!force && oldCachedWorldMap && await this.sendDifferences(oldCachedWorldMap, worldMap)) {
+            if (!force && !fresh && oldCachedWorldMap && await this.sendDifferences(oldCachedWorldMap, worldMap)) {
                 return;
             }
 
@@ -2040,12 +2050,22 @@ export class WorldMap {
         }
 
         // Apply pixel diffs
-        const newBmpBuffer = this.applyPixelDiffsToBmp(
+        let newBmpBuffer = this.applyPixelDiffsToBmp(
             oldBmpBuffer,
             msg.paintedPixels,
             msg.width,
             msg.height
         );
+        if (msg.colorRemap && msg.colorRemap.length > 0) {
+            const targetIds = new Set([msg.targetProvinceId, ...(msg.targetProvinceIds ?? [])]);
+            const targetColors = new Set(
+                msg.provinces.filter(province => targetIds.has(province.id)).map(province => province.color >>> 0)
+            );
+            if (msg.colorRemap.some(pair => pair.length < 2 || !targetColors.has(pair[1] >>> 0))) {
+                throw new Error('Province color remap does not use an allowed target province color.');
+            }
+            newBmpBuffer = this.applyColorRemapToBmp(newBmpBuffer, msg.colorRemap, msg.width, msg.height);
+        }
         const finalProvinceById = new Map(existingProvinces.map(province => [province.id, province]));
         for (const province of msg.provinces) {
             finalProvinceById.set(province.id, province);
@@ -2135,6 +2155,19 @@ export class WorldMap {
                     msg.deletedStates ?? [],
                     msg.stateReplacements ?? {}
                 );
+                if (msg.provinceReplacements && Object.keys(msg.provinceReplacements).length > 0) {
+                    for (const file of new Set((msg.states ?? []).map(state => state.file))) {
+                        const target = await this.resolveTargetFile(file);
+                        const current = Buffer.from(await vscode.workspace.fs.readFile(target));
+                        const repaired = repairStateProvinceBuildings(
+                            current.toString('utf-8'),
+                            msg.provinceReplacements
+                        );
+                        if (repaired.changed > 0) {
+                            await this.writeOperationalFile(target, Buffer.from(repaired.text, 'utf-8'));
+                        }
+                    }
+                }
             }
             if ((msg.strategicRegions?.length ?? 0) > 0 ||
                 (msg.deletedStrategicRegionFiles?.length ?? 0) > 0 ||
@@ -2319,21 +2352,22 @@ export class WorldMap {
                     : transform);
             };
 
-            if (msg.operation === 'clear-railways' || msg.operation === 'convert-to-ocean') {
+            const wipe = msg.operation === 'wipe-map-data';
+            if (msg.operation === 'clear-railways' || msg.operation === 'convert-to-ocean' || wipe) {
                 addTransform('map/railways.txt', text => clearRailways(text, provinceIds));
             }
-            if (msg.operation === 'clear-supply-hubs' || msg.operation === 'convert-to-ocean') {
+            if (msg.operation === 'clear-supply-hubs' || msg.operation === 'convert-to-ocean' || wipe) {
                 addTransform('map/supply_nodes.txt', text => clearSupplyHubs(text, provinceIds));
             }
-            if (msg.operation === 'clear-buildings' || msg.operation === 'convert-to-ocean') {
+            if (msg.operation === 'clear-buildings' || msg.operation === 'convert-to-ocean' || wipe) {
                 addTransform(
                     'map/buildings.txt',
                     text => clearMapBuildings(text, msg.entireMap ? undefined : provinceIds)
                 );
             }
-            if (msg.operation === 'clear-water-crossings') {
+            if (msg.operation === 'clear-water-crossings' || wipe) {
                 const defaultMap = await this.readDefaultMapConfig();
-                addTransform(`map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`, text => clearWaterCrossings(text, provinceIds));
+                addTransform(`map/${defaultMap?.adjacencies ?? 'adjacencies.csv'}`, text => clearWaterCrossings(text, msg.entireMap ? undefined : provinceIds));
             }
             if (msg.operation === 'convert-to-ocean') {
                 addTransform('map/definition.csv', text => convertDefinitionsToOcean(text, provinceIds));
@@ -2355,8 +2389,9 @@ export class WorldMap {
                     }
                 }
             } else if (msg.operation === 'clear-buildings' || msg.operation === 'clear-resources' ||
+                msg.operation === 'clear-victory-points' || wipe ||
                 msg.operation === 'one-population-per-state' || msg.operation === 'lowest-development') {
-                const stateOperation = msg.operation;
+                const stateOperation = msg.operation as Parameters<typeof transformSelectedStates>[2];
                 const lowestCategory = (worldMap.stateCategories ?? [])
                     .filter(category => msg.includeWasteland || category.name.toLowerCase() !== 'wasteland')
                     .sort((a, b) => a.localBuildingSlots - b.localBuildingSlots || a.name.localeCompare(b.name))[0]?.name;
@@ -2379,7 +2414,7 @@ export class WorldMap {
             let changedRecords = 0;
             for (const [path, transform] of transforms) {
                 const optional = path.startsWith('map/') && path !== 'map/definition.csv' &&
-                    !(msg.operation === 'clear-buildings' && path === 'map/buildings.txt');
+                    !((msg.operation === 'clear-buildings' || wipe) && path === 'map/buildings.txt');
                 const sourcePath = await getFilePathFromModOrHOI4(path);
                 if (!sourcePath) {
                     if (optional) {
@@ -3435,6 +3470,49 @@ export class WorldMap {
      * Apply painted pixel diffs to a raw BMP file buffer in-place.
      * Supports 24-bit and 32-bit BMPs.
      */
+    private applyColorRemapToBmp(
+        bmpBuffer: Buffer,
+        colorRemap: number[][],
+        expectedWidth: number,
+        expectedHeight: number
+    ): Buffer {
+        const result = Buffer.from(bmpBuffer);
+        if (result[0] !== 0x42 || result[1] !== 0x4D) {
+            throw new Error('Refusing to edit an invalid provinces BMP (missing BM header).');
+        }
+        const dataOffset = result.readUInt32LE(10);
+        const width = Math.abs(result.readInt32LE(18));
+        const height = Math.abs(result.readInt32LE(22));
+        const bitsPerPixel = result.readUInt16LE(28);
+        if (bitsPerPixel !== 24 && bitsPerPixel !== 32) {
+            throw new Error(`Unsupported provinces BMP bit depth ${bitsPerPixel}; expected 24-bit or 32-bit.`);
+        }
+        if (width !== expectedWidth || height !== expectedHeight) {
+            throw new Error(
+                `Province edit dimensions ${expectedWidth}x${expectedHeight} do not match BMP dimensions ${width}x${height}.`
+            );
+        }
+        const remap = new Map<number, number>(colorRemap.map(pair => [pair[0] & 0xFFFFFF, pair[1] & 0xFFFFFF]));
+        const bytesPerPixel = bitsPerPixel / 8;
+        const rowSize = ((width * bitsPerPixel + 7 >> 3) + 3) & 0xFFFFFFFC;
+        for (let y = 0; y < height; y++) {
+            let offset = dataOffset + y * rowSize;
+            for (let x = 0; x < width; x++, offset += bytesPerPixel) {
+                if (offset + 2 >= result.length) {
+                    break;
+                }
+                const color = (result[offset + 2] << 16) | (result[offset + 1] << 8) | result[offset];
+                const replacement = remap.get(color);
+                if (replacement !== undefined) {
+                    result[offset] = replacement & 0xFF;
+                    result[offset + 1] = (replacement >> 8) & 0xFF;
+                    result[offset + 2] = (replacement >> 16) & 0xFF;
+                }
+            }
+        }
+        return result;
+    }
+
     private applyPixelDiffsToBmp(
         bmpBuffer: Buffer,
         paintedPixels: number[][],

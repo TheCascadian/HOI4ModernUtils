@@ -7,6 +7,7 @@ import { vscode } from "../util/vscode";
 import { BehaviorSubject, fromEvent, Observable, ObservedValueOf, Subject } from 'rxjs';
 import { ConditionItem } from "../../src/hoiformat/condition";
 import { Quadtree } from "./quadtree";
+import { computeCoverZones } from "../../src/previewdef/worldmap/coverzones";
 
 interface ExtraMapData {
     provincesCount: number;
@@ -99,6 +100,7 @@ interface FEWorldMapClassExtra {
         deletedStrategicRegionFiles: string[];
         deletedStrategicRegions: Array<{ id: number; file: string }>;
     } | undefined;
+    mergeProvinceGroups(groups: ProvinceMergeGroup[]): ProvinceGroupMergeResult | undefined;
     convertWaterProvincesToLand(
         provinceIds: number[],
         terrain: string,
@@ -136,10 +138,29 @@ interface FEWorldMapClassExtra {
     /** Replaces the railway list in memory; the railway editor saves it to disk itself. */
     setRailways(railways: Railway[]): void;
     forEachSupplyNode(callback: (supplyNode: SupplyNode) => boolean | void): void;
+    /** Replaces the supply node list in memory; the railway editor saves it to disk itself. */
+    setSupplyNodes(supplyNodes: SupplyNode[]): void;
 }
 
 export type FEWorldMap = Omit<WorldMapData, 'states' | 'provinces' | 'strategicRegions' | 'supplyAreas' | 'railways' | 'supplyNodes'>
     & ExtraMapData & FEWorldMapClassExtra;
+
+export interface ProvinceMergeGroup {
+    targetId: number;
+    sourceIds: number[];
+}
+
+export interface ProvinceGroupMergeResult {
+    /** [fromColor, toColor] pairs covering every merged source province. */
+    colorRemap: number[][];
+    targetProvinceIds: number[];
+    deletedProvinceIds: number[];
+    provinceReplacements: Record<number, number>;
+    changedStateIds: number[];
+    changedStrategicRegionIds: number[];
+    deletedStrategicRegionFiles: string[];
+    deletedStrategicRegions: Array<{ id: number; file: string }>;
+}
 
 export interface StateSnapshot {
     id: number;
@@ -171,6 +192,7 @@ export class Loader extends Subscriber {
     private loadingProvinceMap: WorldMapData & { provincesCount: number; statesCount: number; countriesCount: number; } | undefined;
     private loadingQueue: WorldMapMessage[] = [];
     private loadingQueueStartLength = 0;
+    private pendingRequests = 0;
 
     constructor() {
         super();
@@ -179,10 +201,10 @@ export class Loader extends Subscriber {
         this.worldMap$.subscribe(wm => (window as any)['worldMap'] = wm);
     }
 
-    public refresh() {
+    public refresh(force: boolean = false) {
         this.worldMap = new FEWorldMapClass();
         this.writableWorldMap$.next(this.worldMap);
-        vscode.postMessage({ command: 'loaded', force: true } as WorldMapMessage);
+        vscode.postMessage({ command: 'loaded', force, fresh: true } as WorldMapMessage);
         this.loading$.next(true);
     }
 
@@ -274,7 +296,7 @@ export class Loader extends Subscriber {
             }
         }));
 
-        vscode.postMessage({ command: 'loaded', force: false } as WorldMapMessage);
+        vscode.postMessage({ command: 'loaded', force: false, fresh: true } as WorldMapMessage);
         this.loading$.next(true);
     }
 
@@ -284,16 +306,17 @@ export class Loader extends Subscriber {
         }
     
         this.loadingQueue.length = 0;
+        this.pendingRequests = 0;
     
-        this.queueLoadingRequest('requestcountries', this.loadingProvinceMap.countriesCount, 300);
-        this.queueLoadingRequest('requeststrategicregions', this.loadingProvinceMap.strategicRegionsCount, 300);
-        this.queueLoadingRequest('requeststrategicregions', -this.loadingProvinceMap.badStrategicRegionsCount, 300, this.loadingProvinceMap.badStrategicRegionsCount);
-        this.queueLoadingRequest('requestsupplyareas', this.loadingProvinceMap.supplyAreasCount, 300);
-        this.queueLoadingRequest('requestsupplyareas', -this.loadingProvinceMap.badSupplyAreasCount, 300, this.loadingProvinceMap.badSupplyAreasCount);
-        this.queueLoadingRequest('requeststates', this.loadingProvinceMap.statesCount, 300);
-        this.queueLoadingRequest('requeststates', -this.loadingProvinceMap.badStatesCount, 300, this.loadingProvinceMap.badStatesCount);
-        this.queueLoadingRequest('requestprovinces', this.loadingProvinceMap.provincesCount, 300);
-        this.queueLoadingRequest('requestprovinces', -this.loadingProvinceMap.badProvincesCount, 300, this.loadingProvinceMap.badProvincesCount);
+        this.queueLoadingRequest('requestcountries', this.loadingProvinceMap.countriesCount, 2000);
+        this.queueLoadingRequest('requeststrategicregions', this.loadingProvinceMap.strategicRegionsCount, 2000);
+        this.queueLoadingRequest('requeststrategicregions', -this.loadingProvinceMap.badStrategicRegionsCount, 2000, this.loadingProvinceMap.badStrategicRegionsCount);
+        this.queueLoadingRequest('requestsupplyareas', this.loadingProvinceMap.supplyAreasCount, 2000);
+        this.queueLoadingRequest('requestsupplyareas', -this.loadingProvinceMap.badSupplyAreasCount, 2000, this.loadingProvinceMap.badSupplyAreasCount);
+        this.queueLoadingRequest('requeststates', this.loadingProvinceMap.statesCount, 2000);
+        this.queueLoadingRequest('requeststates', -this.loadingProvinceMap.badStatesCount, 2000, this.loadingProvinceMap.badStatesCount);
+        this.queueLoadingRequest('requestprovinces', this.loadingProvinceMap.provincesCount, 2000);
+        this.queueLoadingRequest('requestprovinces', -this.loadingProvinceMap.badProvincesCount, 2000, this.loadingProvinceMap.badProvincesCount);
         this.queueLoadingRequest('requestrailways', this.loadingProvinceMap.railwaysCount, 1000);
         this.queueLoadingRequest('requestsupplynodes', this.loadingProvinceMap.supplyNodesCount, 2000);
 
@@ -315,21 +338,40 @@ export class Loader extends Subscriber {
     private loadNext(updateMap: boolean = true) {
         this.progress = 1 - this.loadingQueue.length / this.loadingQueueStartLength;
     
-        if (updateMap) {
-            this.worldMap = new FEWorldMapClass(this.loadingProvinceMap!);
-            this.writableWorldMap$.next(this.worldMap);
-        }
-    
+        // Building the world map indexes every chunk was the dominant reload cost; build once when the last chunk lands.
         if (this.loadingQueue.length === 0) {
+            // Unrequested summary messages also land here; only the last in-flight chunk may build the map.
+            if (this.pendingRequests > 0) {
+                return;
+            }
+            if (updateMap) {
+                this.fillMissingCoverZones(this.loadingProvinceMap!);
+                this.worldMap = new FEWorldMapClass(this.loadingProvinceMap!);
+                this.writableWorldMap$.next(this.worldMap);
+            }
             this.loading$.next(false);
         } else {
+            this.pendingRequests++;
             vscode.postMessage(this.loadingQueue.shift());
         }
 
         this.writableProgress$.next({ progressText: this.progressText, progress: this.progress });
     }
     
+    /** The host omits cover zones from province chunks; derive them from the raster with the same algorithm. */
+    private fillMissingCoverZones(map: WorldMapData): void {
+        const missing = map.provinces.filter((province): province is Province => !!province && !province.coverZones);
+        if (missing.length === 0 || !map.colorByPosition) {
+            return;
+        }
+        const zonesByColor = computeCoverZones(map.colorByPosition, map.width, map.height);
+        for (const province of missing) {
+            province.coverZones = zonesByColor.get(province.color) ?? [];
+        }
+    }
+
     private receiveData<T>(arr: T[] | undefined, start: number, end: number, data: string): void {
+        this.pendingRequests = Math.max(0, this.pendingRequests - 1);
         if (arr) {
             copyArray(JSON.parse(data), arr, 0, start, end - start);
         }
@@ -589,6 +631,12 @@ export class FEWorldMapClass implements FEWorldMap {
     public setRailways(railways: Railway[]): void {
         this.railways = railways;
         this.railwaysCount = railways.length;
+        this.invalidateLookupIndexes();
+    }
+
+    public setSupplyNodes(supplyNodes: SupplyNode[]): void {
+        this.supplyNodes = supplyNodes;
+        this.supplyNodesCount = supplyNodes.length;
         this.invalidateLookupIndexes();
     }
 
@@ -1366,6 +1414,10 @@ export class FEWorldMapClass implements FEWorldMap {
             return undefined;
         }
 
+        if (target.type === 'land' && sources.some(source => source.coastal)) {
+            target.coastal = true;
+        }
+
         const sourceColors = new Set(sources.map(source => source.color));
         const paintedPixels = new Map<string, number>();
         for (let y = 0; y < this.height; y++) {
@@ -1449,6 +1501,142 @@ export class FEWorldMapClass implements FEWorldMap {
         return {
             paintedPixels,
             deletedProvinceIds,
+            changedStateIds: Array.from(changedStateIds),
+            changedStrategicRegionIds: Array.from(changedStrategicRegionIds),
+            deletedStrategicRegionFiles: deletedRegionResult.deletedFiles,
+            deletedStrategicRegions: deletedRegionResult.deletedRegions,
+        };
+    }
+
+    /**
+     * Merges several disjoint groups of same-type provinces in one pixel pass.
+     * Each group folds its sources into its target; groups that overlap each
+     * other or contain invalid provinces are rejected as a whole.
+     */
+    public mergeProvinceGroups(groups: ProvinceMergeGroup[]): ProvinceGroupMergeResult | undefined {
+        this.invalidateLookupIndexes();
+        if (!this.colorByPosition) {
+            return undefined;
+        }
+
+        const claimed = new Set<number>();
+        const accepted: Array<{ target: Province; sources: Province[] }> = [];
+        for (const group of groups) {
+            const target = this.getProvinceById(group.targetId);
+            const sources = Array.from(new Set(group.sourceIds))
+                .filter(id => id !== group.targetId)
+                .map(id => this.getProvinceById(id))
+                .filter((province): province is Province => !!province);
+            const members = [target, ...sources];
+            if (!target || target.id <= 0 || target.color === 0 || sources.length === 0 ||
+                sources.some(source => source.id <= 0 || source.color === 0 || source.type !== target.type) ||
+                members.some(member => !member || claimed.has(member.id))) {
+                continue;
+            }
+            for (const member of members) {
+                claimed.add(member!.id);
+            }
+            accepted.push({ target, sources });
+        }
+        if (accepted.length === 0) {
+            return undefined;
+        }
+
+        for (const { target, sources } of accepted) {
+            if (target.type === 'land' && sources.some(source => source.coastal)) {
+                target.coastal = true;
+            }
+        }
+
+        const remap = new Map<number, number>();
+        const provinceReplacements: Record<number, number> = {};
+        const deletedProvinceIds: number[] = [];
+        const targetOf = new Map<number, number>();
+        for (const { target, sources } of accepted) {
+            for (const source of sources) {
+                remap.set(source.color, target.color);
+                provinceReplacements[source.id] = target.id;
+                targetOf.set(source.id, target.id);
+                deletedProvinceIds.push(source.id);
+            }
+        }
+
+        const pixels = this.colorByPosition;
+        for (let i = 0; i < pixels.length; i++) {
+            const replacement = remap.get(pixels[i]);
+            if (replacement !== undefined) {
+                pixels[i] = replacement;
+            }
+        }
+
+        this.rebuildCoverZonesForProvinces(accepted.map(entry => entry.target));
+
+        const deletedSet = new Set(deletedProvinceIds);
+        const changedStateIds = new Set<number>();
+        this.forEachState(state => {
+            const next = state.provinces.filter(id => !deletedSet.has(id));
+            if (next.length !== state.provinces.length) {
+                state.provinces = next;
+                changedStateIds.add(state.id);
+                this.recomputeStateGeometry(state);
+            }
+            for (const removedId of Object.keys(state.victoryPoints).map(Number)) {
+                const targetId = targetOf.get(removedId);
+                if (targetId === undefined) {
+                    continue;
+                }
+                state.victoryPoints[targetId] = (state.victoryPoints[targetId] ?? 0) + (state.victoryPoints[removedId] ?? 0);
+                delete state.victoryPoints[removedId];
+                changedStateIds.add(state.id);
+            }
+        });
+        for (const { target } of accepted) {
+            const targetState = this.getStateByProvinceId(target.id);
+            if (targetState && !changedStateIds.has(targetState.id)) {
+                changedStateIds.add(targetState.id);
+                this.recomputeStateGeometry(targetState);
+            }
+        }
+
+        const changedStrategicRegionIds = new Set<number>();
+        this.forEachStrategicRegion(region => {
+            const next = region.provinces.filter(id => !deletedSet.has(id));
+            if (next.length !== region.provinces.length) {
+                region.provinces = next;
+                changedStrategicRegionIds.add(region.id);
+                this.recomputeRegionGeometry(region);
+            }
+        });
+        const survivingRegionIds = new Set<number>();
+        for (const { target } of accepted) {
+            const targetRegion = this.getStrategicRegionByProvinceId(target.id);
+            if (targetRegion) {
+                survivingRegionIds.add(targetRegion.id);
+                changedStrategicRegionIds.add(targetRegion.id);
+                this.recomputeRegionGeometry(targetRegion);
+            }
+        }
+        const deletedRegionResult = this.deleteEmptyStrategicRegions(
+            Array.from(changedStrategicRegionIds).filter(id => !survivingRegionIds.has(id))
+        );
+
+        for (const id of deletedProvinceIds) {
+            this.provinces[id] = undefined;
+        }
+
+        // Edges are rebuilt by the BMP reload after persistence (see mergeProvinces).
+        const targetIds = new Set(accepted.map(entry => entry.target.id));
+        this.forEachProvince(province => {
+            province.edges = targetIds.has(province.id)
+                ? []
+                : province.edges.filter(edge => !targetIds.has(edge.to) && !deletedSet.has(edge.to));
+        });
+
+        return {
+            colorRemap: Array.from(remap.entries()).map(([from, to]) => [from, to]),
+            targetProvinceIds: Array.from(targetIds),
+            deletedProvinceIds,
+            provinceReplacements,
             changedStateIds: Array.from(changedStateIds),
             changedStrategicRegionIds: Array.from(changedStrategicRegionIds),
             deletedStrategicRegionFiles: deletedRegionResult.deletedFiles,
@@ -1717,23 +1905,32 @@ export class FEWorldMapClass implements FEWorldMap {
      * Rebuild coverZones for a province from the current colorByPosition pixel data.
      */
     private rebuildCoverZonesFromPixels(province: Province): void {
-        const zones: Zone[] = [];
-        const color = province.color;
+        this.rebuildCoverZonesForProvinces([province]);
+    }
+
+    /** Rebuilds cover zones for several provinces in a single pass over the pixel buffer. */
+    private rebuildCoverZonesForProvinces(provinces: Province[]): void {
         const width = this.width;
         const height = this.height;
         const pixels = this.colorByPosition;
 
-        if (!pixels) {
+        if (!pixels || provinces.length === 0) {
             return;
         }
 
+        const zonesByColor = new Map<number, Zone[]>();
+        for (const province of provinces) {
+            zonesByColor.set(province.color, []);
+        }
         const visited = new Uint8Array(width * height);
 
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
                 const index = y * width + x;
+                const color = pixels[index];
+                const zones = visited[index] ? undefined : zonesByColor.get(color);
 
-                if (visited[index] || pixels[index] !== color) {
+                if (!zones) {
                     continue;
                 }
 
@@ -1786,30 +1983,23 @@ export class FEWorldMapClass implements FEWorldMap {
             }
         }
 
-        province.coverZones = zones;
-        province.mass = zones.reduce(
-            (sum, zone) => sum + zone.w * zone.h,
-            0
-        );
+        for (const province of provinces) {
+            const zones = zonesByColor.get(province.color) ?? [];
+            province.coverZones = zones;
+            province.mass = zones.reduce(
+                (sum, zone) => sum + zone.w * zone.h,
+                0
+            );
 
-        if (zones.length === 0) {
-            province.boundingBox = {
-                x: 0,
-                y: 0,
-                w: 0,
-                h: 0,
-            };
+            if (zones.length === 0) {
+                province.boundingBox = { x: 0, y: 0, w: 0, h: 0 };
+                province.centerOfMass = { x: 0, y: 0 };
+                continue;
+            }
 
-            province.centerOfMass = {
-                x: 0,
-                y: 0,
-            };
-
-            return;
+            province.boundingBox = this.computeBoundingBox(zones);
+            province.centerOfMass = this.computeCenterOfMass(zones);
         }
-
-        province.boundingBox = this.computeBoundingBox(zones);
-        province.centerOfMass = this.computeCenterOfMass(zones);
     }
 
     /**
@@ -2157,6 +2347,7 @@ export class FEWorldMapClass implements FEWorldMap {
                 .map(region => region.file)
                 .filter(file => !this.strategicRegions.some(region => region?.file === file))
         ));
+        this.invalidateLookupIndexes();
         return {
             newStrategicRegionId: newId,
             changedRegionIds: changed,

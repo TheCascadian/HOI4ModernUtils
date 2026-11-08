@@ -368,3 +368,80 @@ export function repairSupplyNodes(
     const nodes = nodeOrder.map(province => `${nodeLevels.get(province)} ${province}`);
     return { text: [...passthrough, ...nodes].join(eol), replacements: replacementCount, removals, warnings: [] };
 }
+
+/**
+ * Rewrites province-keyed entries of `buildings = { ... }` blocks in a state
+ * history file after provinces were merged. An entry of a removed province
+ * moves to its survivor; when the survivor already has an entry in the same
+ * block, the removed province's entry is dropped.
+ */
+export function repairStateProvinceBuildings(
+    source: string,
+    replacements: Readonly<Record<number, number>>
+): { text: string; changed: number } {
+    const edits: Array<{ start: number; end: number; text: string }> = [];
+    const blockPattern = /\bbuildings\s*=\s*\{/g;
+    let match: RegExpExecArray | null;
+    while ((match = blockPattern.exec(source))) {
+        const open = match.index + match[0].length - 1;
+        let depth = 0;
+        let close = -1;
+        const entries: Array<{ id: number; keyStart: number; keyEnd: number; entryEnd: number }> = [];
+        let pendingKey: { id: number; keyStart: number; keyEnd: number } | undefined;
+        for (let i = open; i < source.length; i++) {
+            const char = source[i];
+            if (char === '#') {
+                while (i < source.length && source[i] !== '\n') { i++; }
+                continue;
+            }
+            if (char === '{') {
+                depth++;
+                if (depth === 2 && !pendingKey) {
+                    const before = /(\d+)\s*=\s*$/.exec(source.slice(Math.max(open, i - 24), i));
+                    if (before) {
+                        const keyEnd = i - (before[0].length - before[1].length);
+                        pendingKey = { id: Number(before[1]), keyStart: keyEnd - before[1].length, keyEnd };
+                    }
+                }
+            } else if (char === '}') {
+                depth--;
+                if (depth === 1 && pendingKey) {
+                    entries.push({ ...pendingKey, entryEnd: i + 1 });
+                    pendingKey = undefined;
+                } else if (depth === 0) {
+                    close = i;
+                    break;
+                }
+            }
+        }
+        if (close < 0) {
+            break;
+        }
+        const keys = new Set(entries.map(entry => entry.id));
+        for (const entry of entries) {
+            const survivor = replacements[entry.id];
+            if (survivor === undefined || survivor === entry.id) {
+                continue;
+            }
+            if (keys.has(survivor)) {
+                let start = entry.keyStart;
+                while (start > open && /[ \t]/.test(source[start - 1])) { start--; }
+                let end = entry.entryEnd;
+                while (end < close && /[ \t]/.test(source[end])) { end++; }
+                if (source[end] === '\r') { end++; }
+                if (source[end] === '\n') { end++; }
+                edits.push({ start, end, text: '' });
+            } else {
+                keys.delete(entry.id);
+                keys.add(survivor);
+                edits.push({ start: entry.keyStart, end: entry.keyEnd, text: String(survivor) });
+            }
+        }
+        blockPattern.lastIndex = close;
+    }
+    let text = source;
+    for (const edit of edits.sort((a, b) => b.start - a.start)) {
+        text = text.slice(0, edit.start) + edit.text + text.slice(edit.end);
+    }
+    return { text, changed: edits.length };
+}

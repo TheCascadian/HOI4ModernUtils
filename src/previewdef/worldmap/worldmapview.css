@@ -384,6 +384,8 @@ span.divider {
     width: max-content;
     max-width: calc(100vw - 24px);
     padding: 4px 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 .interface-tools-menu[hidden] {
@@ -394,6 +396,27 @@ span.divider {
     display: block;
     width: 100%;
     min-height: 0;
+}
+
+.interface-tools-heading {
+    padding: 6px 10px 3px;
+    font-weight: 700;
+    font-size: calc(var(--worldmap-font-size) * 1.02 * var(--worldmap-ui-scale));
+}
+
+.interface-tools-section {
+    margin-top: 4px;
+    padding: 6px 10px 3px;
+    border-top: 1px solid var(--vscode-menu-separatorBackground, rgba(255, 255, 255, 0.12));
+    color: var(--vscode-descriptionForeground, #aaa);
+    font-size: calc(var(--worldmap-font-size) * 0.82 * var(--worldmap-ui-scale));
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+}
+
+.interface-tools-section:first-of-type {
+    border-top: 0;
 }
 
 .interface-tools-menu > .group > button {

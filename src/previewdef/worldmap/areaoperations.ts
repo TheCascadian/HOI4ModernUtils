@@ -6,7 +6,9 @@ export type AreaOperation =
     'clear-water-crossings' |
     'clear-resources' |
     'lowest-development' |
-    'convert-to-ocean';
+    'convert-to-ocean' |
+    'clear-victory-points' |
+    'wipe-map-data';
 
 export interface TextTransformResult {
     text: string;
@@ -594,7 +596,8 @@ function stateId(block: string): number | undefined {
 export function transformSelectedStates(
     text: string,
     stateIds: ReadonlySet<number>,
-    operation: 'clear-buildings' | 'clear-resources' | 'one-population-per-state' | 'lowest-development' | 'convert-to-ocean',
+    operation: 'clear-buildings' | 'clear-resources' | 'clear-victory-points' | 'wipe-map-data' |
+        'one-population-per-state' | 'lowest-development' | 'convert-to-ocean',
     lowestCategory = 'pastoral'
 ): TextTransformResult {
     let output = text;
@@ -612,10 +615,16 @@ export function transformSelectedStates(
             next = /\bstate_category\s*=\s*[^\s#}]+/.test(next)
                 ? next.replace(/\bstate_category\s*=\s*[^\s#}]+/, `state_category = ${lowestCategory}`)
                 : next.replace(/\{/, `{\n\tstate_category = ${lowestCategory}`);
-        } else if (operation === 'clear-buildings' || operation === 'clear-resources') {
-            const blockName = operation === 'clear-buildings' ? 'buildings' : 'resources';
-            for (const block of findNamedBlocks(next, blockName).reverse()) {
-                next = next.slice(0, block.start) + next.slice(block.end);
+        } else if (operation === 'clear-buildings' || operation === 'clear-resources' ||
+            operation === 'clear-victory-points' || operation === 'wipe-map-data') {
+            const blockNames = operation === 'wipe-map-data'
+                ? ['buildings', 'resources', 'victory_points']
+                : [operation === 'clear-buildings' ? 'buildings'
+                    : operation === 'clear-resources' ? 'resources' : 'victory_points'];
+            for (const blockName of blockNames) {
+                for (const block of findNamedBlocks(next, blockName).reverse()) {
+                    next = next.slice(0, block.start) + next.slice(block.end);
+                }
             }
         } else {
             next = next.replace(/\bprovinces\s*=\s*\{[^}]*\}/, 'provinces = { }');
