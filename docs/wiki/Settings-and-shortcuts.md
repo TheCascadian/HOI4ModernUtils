@@ -1,29 +1,77 @@
 # Settings and shortcuts
 
-## World Map shortcuts
+## Editing keybindings
 
-| Default | Action | Setting |
-| --- | --- | --- |
-| `T` | Undo selection, or undo the current staged paint draft while painting | `hoi4ModernUtils.worldMapSelectionUndoKeybind` |
-| `R` | Redo selection, or redo the current staged paint draft while painting | `hoi4ModernUtils.worldMapSelectionRedoKeybind` |
-| `Ctrl+Z` | Undo map edit | `hoi4ModernUtils.worldMapMapUndoKeybind` |
-| `Ctrl+Y` | Redo map edit | `hoi4ModernUtils.worldMapMapRedoKeybind` |
-| `Ctrl+Shift+N` | Create state from current selection | `hoi4ModernUtils.worldMapCreateStateKeybind` |
-| `Ctrl+Enter` | Assign selection to a state | `hoi4ModernUtils.worldMapAssignSelectionKeybind` |
-| `Ctrl+Shift+G` | Assign selected states to a strategic region | `hoi4ModernUtils.worldMapAssignSelectionToStrategicRegionKeybind` |
+Every keyboard action in the World Map and Focus Tree is a regular VS Code command, so VS Code's Keyboard Shortcuts editor is the single place to view and rebind them.
 
-Shortcut strings accept combinations such as `Ctrl+Shift+N` or `Alt+Enter`. Use the dedicated setting when map-edit history and selection history are both relevant.
+Run **HOI4 Mod Utilities: Open Keyboard Shortcuts** from the Command Palette, press `Ctrl+Alt+K`, or open the extension's gear menu in the Extensions view and choose **Keyboard Shortcuts**. The editor opens filtered to this extension, so every World Map and Focus Tree action is listed. You can also run **Preferences: Open Keyboard Shortcuts** at any time and filter with `@ext:thecascadian.hoi4modernutils`. Change a row to set a new combination, or use the reset action to restore its default. VS Code reports conflicts and writes the result to your own `keybindings.json`. The Settings panel lists configuration values only; keybindings are changed in the Keyboard Shortcuts editor.
 
-Fixed World Map editor shortcuts:
+Bindings are scoped: map actions only fire while the World Map is focused, railway actions only while the railway editor is open, building actions only while building placement is open, and focus tree actions only while a focus tree preview is focused. Single-key bindings also yield while the cursor is inside a text field or menu.
 
-| Shortcut | Action |
+## Map shortcuts
+
+| Default | Action |
 | --- | --- |
 | `P` | Toggle Brush |
+| `E` | Toggle the staged-pixel eraser while painting |
 | `F` | Toggle Fill Bucket |
+| `L` | Toggle Lasso |
 | `W` | Toggle Transfer Wand |
-| `E` | Toggle staged-pixel eraser while painting |
 | `Ctrl+Alt+P` | Start new-province painting |
-| `Esc` | Cancel the active paint draft |
+| `Escape` | Cancel or close the current tool |
+| `Ctrl+Z` | Undo map edit |
+| `Ctrl+Y` | Redo map edit |
+| `T` | Undo selection, or undo the current staged paint draft while painting |
+| `R` | Redo selection, or redo the current staged paint draft while painting |
+| `Ctrl+Shift+N` | Create a state from the current selection |
+| `Ctrl+Enter` | Assign the current selection to a state |
+| `Ctrl+Shift+G` | Assign selected states to a strategic region |
+| `Ctrl+Alt+R` | Open the railway editor |
+| `Ctrl+Alt+H` | Open supply hub placement |
+| `Ctrl+Alt+B` | Open building placement |
+| `Ctrl+Alt+I` | Open the Settings menu |
+| `Ctrl+Alt+A` | Open accessibility and interface preferences |
+| `Ctrl+Alt+Shift+P` | Open experimental performance options |
+
+## Railway editor shortcuts
+
+These bindings only apply while the railway editor is open.
+
+| Default | Action |
+| --- | --- |
+| `S` | Select mode |
+| `D` | Draw mode |
+| `H` | Supply hub mode |
+| `R` | Reverse the selected railway |
+| `X` | Split the selected railway at the selected node |
+| `Delete` | Delete the selected railway |
+| `Backspace` | Remove the last node |
+| `[` / `]` | Previous / next railway |
+| `Tab` | Switch the extension end between start and end |
+| `Enter` | Finish drawing |
+| `1`-`5` | Set the railway level |
+
+## Building placement shortcuts
+
+These bindings only apply while building placement is open.
+
+| Default | Action |
+| --- | --- |
+| `P` | Place mode |
+| `X` | Erase mode |
+| `[` / `]` | Rotate left / right |
+
+## Focus tree shortcuts
+
+These bindings only apply while a focus tree preview is focused.
+
+| Default | Action |
+| --- | --- |
+| `Ctrl+0` | Fit the whole tree to the window |
+| `Delete` / `Backspace` | Delete the selected focuses |
+| `Ctrl+D` | Duplicate the selected focuses |
+| `Arrow keys` | Move the selected focuses by one grid step |
+| `Shift+Arrow keys` | Move the selected focuses by five grid steps |
 
 ## Extension settings
 

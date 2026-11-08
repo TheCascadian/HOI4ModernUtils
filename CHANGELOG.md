@@ -6,7 +6,52 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 **Versioning note:** This fork ([TheCascadian/HOI4ModernUtils](https://github.com/TheCascadian/HOI4ModernUtils)) keeps its own `0.x` version line, independent of the upstream project it was forked from. Entries at `[0.4.0]` and above are this fork's own releases. Entries from `[0.15.1]` down to `[0.13.0]` are inherited from upstream (`herbix/hoi4modutilities`) and were merged into this fork's history alongside its own work; older upstream entries have been compressed out of this file -  see the [upstream changelog](https://github.com/herbix/hoi4modutilities/blob/master/CHANGELOG.md) for full history. Because the two projects numbered releases independently, some version numbers (e.g. `0.12.x`, `0.3.2`) appear twice in git history for unrelated changes at different dates; this file only lists one entry per number going forward.
 
-## [Unreleased]
+## [0.4.19]
+
+### Changed
+
+- The Keyboard Shortcuts entry point moved out of the World Map Settings menu. **HOI4 Mod Utilities: Open Keyboard Shortcuts** is now a global command available from the Command Palette, the extension's gear menu in the Extensions view, and `Ctrl+Alt+K`. It opens VS Code's Keyboard Shortcuts editor filtered to this extension on every platform.
+
+## [0.4.18]
+
+### Changed
+
+- Keybindings are now native VS Code commands. Every World Map action and every Focus Tree editing action has a contributed command and default keybinding, so VS Code's Keyboard Shortcuts editor shows all of them and stores rebinds in `keybindings.json`. Bindings are scoped to the focused view and active tool, and single-key bindings yield while a text field or menu has focus.
+- World Map **Settings** no longer hosts keybindings. **HOI4 Mod Utilities: Open Keyboard Shortcuts** is a global command available from the Command Palette, the extension's gear menu in the Extensions view, and `Ctrl+Alt+K`; it opens VS Code's Keyboard Shortcuts editor filtered to this extension. The `hoi4ModernUtils.worldMapKeybinds` object setting and the legacy `worldMap*Keybind` string settings were removed.
+
+## [0.4.17]
+
+### Fixed
+
+- World map: saving railways or supply hubs no longer fails with "A railway has an invalid level or fewer than two valid provinces; nothing was written" when the loaded map already contains legacy or malformed entries. Invalid province IDs are skipped, out-of-range levels are normalized, and the rest of the file is still written. The save status reports any repairs instead of blocking every future edit.
+
+## [0.4.16]
+
+### Added
+
+- World map: the railway editor can now place supply hubs. Press Ctrl+Alt+H (or open the panel and press H) and click land provinces to add a hub, or click an existing hub to remove it. Hubs are drawn as red squares while the editor is open, each placement is one undo step, and edits save to `map/supply_nodes.txt` (leading comments are kept) alongside `map/railways.txt`.
+- World map: every keyboard action is now rebindable. The rebuilt **Settings** menu has a **Keybindings** dialog (Ctrl+Alt+K) that lists map, railway editor, and building placement actions, captures a new key combination, detects conflicts within the same context, and supports per-action and reset-all commands. Bindings apply immediately and save to `hoi4ModernUtils.worldMapKeybinds`; the older per-action settings still supply initial values.
+- World map: Destructive Actions now has "REMOVE ALL VICTORY POINTS" and "DELETE ALL MAP DATA", which removes buildings, water crossings, victory points, resources, railways and supply hubs from the entire map in one step.
+- World map: Province Tools "Auto-Merge All Countries". For every country it moves all land provinces into one new strategic region, then merges each connected block of its land provinces into one province and folds the states it spans into one state.
+
+### Fixed
+
+- Manual reloads no longer hang at 100% "visualizing data": a reload now always receives the full map instead of a diff against the discarded one.
+
+### Changed
+
+- Much faster map reload after province edits: edge calculation and validation no longer allocate per pixel, and the post-edit reload reuses unchanged cached files instead of re-parsing everything. The webview now builds its map indexes once after the last data chunk instead of after every chunk, chunks are larger, and the extension host serves chunks from the already loaded map instead of re-checking every dependency per chunk. River loading no longer allocates an object per river pixel, and strategic region validation uses maps instead of object records. Province cover zones (about two thirds of the 40 MB province payload on a large map) are no longer sent to the webview; it rebuilds them from the raster it already receives with the same shared algorithm.
+
+## [0.4.15]
+
+### Added
+* World map: staged province merges. Province Tools now has "Stage Merge of Selected Provinces" and "Stage Merges for Country / States...". Staging only queues a merge; a docked panel lists the queue and nothing changes until "Apply Staged Merges" (one confirmation, one save, one undo step). The scope dialog plans one merge per connected cluster of land provinces inside each state and strategic region, for the selected country, the selected states, or every state. The largest province of a cluster survives, and overlapping staged merges are skipped.
+* World map: "Remember performance settings" and "Remember visibility settings" toggles in the Interface menu. When on, the performance options and overlay, or the display layers and warning filter, carry over to new World Map views.
+
+### Fixed
+* World map: merging land provinces now marks the surviving province coastal when any merged province was coastal.
+* World map: merging provinces now moves or drops the per-province `buildings` entries (bunkers, naval bases) of removed provinces in state history, instead of leaving them pointing at a province that no longer exists.
+* World map: large merges no longer rescan the whole map once per merged province. Cover zones are rebuilt in one pass and the province image is rewritten with a color remap instead of a pixel list.
 
 ## [0.4.14]
 
@@ -282,4 +327,4 @@ Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how 
 
 ---
 
-Everything before upstream `v0.13.0` (releases `v0.1.0` through `v0.12.6`, spanning 2020–2024) has been compressed out of this file to keep it focused on this fork's recent and merged changes. That history is unchanged and still available in the [upstream changelog](https://github.com/herbix/hoi4modutilities/blob/master/CHANGELOG.md) and in this repository's git log.
+Everything before upstream `v0.13.0` (releases `v0.1.0` through `v0.12.6`, spanning 2020-2024) has been compressed out of this file to keep it focused on this fork's recent and merged changes. That history is unchanged and still available in the [upstream changelog](https://github.com/herbix/hoi4modutilities/blob/master/CHANGELOG.md) and in this repository's git log.
