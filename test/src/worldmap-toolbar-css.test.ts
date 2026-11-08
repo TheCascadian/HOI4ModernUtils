@@ -15,6 +15,18 @@ describe('world map toolbar styling', () => {
         path.join(process.cwd(), 'webviewsrc/worldmap/topbar.ts'),
         'utf-8'
     );
+    const actions = fs.readFileSync(
+        path.join(process.cwd(), 'src/previewdef/worldmap/actions.ts'),
+        'utf-8'
+    );
+    const focusTreeActions = fs.readFileSync(
+        path.join(process.cwd(), 'src/previewdef/focustree/actions.ts'),
+        'utf-8'
+    );
+    const packageJson = JSON.parse(fs.readFileSync(
+        path.join(process.cwd(), 'package.json'),
+        'utf-8'
+    ));
     const contextMenu = fs.readFileSync(
         path.join(process.cwd(), 'webviewsrc/util/contextmenu.ts'),
         'utf-8'
@@ -46,7 +58,10 @@ describe('world map toolbar styling', () => {
         assert.ok(html.includes('class="topbar-icon-label"'));
         assert.ok(html.includes('id="interface-tools-button"'));
         assert.ok(html.includes('id="interface-tools-menu"'));
-        assert.ok(html.includes('class="menu-keybind">Ctrl+Alt+Shift+P'));
+        assert.ok(packageJson.contributes.keybindings.some(
+            (binding: any) => binding.command === 'hoi4modernutils.worldMap.openPerformanceMenu'
+        ));
+        assert.ok(!html.includes('data-keybind-label'));
         assert.ok(css.includes('.interface-tools-menu'));
         assert.ok(css.includes('.toolbar [tabindex="0"]:focus-visible'));
         assert.ok(css.includes('#province-edit-tools-button,\n#interface-tools-button'));
@@ -137,12 +152,39 @@ describe('world map toolbar styling', () => {
         assert.ok(!css.includes('@media (max-width: 520px), (max-height: 420px)'));
     });
 
-    it('guards map shortcuts from interactive controls and duplicate bindings', () => {
-        assert.ok(topbar.includes('function shortcutSignature(shortcut: ShortcutSpec)'));
-        assert.ok(topbar.includes('const protectedDefaults = new Set'));
-        assert.ok(topbar.includes("'input, textarea, select, button, a, [role=\"combobox\"]"));
-        assert.ok(topbar.includes("key === 'p' && !e.ctrlKey && !e.shiftKey"));
-        assert.ok(topbar.includes("'Ctrl+Alt+I', 'Ctrl+Alt+A', 'Ctrl+Alt+P', 'Ctrl+Alt+Shift+P'"));
+    it('routes map shortcuts through native VS Code keybindings', () => {
+        const keybindings: any[] = packageJson.contributes.keybindings;
+        assert.ok(actions.includes('WORLD_MAP_ACTIONS'));
+        assert.ok(actions.includes('worldMapCommandId'));
+        assert.ok(keybindings.some(binding => binding.command === 'hoi4modernutils.worldMap.paintBrush'));
+        assert.ok(keybindings.some(binding => binding.command === 'hoi4modernutils.worldMap.railwayDelete'));
+        assert.ok(keybindings.every(binding => binding.command !== 'hoi4modernutils.openkeybindings' ? typeof binding.when === 'string' : true));
+        assert.deepStrictEqual(
+            keybindings.find(binding => binding.command === 'hoi4modernutils.openkeybindings'),
+            { command: 'hoi4modernutils.openkeybindings', key: 'ctrl+alt+k' }
+        );
+        assert.ok(keybindings.some(binding => (binding.when ?? '').includes("worldMapTool == 'railway'")));
+        assert.ok(keybindings.some(binding => (binding.when ?? '').includes("worldMapTool == 'building'")));
+        assert.ok(keybindings.some(binding => (binding.when ?? '').includes("worldMapTool == 'paint'")));
+        assert.ok(topbar.includes('runKeybindAction'));
+        assert.ok(topbar.includes("message?.command !== 'runworldmapaction'"));
+        assert.ok(topbar.includes("command: 'worldmapcontext'"));
+        assert.ok(!topbar.includes("command: 'setkeybind'"));
+        assert.ok(!topbar.includes('keybindCaptureActive'));
+        assert.ok(!html.includes('keybindings-button'));
+        assert.ok(!html.includes('keybindings-menu'));
+    });
+
+    it('routes focus tree shortcuts through native VS Code keybindings', () => {
+        const keybindings: any[] = packageJson.contributes.keybindings;
+        assert.ok(focusTreeActions.includes('FOCUS_TREE_ACTIONS'));
+        assert.ok(focusTreeActions.includes('focusTreeCommandId'));
+        assert.ok(keybindings.some(binding => binding.command === 'hoi4modernutils.focusTree.delete'));
+        assert.ok(keybindings.some(binding => binding.command === 'hoi4modernutils.focusTree.duplicate'));
+        assert.ok(keybindings.some(binding => binding.command === 'hoi4modernutils.focusTree.fitTree'));
+        assert.ok(keybindings
+            .filter(binding => binding.command.startsWith('hoi4modernutils.focusTree.'))
+            .every(binding => binding.when === 'hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned'));
     });
 
     it('exposes independent persisted typography and appearance controls', () => {
@@ -182,7 +224,9 @@ describe('world map toolbar styling', () => {
         assert.ok(html.includes('class="worldmap-modal-checkbox"'));
         assert.ok(html.includes('class="worldmap-modal-summary worldmap-modal-report"'));
         assert.ok(!html.includes('style='));
-        assert.ok(css.includes('.province-edit-tools-menu,\n.interface-tools-menu,\n.render-optimizations-menu,\n.accessibility-options-menu,\n.topbar-overflow-menu'));
+        assert.ok(css.includes('.render-optimizations-menu,\n.accessibility-options-menu,\n.topbar-overflow-menu'));
+        assert.ok(!css.includes('.keybindings-menu'));
+        assert.ok(!html.includes('id="keybindings-menu"'));
         assert.ok(css.includes('#paintbrush-panel .paintbrush-tool-actions button'));
         assert.ok(css.includes('width: 30px'));
         assert.ok(css.includes('--worldmap-glass-background:'));

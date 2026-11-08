@@ -5,6 +5,7 @@ import { contextContainer } from '../../context';
 import { localize } from '../../util/i18n';
 import { sendEvent } from '../../util/telemetry';
 import { WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest } from './definitions';
+import { WORLD_MAP_ACTIONS, worldMapCommandId } from './actions';
 
 export class WorldMapContainer implements vscode.WebviewPanelSerializer {
     private worldMap: WorldMap | undefined = undefined;
@@ -19,6 +20,12 @@ export class WorldMapContainer implements vscode.WebviewPanelSerializer {
         }
         disposables.push(vscode.workspace.onDidCloseTextDocument(this.onCloseTextDocument, this));
         disposables.push(vscode.workspace.onDidChangeTextDocument(this.onChangeTextDocument, this));
+        for (const action of WORLD_MAP_ACTIONS) {
+            disposables.push(vscode.commands.registerCommand(
+                worldMapCommandId(action.id),
+                () => this.worldMap?.runAction(action.id),
+            ));
+        }
         if (isWorldMapRuntimeTestEnabled()) {
             disposables.push(vscode.commands.registerCommand(
                 WorldMapRuntimeTestCommand,

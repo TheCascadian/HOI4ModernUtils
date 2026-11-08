@@ -1374,35 +1374,77 @@ function setupEditingToolbar(): void {
     document.getElementById('fit-tree-button')?.addEventListener('click', fitToTree);
     document.getElementById('fit-selection-button')?.addEventListener('click', fitToSelection);
 
-    window.addEventListener('keydown', e => {
-        if (isInteractiveTarget(e.target)) {
+    window.addEventListener('message', event => {
+        const message = event.data as { command?: string, action?: string } | undefined;
+        if (message?.command !== 'runfocustreeaction' || typeof message.action !== 'string') {
             return;
         }
+        runFocusTreeAction(message.action);
+    });
 
-        if (e.key === '0' && (e.ctrlKey || e.metaKey)) {
-            e.preventDefault();
+    installKeyboardContextTracking();
+}
+
+/** Runs one keyboard action dispatched by the extension host. */
+function runFocusTreeAction(action: string): void {
+    switch (action) {
+        case 'fitTree':
             fitToTree();
             return;
-        }
-
-        if (selectedFocusIds.length === 0) {
-            return;
-        }
-
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-            e.preventDefault();
+        case 'delete':
             deleteSelectedFocuses();
-        } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
-            e.preventDefault();
+            return;
+        case 'duplicate':
             duplicateSelectedFocuses();
-        } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-            e.preventDefault();
-            const step = e.shiftKey ? 5 : 1;
-            const deltaX = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
-            const deltaY = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
-            nudgeSelectedFocuses(deltaX, deltaY);
+            return;
+        case 'moveLeft':
+            nudgeSelectedFocuses(-1, 0);
+            return;
+        case 'moveRight':
+            nudgeSelectedFocuses(1, 0);
+            return;
+        case 'moveUp':
+            nudgeSelectedFocuses(0, -1);
+            return;
+        case 'moveDown':
+            nudgeSelectedFocuses(0, 1);
+            return;
+        case 'moveLeftFast':
+            nudgeSelectedFocuses(-5, 0);
+            return;
+        case 'moveRightFast':
+            nudgeSelectedFocuses(5, 0);
+            return;
+        case 'moveUpFast':
+            nudgeSelectedFocuses(0, -5);
+            return;
+        case 'moveDownFast':
+            nudgeSelectedFocuses(0, 5);
+            return;
+        default:
+            return;
+    }
+}
+
+function isKeyboardOwnedTarget(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement && (target.isContentEditable || target.closest(
+        'input,textarea,select,button,a,label,[role="menu"],[role="dialog"],[role="combobox"],[role="option"]'
+    ) !== null);
+}
+
+/** Tells the extension host when single-key bindings must yield to a focused control. */
+function installKeyboardContextTracking(): void {
+    let lastOwned: boolean | undefined;
+    const report = () => {
+        const owned = isKeyboardOwnedTarget(document.activeElement);
+        if (owned !== lastOwned) {
+            lastOwned = owned;
+            vscode.postMessage({ command: 'focustreecontext', keyboardOwned: owned });
         }
-    });
+    };
+    window.addEventListener('focusin', report);
+    window.addEventListener('focusout', () => setTimeout(report, 0));
+    report();
 }
 
 function getFocusElements(focuses: Focus[]): { focus: Focus, element: HTMLDivElement, navigator: HTMLDivElement }[] {

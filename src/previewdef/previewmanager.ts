@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { focusTreePreviewDef } from './focustree';
+import { focusTreePreviewDef, registerFocusTreeKeybindings } from './focustree';
 import { reportFailure } from '../util/errorreport';
 import { localize } from '../util/i18n';
 import { gfxPreviewDef } from './gfx';
@@ -77,6 +77,7 @@ class PreviewManager implements vscode.WebviewPanelSerializer {
         }
         disposables.push(indexManager.onUpdated(this.onGfxIndexInitialized, this));
         disposables.push(registerFocusTreeDiagnostics());
+        disposables.push(registerFocusTreeKeybindings());
 
         // Trigger context value setting
         this.updateHoi4PreviewContextValue(vscode.window.activeTextEditor);

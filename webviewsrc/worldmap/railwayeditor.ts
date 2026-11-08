@@ -771,50 +771,44 @@ export class RailwayEditor {
         });
     }
 
-    /** Returns true when the key was used. */
-    public handleKey(e: KeyboardEvent): boolean {
-        const key = e.key.toLowerCase();
-        if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-            if (key === 'z' && !e.shiftKey) {
+    /** Runs one keyboard-bound action. Returns true when it was handled. */
+    public handleAction(action: WorldMapActionId): boolean {
+        switch (action) {
+            case 'mapUndo':
                 this.undo() || this.hooks.status(feLocalize('worldmap.railway.nothingundo', 'No railway edits to undo.'));
                 return true;
-            }
-            if (key === 'y' || (key === 'z' && e.shiftKey)) {
+            case 'mapRedo':
                 this.redo() || this.hooks.status(feLocalize('worldmap.railway.nothingredo', 'No railway edits to redo.'));
                 return true;
-            }
-            return false;
-        }
-        if (e.altKey || e.metaKey) {
-            return false;
-        }
-        switch (key) {
-            case 'escape':
+            case 'cancel':
                 if (this.pendingStart !== undefined || this.selected >= 0) {
                     this.select(-1);
                 } else {
                     this.deactivate();
                 }
                 return true;
-            case 'enter':
+            case 'railwayFinish':
                 this.select(-1);
                 return true;
-            case 's':
+            case 'railwaySelectMode':
                 this.setMode('select');
                 return true;
-            case 'd':
+            case 'railwayDrawMode':
                 this.setMode('draw');
                 return true;
-            case 'r':
+            case 'railwaySupplyMode':
+                this.setMode('supply');
+                return true;
+            case 'railwayReverse':
                 this.reverseSelected();
                 return true;
-            case 'x':
+            case 'railwaySplit':
                 this.splitSelected();
                 return true;
-            case 'delete':
+            case 'railwayDelete':
                 this.deleteSelected();
                 return true;
-            case 'backspace': {
+            case 'railwayStepBack': {
                 const railway = this.getSelected();
                 if (railway) {
                     this.removeNode(this.selected, this.extendFrom === 'end' ? railway.provinces.length - 1 : 0);
@@ -824,20 +818,23 @@ export class RailwayEditor {
                 }
                 return true;
             }
-            case '[':
+            case 'railwayPrevious':
                 this.selectRelative(-1);
                 return true;
-            case ']':
+            case 'railwayNext':
                 this.selectRelative(1);
                 return true;
-            case 'tab':
+            case 'railwaySwitchEnd':
                 this.setExtendFrom(this.extendFrom === 'end' ? 'start' : 'end');
                 return true;
+            case 'railwayLevel1':
+            case 'railwayLevel2':
+            case 'railwayLevel3':
+            case 'railwayLevel4':
+            case 'railwayLevel5':
+                this.setLevel(Number(action.slice(-1)));
+                return true;
             default:
-                if (/^[1-5]$/.test(key)) {
-                    this.setLevel(Number(key));
-                    return true;
-                }
                 return false;
         }
     }
@@ -874,6 +871,7 @@ export class RailwayEditor {
             command: 'persistrailways',
             requestId,
             railways: cloneRailways(this.railways),
+            supplyNodes: cloneSupplyNodes(this.supplyNodes),
         } as WorldMapMessage);
         if (this.saveTimeout) {
             clearTimeout(this.saveTimeout);
@@ -899,6 +897,9 @@ export class RailwayEditor {
         if (message.success) {
             this.saveState = this.saveTimer ? 'dirty' : 'saved';
             this.saveError = '';
+            if (message.warning) {
+                this.hooks.status(message.warning, 'warn');
+            }
         } else {
             this.saveState = 'failed';
             this.saveError = message.error ?? feLocalize('worldmap.railway.savefailed', 'Saving failed.');
@@ -1024,6 +1025,41 @@ export class RailwayEditor {
                         context.fillText(String(id), x + 9, y - 8);
                     }
                 });
+            }
+        }
+
+        // Supply hubs are always shown while the editor is open, with the hovered
+        // province ringed in supply mode so a click lands where expected.
+        const inSupplyMode = this.mode === 'supply';
+        for (const node of this.supplyNodes) {
+            const point = centerOf(node.province);
+            if (!point) {
+                continue;
+            }
+            const hovered = inSupplyMode && node.province === hoverProvinceId;
+            for (const offset of offsets) {
+                const x = viewPoint.convertX(point.x + offset);
+                const y = viewPoint.convertY(point.y);
+                context.fillStyle = hovered ? '#ff8a8a' : '#c81e1e';
+                context.fillRect(x - 5, y - 5, 10, 10);
+                context.lineWidth = hovered ? 3 : 2;
+                context.strokeStyle = '#ffffff';
+                context.strokeRect(x - 5, y - 5, 10, 10);
+            }
+        }
+        if (inSupplyMode && hoverProvinceId !== undefined && !this.getSupplyNode(hoverProvinceId)) {
+            const point = centerOf(hoverProvinceId);
+            if (point) {
+                for (const offset of offsets) {
+                    const x = viewPoint.convertX(point.x + offset);
+                    const y = viewPoint.convertY(point.y);
+                    context.beginPath();
+                    context.setLineDash([5, 4]);
+                    context.lineWidth = 2;
+                    context.strokeStyle = '#3dff7a';
+                    context.strokeRect(x - 6, y - 6, 12, 12);
+                    context.setLineDash([]);
+                }
             }
         }
 

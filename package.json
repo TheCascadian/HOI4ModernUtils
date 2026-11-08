@@ -2,7 +2,7 @@
 	"name": "hoi4modernutils",
 	"displayName": "%hoi4modernutils.displayName%",
 	"description": "Utilities for Heart of Iron IV mods developers",
-	"version": "0.4.14",
+	"version": "0.4.19",
 	"author": "TheCascadian",
 	"publisher": "thecascadian",
 	"icon": "icon.png",
@@ -25,6 +25,7 @@
 	"activationEvents": [
 		"onCommand:hoi4modernutils.preview",
 		"onCommand:hoi4modernutils.previewworld",
+		"onCommand:hoi4modernutils.openkeybindings",
 		"onCommand:hoi4modernutils.scanAndLogErrors",
 		"onCommand:hoi4modernutils.scanreferences",
 		"onCommand:hoi4modernutils.copylasterror",
@@ -159,48 +160,6 @@
 						},
 						"description": "%hoi4modernutils.featureFlags.desc%"
 					},
-					"hoi4ModernUtils.worldMapSelectionUndoKeybind": {
-						"title": "%hoi4modernutils.worldMapSelectionUndoKeybind.title%",
-						"type": "string",
-						"default": "T",
-						"description": "%hoi4modernutils.worldMapSelectionUndoKeybind.desc%"
-					},
-					"hoi4ModernUtils.worldMapSelectionRedoKeybind": {
-						"title": "%hoi4modernutils.worldMapSelectionRedoKeybind.title%",
-						"type": "string",
-						"default": "R",
-						"description": "%hoi4modernutils.worldMapSelectionRedoKeybind.desc%"
-					},
-					"hoi4ModernUtils.worldMapMapUndoKeybind": {
-						"title": "%hoi4modernutils.worldMapMapUndoKeybind.title%",
-						"type": "string",
-						"default": "Ctrl+Z",
-						"description": "%hoi4modernutils.worldMapMapUndoKeybind.desc%"
-					},
-					"hoi4ModernUtils.worldMapMapRedoKeybind": {
-						"title": "%hoi4modernutils.worldMapMapRedoKeybind.title%",
-						"type": "string",
-						"default": "Ctrl+Y",
-						"description": "%hoi4modernutils.worldMapMapRedoKeybind.desc%"
-					},
-					"hoi4ModernUtils.worldMapCreateStateKeybind": {
-						"title": "%hoi4modernutils.worldMapCreateStateKeybind.title%",
-						"type": "string",
-						"default": "Ctrl+Shift+N",
-						"description": "%hoi4modernutils.worldMapCreateStateKeybind.desc%"
-					},
-					"hoi4ModernUtils.worldMapAssignSelectionKeybind": {
-						"title": "%hoi4modernutils.worldMapAssignSelectionKeybind.title%",
-						"type": "string",
-						"default": "Ctrl+Enter",
-						"description": "%hoi4modernutils.worldMapAssignSelectionKeybind.desc%"
-					},
-					"hoi4ModernUtils.worldMapAssignSelectionToStrategicRegionKeybind": {
-						"title": "%hoi4modernutils.worldMapAssignSelectionToStrategicRegionKeybind.title%",
-						"type": "string",
-						"default": "Ctrl+Shift+G",
-						"description": "%hoi4modernutils.worldMapAssignSelectionToStrategicRegionKeybind.desc%"
-					},
 					"hoi4ModernUtils.worldMapConfirmNewProvinceCreation": {
 						"title": "%hoi4modernutils.worldMapConfirmNewProvinceCreation.title%",
 						"type": "boolean",
@@ -247,6 +206,11 @@
 				"category": "%hoi4modernutils.category%"
 			},
 			{
+				"command": "hoi4modernutils.openkeybindings",
+				"title": "%hoi4modernutils.openkeybindings.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
 				"command": "hoi4modernutils.scanreferences",
 				"title": "%hoi4modernutils.scanreferences.title%",
 				"icon": "$(references)",
@@ -267,6 +231,527 @@
 				"command": "hoi4modernutils.test",
 				"title": "HOI4 test",
 				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.paintBrush",
+				"title": "%hoi4modernutils.worldMap.paintBrush.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.paintEraser",
+				"title": "%hoi4modernutils.worldMap.paintEraser.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.fillBucket",
+				"title": "%hoi4modernutils.worldMap.fillBucket.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.lasso",
+				"title": "%hoi4modernutils.worldMap.lasso.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.transferWand",
+				"title": "%hoi4modernutils.worldMap.transferWand.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.createNewProvince",
+				"title": "%hoi4modernutils.worldMap.createNewProvince.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.cancel",
+				"title": "%hoi4modernutils.worldMap.cancel.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.mapUndo",
+				"title": "%hoi4modernutils.worldMap.mapUndo.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.mapRedo",
+				"title": "%hoi4modernutils.worldMap.mapRedo.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.selectionUndo",
+				"title": "%hoi4modernutils.worldMap.selectionUndo.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.selectionRedo",
+				"title": "%hoi4modernutils.worldMap.selectionRedo.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.createStateFromSelection",
+				"title": "%hoi4modernutils.worldMap.createStateFromSelection.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.assignSelectionToState",
+				"title": "%hoi4modernutils.worldMap.assignSelectionToState.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.assignSelectionToStrategicRegion",
+				"title": "%hoi4modernutils.worldMap.assignSelectionToStrategicRegion.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.toggleRailwayEditor",
+				"title": "%hoi4modernutils.worldMap.toggleRailwayEditor.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.toggleSupplyHubMode",
+				"title": "%hoi4modernutils.worldMap.toggleSupplyHubMode.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.toggleBuildingEditor",
+				"title": "%hoi4modernutils.worldMap.toggleBuildingEditor.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.openInterfaceMenu",
+				"title": "%hoi4modernutils.worldMap.openInterfaceMenu.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.openAccessibilityMenu",
+				"title": "%hoi4modernutils.worldMap.openAccessibilityMenu.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.openPerformanceMenu",
+				"title": "%hoi4modernutils.worldMap.openPerformanceMenu.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwaySelectMode",
+				"title": "%hoi4modernutils.worldMap.railwaySelectMode.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayDrawMode",
+				"title": "%hoi4modernutils.worldMap.railwayDrawMode.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwaySupplyMode",
+				"title": "%hoi4modernutils.worldMap.railwaySupplyMode.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayReverse",
+				"title": "%hoi4modernutils.worldMap.railwayReverse.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwaySplit",
+				"title": "%hoi4modernutils.worldMap.railwaySplit.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayDelete",
+				"title": "%hoi4modernutils.worldMap.railwayDelete.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayStepBack",
+				"title": "%hoi4modernutils.worldMap.railwayStepBack.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayPrevious",
+				"title": "%hoi4modernutils.worldMap.railwayPrevious.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayNext",
+				"title": "%hoi4modernutils.worldMap.railwayNext.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwaySwitchEnd",
+				"title": "%hoi4modernutils.worldMap.railwaySwitchEnd.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayFinish",
+				"title": "%hoi4modernutils.worldMap.railwayFinish.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayLevel1",
+				"title": "%hoi4modernutils.worldMap.railwayLevel1.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayLevel2",
+				"title": "%hoi4modernutils.worldMap.railwayLevel2.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayLevel3",
+				"title": "%hoi4modernutils.worldMap.railwayLevel3.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayLevel4",
+				"title": "%hoi4modernutils.worldMap.railwayLevel4.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayLevel5",
+				"title": "%hoi4modernutils.worldMap.railwayLevel5.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.buildingPlaceMode",
+				"title": "%hoi4modernutils.worldMap.buildingPlaceMode.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.buildingEraseMode",
+				"title": "%hoi4modernutils.worldMap.buildingEraseMode.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.buildingRotateLeft",
+				"title": "%hoi4modernutils.worldMap.buildingRotateLeft.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.buildingRotateRight",
+				"title": "%hoi4modernutils.worldMap.buildingRotateRight.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.fitTree",
+				"title": "%hoi4modernutils.focusTree.fitTree.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.delete",
+				"title": "%hoi4modernutils.focusTree.delete.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.duplicate",
+				"title": "%hoi4modernutils.focusTree.duplicate.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveLeft",
+				"title": "%hoi4modernutils.focusTree.moveLeft.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveRight",
+				"title": "%hoi4modernutils.focusTree.moveRight.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveUp",
+				"title": "%hoi4modernutils.focusTree.moveUp.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveDown",
+				"title": "%hoi4modernutils.focusTree.moveDown.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveLeftFast",
+				"title": "%hoi4modernutils.focusTree.moveLeftFast.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveRightFast",
+				"title": "%hoi4modernutils.focusTree.moveRightFast.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveUpFast",
+				"title": "%hoi4modernutils.focusTree.moveUpFast.title%",
+				"category": "%hoi4modernutils.category%"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveDownFast",
+				"title": "%hoi4modernutils.focusTree.moveDownFast.title%",
+				"category": "%hoi4modernutils.category%"
+			}
+		],
+		"keybindings": [
+			{
+				"command": "hoi4modernutils.openkeybindings",
+				"key": "ctrl+alt+k"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.paintBrush",
+				"key": "p",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.paintEraser",
+				"key": "e",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'paint'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.fillBucket",
+				"key": "f",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.lasso",
+				"key": "l",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.transferWand",
+				"key": "w",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.createNewProvince",
+				"key": "ctrl+alt+p",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.cancel",
+				"key": "escape",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.mapUndo",
+				"key": "ctrl+z",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.mapRedo",
+				"key": "ctrl+y",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.selectionUndo",
+				"key": "t",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.selectionRedo",
+				"key": "r",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.createStateFromSelection",
+				"key": "ctrl+shift+n",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.assignSelectionToState",
+				"key": "ctrl+enter",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.assignSelectionToStrategicRegion",
+				"key": "ctrl+shift+g",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.toggleRailwayEditor",
+				"key": "ctrl+alt+r",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.toggleSupplyHubMode",
+				"key": "ctrl+alt+h",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.toggleBuildingEditor",
+				"key": "ctrl+alt+b",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.openInterfaceMenu",
+				"key": "ctrl+alt+i",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.openAccessibilityMenu",
+				"key": "ctrl+alt+a",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.openPerformanceMenu",
+				"key": "ctrl+alt+shift+p",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwaySelectMode",
+				"key": "s",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayDrawMode",
+				"key": "d",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwaySupplyMode",
+				"key": "h",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayReverse",
+				"key": "r",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwaySplit",
+				"key": "x",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayDelete",
+				"key": "delete",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayStepBack",
+				"key": "backspace",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayPrevious",
+				"key": "[",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayNext",
+				"key": "]",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwaySwitchEnd",
+				"key": "tab",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayFinish",
+				"key": "enter",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayLevel1",
+				"key": "1",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayLevel2",
+				"key": "2",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayLevel3",
+				"key": "3",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayLevel4",
+				"key": "4",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.railwayLevel5",
+				"key": "5",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'railway'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.buildingPlaceMode",
+				"key": "p",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'building'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.buildingEraseMode",
+				"key": "x",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'building'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.buildingRotateLeft",
+				"key": "[",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'building'"
+			},
+			{
+				"command": "hoi4modernutils.worldMap.buildingRotateRight",
+				"key": "]",
+				"when": "hoi4ModernUtils.worldMapFocused && !hoi4ModernUtils.worldMapKeyboardOwned && hoi4ModernUtils.worldMapTool == 'building'"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.fitTree",
+				"key": "ctrl+0",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.delete",
+				"key": "delete",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.delete",
+				"key": "backspace",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.duplicate",
+				"key": "ctrl+d",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveLeft",
+				"key": "arrowleft",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveRight",
+				"key": "arrowright",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveUp",
+				"key": "arrowup",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveDown",
+				"key": "arrowdown",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveLeftFast",
+				"key": "shift+arrowleft",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveRightFast",
+				"key": "shift+arrowright",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveUpFast",
+				"key": "shift+arrowup",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
+			},
+			{
+				"command": "hoi4modernutils.focusTree.moveDownFast",
+				"key": "shift+arrowdown",
+				"when": "hoi4ModernUtils.focusTreeFocused && !hoi4ModernUtils.focusTreeKeyboardOwned"
 			}
 		],
 		"customEditors": [
@@ -304,6 +789,166 @@
 			],
 			"commandPalette": [
 				{
+					"command": "hoi4modernutils.worldMap.paintBrush",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.paintEraser",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.fillBucket",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.lasso",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.transferWand",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.createNewProvince",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.cancel",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.mapUndo",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.mapRedo",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.selectionUndo",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.selectionRedo",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.createStateFromSelection",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.assignSelectionToState",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.assignSelectionToStrategicRegion",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.toggleRailwayEditor",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.toggleSupplyHubMode",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.toggleBuildingEditor",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.openInterfaceMenu",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.openAccessibilityMenu",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.openPerformanceMenu",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwaySelectMode",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayDrawMode",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwaySupplyMode",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayReverse",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwaySplit",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayDelete",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayStepBack",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayPrevious",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayNext",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwaySwitchEnd",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayFinish",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayLevel1",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayLevel2",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayLevel3",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayLevel4",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.railwayLevel5",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.buildingPlaceMode",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.buildingEraseMode",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.buildingRotateLeft",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.worldMap.buildingRotateRight",
+					"when": "false"
+				},
+				{
 					"command": "hoi4modernutils.preview",
 					"when": "!shouldHideHoi4Preview && resourceScheme != webview-panel"
 				},
@@ -326,6 +971,50 @@
 				{
 					"command": "hoi4modernutils.test",
 					"when": "hoi4MUInDev"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.fitTree",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.delete",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.duplicate",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.moveLeft",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.moveRight",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.moveUp",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.moveDown",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.moveLeftFast",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.moveRightFast",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.moveUpFast",
+					"when": "false"
+				},
+				{
+					"command": "hoi4modernutils.focusTree.moveDownFast",
+					"when": "false"
 				}
 			]
 		}

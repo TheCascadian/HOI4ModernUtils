@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { registerContextContainer, setVscodeContext } from './context';
 import { DDSViewProvider, TGAViewProvider } from './ddsviewprovider';
 import { registerModFile } from './util/modfile';
-import { ViewType, ContextName } from './constants';
+import { ViewType, ContextName, Commands } from './constants';
 import { registerTelemetryReporter, sendEvent } from './util/telemetry';
 import { registerScanReferencesCommand } from './util/dependency';
 import { registerHoiFs } from './util/hoifs';
@@ -36,6 +36,11 @@ export function activate(context: vscode.ExtensionContext) {
     measurePhase('registrations', () => {
         registerLazyAssetService(context);
         context.subscriptions.push(registerLazyPreviews(context));
+        context.subscriptions.push(vscode.commands.registerCommand(Commands.OpenKeybindings, () =>
+            vscode.commands.executeCommand(
+                'workbench.action.openGlobalKeybindings',
+                '@ext:thecascadian.hoi4modernutils',
+            )));
         context.subscriptions.push(registerModFile());
         context.subscriptions.push(registerScanReferencesCommand());
         context.subscriptions.push(registerScanAndLogErrorsCommand());

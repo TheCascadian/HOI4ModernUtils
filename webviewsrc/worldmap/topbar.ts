@@ -20,6 +20,7 @@ import { OceanTileReadinessIssue, verifyOceanTileReadiness } from "../../src/pre
 import { RailwayEditor, RAILWAY_MAX_LEVEL } from "./railwayeditor";
 import { BuildingEditor } from "./buildingeditor";
 import { calculateProvinceIdCap } from "../../src/previewdef/worldmap/maplimits";
+import { WorldMapActionId, isWorldMapActionId } from "../../src/previewdef/worldmap/actions";
 
 export type ViewMode = 'province' | 'state' | 'strategicregion' | 'supplyarea' | 'warnings' | 'country';
 export type ColorSet = 'provinceid' | 'provincetype' | 'terrain' | 'owner' | 'controller' | 'stateid' | 'manpower' |
@@ -41,123 +42,6 @@ interface MapEditAction {
     type: 'state' | 'strategicregion' | 'province';
     before: StateSnapshot[] | StrategicRegionSnapshot[] | ProvinceSnapshot[];
     after: StateSnapshot[] | StrategicRegionSnapshot[] | ProvinceSnapshot[];
-}
-
-interface ShortcutSpec {
-    key: string;
-    ctrl: boolean;
-    shift: boolean;
-    alt: boolean;
-    label: string;
-}
-
-interface WorldMapKeybindSpec {
-    selectionUndo: ShortcutSpec;
-    selectionRedo: ShortcutSpec;
-    mapUndo: ShortcutSpec;
-    mapRedo: ShortcutSpec;
-    createStateFromSelection: ShortcutSpec;
-    assignSelectionToState: ShortcutSpec;
-    assignSelectionToStrategicRegion: ShortcutSpec;
-}
-
-const defaultKeybindLabels = {
-    selectionUndo: 'T',
-    selectionRedo: 'R',
-    mapUndo: 'Ctrl+Z',
-    mapRedo: 'Ctrl+Y',
-    createStateFromSelection: 'Ctrl+Shift+N',
-    assignSelectionToState: 'Ctrl+Enter',
-    assignSelectionToStrategicRegion: 'Ctrl+Shift+G',
-} as const;
-
-function parseShortcutOrDefault(value: string | undefined, fallback: string): ShortcutSpec {
-    const parsed = parseShortcut(value);
-    if (parsed) {
-        return parsed;
-    }
-
-    const fallbackParsed = parseShortcut(fallback);
-    if (fallbackParsed) {
-        return fallbackParsed;
-    }
-
-    return { key: 'unidentified', ctrl: false, shift: false, alt: false, label: fallback };
-}
-
-function parseShortcut(value: string | undefined): ShortcutSpec | undefined {
-    if (!value) {
-        return undefined;
-    }
-
-    const parts = value.split('+').map(x => x.trim()).filter(x => x.length > 0);
-    if (parts.length === 0) {
-        return undefined;
-    }
-
-    let ctrl = false;
-    let shift = false;
-    let alt = false;
-    let key: string | undefined;
-
-    for (const part of parts) {
-        const lower = part.toLowerCase();
-        if (lower === 'ctrl' || lower === 'control') {
-            ctrl = true;
-            continue;
-        }
-        if (lower === 'shift') {
-            shift = true;
-            continue;
-        }
-        if (lower === 'alt' || lower === 'option') {
-            alt = true;
-            continue;
-        }
-
-        key = lower === 'return' ? 'enter' : lower;
-    }
-
-    if (!key) {
-        return undefined;
-    }
-
-    return { key, ctrl, shift, alt, label: value };
-}
-
-function shortcutSignature(shortcut: ShortcutSpec): string {
-    return `${shortcut.ctrl ? '1' : '0'}${shortcut.shift ? '1' : '0'}${shortcut.alt ? '1' : '0'}:${shortcut.key}`;
-}
-
-function getWorldMapKeybinds(): WorldMapKeybindSpec {
-    const source = ((window as any)['__worldMapKeybinds'] ?? {}) as Partial<Record<keyof WorldMapKeybindSpec, string>>;
-    const actionNames = Object.keys(defaultKeybindLabels) as Array<keyof WorldMapKeybindSpec>;
-    const defaults = Object.fromEntries(actionNames.map(name => [
-        name,
-        parseShortcutOrDefault(undefined, defaultKeybindLabels[name]),
-    ])) as unknown as WorldMapKeybindSpec;
-    const protectedDefaults = new Set(actionNames.map(name => shortcutSignature(defaults[name])));
-    const reservedShortcuts = [
-        'P', 'E', 'F', 'L', 'W',
-        'Ctrl+Alt+I', 'Ctrl+Alt+A', 'Ctrl+Alt+P', 'Ctrl+Alt+Shift+P',
-    ].map(value => parseShortcut(value)).filter((value): value is ShortcutSpec => value !== undefined);
-    const used = new Set(reservedShortcuts.map(shortcutSignature));
-    const resolved = {} as WorldMapKeybindSpec;
-
-    for (const name of actionNames) {
-        const fallback = defaults[name];
-        let candidate = parseShortcutOrDefault(source[name], defaultKeybindLabels[name]);
-        const candidateSignature = shortcutSignature(candidate);
-        const fallbackSignature = shortcutSignature(fallback);
-        const stealsAnotherDefault = protectedDefaults.has(candidateSignature) && candidateSignature !== fallbackSignature;
-        if (used.has(candidateSignature) || stealsAnotherDefault) {
-            candidate = fallback;
-        }
-        used.add(shortcutSignature(candidate));
-        resolved[name] = candidate;
-    }
-
-    return resolved;
 }
 
 function getConfirmNewProvinceCreation(): boolean {
@@ -422,7 +306,6 @@ export class TopBar extends Subscriber {
 
     private actionStatus: HTMLDivElement;
     private actionStatusTimer: ReturnType<typeof setTimeout> | undefined;
-    private keybinds: WorldMapKeybindSpec;
 
     private eventToMapPosition(
         canvas: HTMLCanvasElement,
@@ -548,7 +431,7 @@ export class TopBar extends Subscriber {
         this.mapUndoStack = [];
         this.mapRedoStack = [];
         this.selectedConditions$ = new BehaviorSubject<ConditionItem[]>((state.selectedConditions ?? []).map(stringValueToConditionItem));
-        this.keybinds = getWorldMapKeybinds();
+        this.installKeyboardContextTracking();
 
         this.addSubscription(this.conditions.selectedValues$.subscribe(selection => {
             this.selectedConditions$.next(selection.map(stringValueToConditionItem));
@@ -1676,17 +1559,7 @@ export class TopBar extends Subscriber {
             )) close();
         }));
         this.addSubscription(fromEvent<KeyboardEvent>(document, 'keydown').subscribe(event => {
-            const key = event.key.toLowerCase();
-            if (event.ctrlKey && event.altKey && !event.shiftKey && key === 'i' &&
-                !this.shouldIgnoreGlobalShortcut(event.target)) {
-                event.preventDefault();
-                toggle();
-            } else if (event.ctrlKey && event.altKey && event.shiftKey && key === 'p' &&
-                !this.shouldIgnoreGlobalShortcut(event.target)) {
-                event.preventDefault();
-                close();
-                document.getElementById('render-optimizations-button')?.click();
-            } else if (event.key === 'Escape' && !menu.hidden) {
+            if (event.key === 'Escape' && !menu.hidden) {
                 event.preventDefault();
                 close();
                 button.focus();
@@ -1976,11 +1849,7 @@ export class TopBar extends Subscriber {
             }
         }));
         this.addSubscription(fromEvent<KeyboardEvent>(document, 'keydown').subscribe(event => {
-            if (event.ctrlKey && event.altKey && event.key.toLowerCase() === 'a' &&
-                !this.shouldIgnoreGlobalShortcut(event.target)) {
-                event.preventDefault();
-                toggleMenu();
-            } else if (event.key === 'Escape' && !menu.hidden) {
+            if (event.key === 'Escape' && !menu.hidden) {
                 event.preventDefault();
                 close();
                 button.focus();
@@ -2495,12 +2364,12 @@ export class TopBar extends Subscriber {
         const draftUndoBtn = document.getElementById('paintbrush-draft-undo') as HTMLButtonElement | null;
         const draftRedoBtn = document.getElementById('paintbrush-draft-redo') as HTMLButtonElement | null;
         if (draftUndoBtn) {
-            const title = `Restore the previous painted region (${this.keybinds.selectionUndo.label})`;
+            const title = 'Restore the previous painted region';
             draftUndoBtn.title = title;
             draftUndoBtn.setAttribute('aria-label', title);
         }
         if (draftRedoBtn) {
-            const title = `Reapply the next painted region (${this.keybinds.selectionRedo.label})`;
+            const title = 'Reapply the next painted region';
             draftRedoBtn.title = title;
             draftRedoBtn.setAttribute('aria-label', title);
         }
@@ -5340,38 +5209,44 @@ export class TopBar extends Subscriber {
             }
         }));
 
-        this.addSubscription(fromEvent<KeyboardEvent>(document, 'keydown').subscribe(e => {
-            if (this.shouldIgnoreGlobalShortcut(e.target)) {
+        this.addSubscription(fromEvent<MessageEvent>(window, 'message').subscribe(event => {
+            const message = event.data as WorldMapMessage;
+            if (message?.command !== 'runworldmapaction') {
                 return;
             }
+            this.runKeybindAction(message.action);
+        }));
 
-            const key = e.key.toLowerCase();
+        this.addSubscription(this.activeTool$.subscribe(tool => {
+            vscode.postMessage<WorldMapMessage>({
+                command: 'worldmapcontext',
+                tool,
+            } as WorldMapMessage);
+        }));
+    }
 
-            if (this.buildingEditor.active$.value && this.buildingEditor.handleKey(e)) {
-                e.preventDefault();
-                return;
-            }
-
-            if (e.ctrlKey && e.altKey && !e.shiftKey && key === 'b') {
-                e.preventDefault();
+    /** Runs one keyboard action dispatched by the extension host. */
+    public runKeybindAction(action: string): void {
+        if (!isWorldMapActionId(action)) {
+            return;
+        }
+        if (this.buildingEditor.active$.value && this.buildingEditor.handleAction(action)) {
+            return;
+        }
+        if (this.railwayEditor.active$.value && this.railwayEditor.handleAction(action)) {
+            return;
+        }
+        switch (action) {
+            case 'toggleBuildingEditor':
                 this.buildingEditor.toggle();
                 return;
-            }
-
-            if (this.railwayEditor.active$.value && this.railwayEditor.handleKey(e)) {
-                e.preventDefault();
-                return;
-            }
-
-            if (e.ctrlKey && e.altKey && !e.shiftKey && key === 'r') {
-                e.preventDefault();
+            case 'toggleRailwayEditor':
                 this.railwayEditor.toggle();
                 return;
-            }
-
-            if (this.matchesShortcut(e, this.keybinds.mapUndo)) {
-                e.preventDefault();
-                // Paintbrush undo takes priority
+            case 'toggleSupplyHubMode':
+                this.railwayEditor.open('supply');
+                return;
+            case 'mapUndo':
                 if (this.paintbrushCanUndo$.value) {
                     this.undoPaintbrushEdit();
                     return;
@@ -5382,11 +5257,7 @@ export class TopBar extends Subscriber {
                 }
                 this.showActionStatus(feLocalize('worldmap.action.nomapundo', 'No map-edit history to undo.'));
                 return;
-            }
-
-            if (this.matchesShortcut(e, this.keybinds.mapRedo)) {
-                e.preventDefault();
-                // Paintbrush redo takes priority
+            case 'mapRedo':
                 if (this.paintbrushCanRedo$.value) {
                     this.redoPaintbrushEdit();
                     return;
@@ -5397,10 +5268,7 @@ export class TopBar extends Subscriber {
                 }
                 this.showActionStatus(feLocalize('worldmap.action.nomapredo', 'No map-edit history to redo.'));
                 return;
-            }
-
-            if (this.matchesShortcut(e, this.keybinds.selectionUndo)) {
-                e.preventDefault();
+            case 'selectionUndo':
                 if (this.paintbrushActive$.value) {
                     this.undoPaintDraft();
                 } else if (this.viewMode$.value === 'state') {
@@ -5409,10 +5277,7 @@ export class TopBar extends Subscriber {
                     this.undoProvinceSelection();
                 }
                 return;
-            }
-
-            if (this.matchesShortcut(e, this.keybinds.selectionRedo)) {
-                e.preventDefault();
+            case 'selectionRedo':
                 if (this.paintbrushActive$.value) {
                     this.redoPaintDraft();
                 } else if (this.viewMode$.value === 'state') {
@@ -5421,79 +5286,53 @@ export class TopBar extends Subscriber {
                     this.redoProvinceSelection();
                 }
                 return;
-            }
-
-            // Escape cancels paintbrush mode
-            if (key === 'escape' && this.paintbrushActive$.value) {
-                e.preventDefault();
-                this.cancelPaintbrushMode();
+            case 'cancel':
+                if (this.paintbrushActive$.value) {
+                    this.cancelPaintbrushMode();
+                }
                 return;
-            }
-
-            // P toggles paintbrush mode (when not in an input)
-            if (key === 'p' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
-                e.preventDefault();
+            case 'paintBrush':
                 this.paintTool = 'brush';
                 this.togglePaintbrushMode();
                 return;
-            }
-
-            if (key === 'e' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey &&
-                this.paintbrushActive$.value) {
-                e.preventDefault();
-                this.togglePaintEraser();
+            case 'paintEraser':
+                if (this.paintbrushActive$.value) {
+                    this.togglePaintEraser();
+                }
                 return;
-            }
-
-            if (key === 'f' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
-                e.preventDefault();
+            case 'fillBucket':
                 this.toggleFillBucketMode();
                 return;
-            }
-
-            if (key === 'l' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
-                e.preventDefault();
+            case 'lasso':
                 this.toggleLassoMode();
                 return;
-            }
-
-            if (key === 'w' && !e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
-                e.preventDefault();
+            case 'transferWand':
                 this.toggleTransferWand();
                 return;
-            }
-
-            if (this.matchesShortcut(e, this.keybinds.createStateFromSelection)) {
-                e.preventDefault();
+            case 'createStateFromSelection':
                 this.createStateFromSelection();
                 return;
-            }
-
-            if (this.matchesShortcut(e, this.keybinds.assignSelectionToState)) {
-                e.preventDefault();
+            case 'assignSelectionToState':
                 this.assignSelectionToState();
                 return;
-            }
-
-            if (this.matchesShortcut(e, this.keybinds.assignSelectionToStrategicRegion)) {
-                e.preventDefault();
+            case 'assignSelectionToStrategicRegion':
                 this.assignSelectionToStrategicRegion();
                 return;
-            }
-
-            // New province creation: Ctrl+Alt+P (Paint)
-            if (e.ctrlKey && e.altKey && key === 'p') {
-                e.preventDefault();
+            case 'createNewProvince':
                 this.createNewProvince();
-            }
-        }));
-    }
-
-    private matchesShortcut(e: KeyboardEvent, shortcut: ShortcutSpec): boolean {
-        return e.key.toLowerCase() === shortcut.key &&
-            e.ctrlKey === shortcut.ctrl &&
-            e.shiftKey === shortcut.shift &&
-            e.altKey === shortcut.alt;
+                return;
+            case 'openInterfaceMenu':
+                document.getElementById('interface-tools-button')?.click();
+                return;
+            case 'openPerformanceMenu':
+                document.getElementById('render-optimizations-button')?.click();
+                return;
+            case 'openAccessibilityMenu':
+                document.getElementById('accessibility-options-button')?.click();
+                return;
+            default:
+                return;
+        }
     }
 
     private toggleSelectedProvince(provinceId: number) {
@@ -5537,7 +5376,7 @@ export class TopBar extends Subscriber {
                     'Selection changed from {0} provinces to {1}. Press {2} to restore your previous selection.',
                     current.size,
                     nextSelection.size,
-                    this.keybinds.selectionUndo.label),
+                    'the Undo Selection command'),
                 'warn');
         }
     }
@@ -5576,7 +5415,7 @@ export class TopBar extends Subscriber {
                     'Selection changed from {0} provinces to {1}. Press {2} to restore your previous selection.',
                     current.size,
                     nextSelection.size,
-                    this.keybinds.selectionUndo.label),
+                    'the Undo Selection command'),
                 'warn');
         }
     }
@@ -5662,14 +5501,24 @@ export class TopBar extends Subscriber {
         return true;
     }
 
-    private shouldIgnoreGlobalShortcut(target: EventTarget | null): boolean {
-        if (!(target instanceof HTMLElement)) {
-            return false;
-        }
-
-        return target.isContentEditable || target.closest(
-            'input, textarea, select, button, a, [role="combobox"], [role="menuitem"], [role="menuitemcheckbox"], [role="option"]'
-        ) !== null;
+    private installKeyboardContextTracking(): void {
+        let lastOwned: boolean | undefined;
+        const report = () => {
+            const target = document.activeElement;
+            const owned = target instanceof HTMLElement && (target.isContentEditable || target.closest(
+                'input, textarea, select, button, a, [role="combobox"], [role="menuitem"], [role="menuitemcheckbox"], [role="option"], [role="dialog"]'
+            ) !== null);
+            if (owned !== lastOwned) {
+                lastOwned = owned;
+                vscode.postMessage<WorldMapMessage>({
+                    command: 'worldmapcontext',
+                    keyboardOwned: owned,
+                } as WorldMapMessage);
+            }
+        };
+        this.addSubscription(fromEvent(window, 'focusin').subscribe(report));
+        this.addSubscription(fromEvent(window, 'focusout').subscribe(() => setTimeout(report, 0)));
+        report();
     }
 
     private applyTransferWand(forceRetarget: boolean) {

@@ -19,6 +19,7 @@ export namespace ContextName {
 export namespace Commands {
     export const Preview = 'hoi4modernutils.preview';
     export const PreviewWorld = 'hoi4modernutils.previewworld';
+    export const OpenKeybindings = 'hoi4modernutils.openkeybindings';
     export const ScanAndLogErrors = 'hoi4modernutils.scanAndLogErrors';
     export const ScanReferences = 'hoi4modernutils.scanreferences';
     export const SelectModFile = 'hoi4modernutils.selectmodfile';

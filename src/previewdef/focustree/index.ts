@@ -25,6 +25,7 @@ import { reportFailure } from '../../util/errorreport';
 import { isValidFocusId } from './focusid';
 import * as edits from './edits';
 import { updateFocusTreeDiagnostics, clearFocusTreeDiagnostics } from './diagnostics';
+import { FOCUS_TREE_ACTIONS, FocusTreeActionId, focusTreeCommandId } from './actions';
 
 interface FocusPositionUpdate {
     document: vscode.TextDocument;
@@ -42,6 +43,12 @@ function canPreviewFocusTree(document: vscode.TextDocument) {
     return /(focus_tree|shared_focus|joint_focus)\s*=\s*{/.exec(text)?.index;
 }
 
+let activeFocusTreePreview: FocusTreePreview | undefined = undefined;
+
+function setFocusTreeContext(key: string, value: string | boolean): void {
+    void vscode.commands.executeCommand('setContext', `hoi4ModernUtils.${key}`, value);
+}
+
 class FocusTreePreview extends PreviewBase {
     private focusTreeLoader: FocusTreeLoader;
     private content: string | undefined;
@@ -51,6 +58,23 @@ class FocusTreePreview extends PreviewBase {
         super(uri, panel);
         this.focusTreeLoader = new FocusTreeLoader(getRelativePathInWorkspace(this.uri), () => Promise.resolve(this.content ?? ''));
         this.focusTreeLoader.onLoadDone(r => this.updateDependencies(r.dependencies));
+        this.setFocused(panel.active);
+        panel.onDidChangeViewState(event => this.setFocused(event.webviewPanel.active));
+    }
+
+    private setFocused(focused: boolean): void {
+        setFocusTreeContext('focusTreeFocused', focused);
+        if (focused) {
+            activeFocusTreePreview = this;
+        } else if (activeFocusTreePreview === this) {
+            activeFocusTreePreview = undefined;
+            setFocusTreeContext('focusTreeKeyboardOwned', false);
+        }
+    }
+
+    /** Runs one keyboard action dispatched by the extension host. */
+    public runAction(action: FocusTreeActionId): void {
+        void this.panel.webview.postMessage({ command: 'runfocustreeaction', action });
     }
 
     protected async getContent(document: vscode.TextDocument): Promise<string> {
@@ -72,10 +96,20 @@ class FocusTreePreview extends PreviewBase {
     public dispose(): void {
         clearFocusTreeDiagnostics(this.diagnosedFiles);
         this.diagnosedFiles = new Map();
+        if (activeFocusTreePreview === this) {
+            activeFocusTreePreview = undefined;
+        }
+        setFocusTreeContext('focusTreeFocused', false);
+        setFocusTreeContext('focusTreeKeyboardOwned', false);
         super.dispose();
     }
 
     protected async handleMessage(msg: FocusTreeEditorMessage): Promise<void> {
+        if (msg.command === 'focustreecontext') {
+            setFocusTreeContext('focusTreeKeyboardOwned', msg.keyboardOwned);
+            return;
+        }
+
         if (this.pendingChangeDocument || this.lastDocumentChangeTimestamp !== msg.lastDocumentChangeTimestamp) {
             await vscode.window.showWarningMessage(localize('preview.focustree.stale', 'The focus tree changed while this edit was in flight, so it was not applied. Please try again.'));
             return;
@@ -436,6 +470,13 @@ class FocusTreePreview extends PreviewBase {
         const uri = getHoiOpenedFileOriginalUri(filePathInMod);
         return getDocumentByUri(uri) ?? await vscode.workspace.openTextDocument(uri);
     }
+}
+
+/** Registers one command per focus-tree action for VS Code's Keyboard Shortcuts editor. */
+export function registerFocusTreeKeybindings(): vscode.Disposable {
+    return vscode.Disposable.from(...FOCUS_TREE_ACTIONS.map(action =>
+        vscode.commands.registerCommand(focusTreeCommandId(action.id), () => activeFocusTreePreview?.runAction(action.id)),
+    ));
 }
 
 export const focusTreePreviewDef: PreviewProviderDef = {

@@ -360,13 +360,13 @@
                 <button id="railway-problem" type="button" class="railway-wide" title="%worldmap.railway.problem.tooltip|Jump to the next railway with a disconnected segment%"><i class="codicon codicon-warning"></i> %worldmap.railway.problem|Next problem%</button>
             </div>
             <div class="railway-row">
-                <button id="railway-reverse" type="button" class="railway-wide" title="%worldmap.railway.reverse.tooltip|Reverse the direction of the selected railway (R)%"><i class="codicon codicon-arrow-swap"></i> %worldmap.railway.reverse|Reverse%</button>
-                <button id="railway-split" type="button" class="railway-wide" title="%worldmap.railway.split.tooltip|Split the selected railway at the selected middle node (X)%"><i class="codicon codicon-split-horizontal"></i> %worldmap.railway.split|Split%</button>
-                <button id="railway-delete" type="button" class="railway-wide" title="%worldmap.railway.delete.tooltip|Delete the selected railway (Delete)%"><i class="codicon codicon-trash"></i> %worldmap.railway.delete|Delete%</button>
+                <button id="railway-reverse" type="button" class="railway-wide" data-keybind-hint="railwayReverse" title="%worldmap.railway.reverse.tooltip|Reverse the direction of the selected railway%"><i class="codicon codicon-arrow-swap"></i> %worldmap.railway.reverse|Reverse%</button>
+                <button id="railway-split" type="button" class="railway-wide" data-keybind-hint="railwaySplit" title="%worldmap.railway.split.tooltip|Split the selected railway at the selected middle node%"><i class="codicon codicon-split-horizontal"></i> %worldmap.railway.split|Split%</button>
+                <button id="railway-delete" type="button" class="railway-wide" data-keybind-hint="railwayDelete" title="%worldmap.railway.delete.tooltip|Delete the selected railway%"><i class="codicon codicon-trash"></i> %worldmap.railway.delete|Delete%</button>
             </div>
             <div class="railway-row">
-                <button id="railway-undo" type="button" class="railway-wide" title="%worldmap.railway.undo.tooltip|Undo (Ctrl+Z)%"><i class="codicon codicon-discard"></i> %worldmap.railway.undo|Undo%</button>
-                <button id="railway-redo" type="button" class="railway-wide" title="%worldmap.railway.redo.tooltip|Redo (Ctrl+Y)%"><i class="codicon codicon-redo"></i> %worldmap.railway.redo|Redo%</button>
+                <button id="railway-undo" type="button" class="railway-wide" data-keybind-hint="mapUndo" title="%worldmap.railway.undo.tooltip|Undo%"><i class="codicon codicon-discard"></i> %worldmap.railway.undo|Undo%</button>
+                <button id="railway-redo" type="button" class="railway-wide" data-keybind-hint="mapRedo" title="%worldmap.railway.redo.tooltip|Redo%"><i class="codicon codicon-redo"></i> %worldmap.railway.redo|Redo%</button>
             </div>
             <div id="railway-hint" class="railway-hint"></div>
             <div class="railway-row railway-save-row">
@@ -379,8 +379,8 @@
         <div class="worldmap-modal-title building-panel-heading"><span>%worldmap.building.panel.title|Building placement%</span><button id="building-panel-close" type="button" title="%worldmap.building.close|Close building placement (Esc)%"><i class="codicon codicon-close"></i></button></div>
         <div class="building-panel-body">
             <div class="building-row">
-                <button id="building-mode-place" type="button" class="building-wide" aria-pressed="true" title="%worldmap.building.mode.place.tooltip|Click the map to place the chosen building (P). Shift+click erases.%"><i class="codicon codicon-add"></i> %worldmap.building.mode.place|Place%</button>
-                <button id="building-mode-erase" type="button" class="building-wide" aria-pressed="false" title="%worldmap.building.mode.erase.tooltip|Click a placed building to remove it (X)%"><i class="codicon codicon-trash"></i> %worldmap.building.mode.erase|Erase%</button>
+                <button id="building-mode-place" type="button" class="building-wide" aria-pressed="true" data-keybind-hint="buildingPlaceMode" title="%worldmap.building.mode.place.tooltip|Click the map to place the chosen building. Shift+click erases.%"><i class="codicon codicon-add"></i> %worldmap.building.mode.place|Place%</button>
+                <button id="building-mode-erase" type="button" class="building-wide" aria-pressed="false" data-keybind-hint="buildingEraseMode" title="%worldmap.building.mode.erase.tooltip|Click a placed building to remove it%"><i class="codicon codicon-trash"></i> %worldmap.building.mode.erase|Erase%</button>
             </div>
             <div class="building-row">
                 <input id="building-filter" type="search" placeholder="%worldmap.building.filter|Search buildings...%" aria-label="%worldmap.building.filter|Search buildings...%"/>
@@ -390,13 +390,13 @@
             <div class="building-row">
                 <label for="building-height">%worldmap.building.height|Height%</label>
                 <input id="building-height" type="number" step="0.05" min="0" placeholder="%worldmap.building.height.auto|auto%" title="%worldmap.building.height.tooltip|Height (Y) of new buildings. Leave empty to match nearby buildings.%"/>
-                <button id="building-rotate-left" type="button" title="%worldmap.building.rotate.left|Rotate counterclockwise ([)%"><i class="codicon codicon-debug-reverse-continue"></i></button>
+                <button id="building-rotate-left" type="button" data-keybind-hint="buildingRotateLeft" title="%worldmap.building.rotate.left|Rotate counterclockwise%"><i class="codicon codicon-debug-reverse-continue"></i></button>
                 <span id="building-rotation" class="building-rotation"></span>
-                <button id="building-rotate-right" type="button" title="%worldmap.building.rotate.right|Rotate clockwise (])%"><i class="codicon codicon-debug-continue"></i></button>
+                <button id="building-rotate-right" type="button" data-keybind-hint="buildingRotateRight" title="%worldmap.building.rotate.right|Rotate clockwise%"><i class="codicon codicon-debug-continue"></i></button>
             </div>
             <div class="building-row">
-                <button id="building-undo" type="button" class="building-wide" title="%worldmap.building.undo.tooltip|Undo (Ctrl+Z)%"><i class="codicon codicon-discard"></i> %worldmap.building.undo|Undo%</button>
-                <button id="building-redo" type="button" class="building-wide" title="%worldmap.building.redo.tooltip|Redo (Ctrl+Y)%"><i class="codicon codicon-redo"></i> %worldmap.building.redo|Redo%</button>
+                <button id="building-undo" type="button" class="building-wide" data-keybind-hint="mapUndo" title="%worldmap.building.undo.tooltip|Undo%"><i class="codicon codicon-discard"></i> %worldmap.building.undo|Undo%</button>
+                <button id="building-redo" type="button" class="building-wide" data-keybind-hint="mapRedo" title="%worldmap.building.redo.tooltip|Redo%"><i class="codicon codicon-redo"></i> %worldmap.building.redo|Redo%</button>
                 <button id="building-cleartype" type="button" class="building-wide" title="%worldmap.building.cleartype.tooltip|Remove every placed entry of the chosen building type%"><i class="codicon codicon-clear-all"></i> %worldmap.building.cleartype|Clear type%</button>
             </div>
             <div id="building-hint" class="building-hint"></div>

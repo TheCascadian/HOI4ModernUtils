@@ -876,6 +876,8 @@ body > ul.select-dropdown[aria-multiselectable="true"] .checkbox {
     display: none !important;
 }
 
+
+
 .accessibility-options-heading {
     font-weight: 650;
 }

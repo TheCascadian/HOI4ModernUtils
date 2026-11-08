@@ -4,6 +4,7 @@ import { feLocalize } from '../util/i18n';
 import { vscode } from '../util/vscode';
 import { FEWorldMap, Loader } from './loader';
 import { ViewPoint } from './viewpoint';
+import { WorldMapActionId } from '../../src/previewdef/worldmap/actions';
 
 export type BuildingEditMode = 'place' | 'erase';
 export type BuildingSaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'failed';
@@ -388,40 +389,33 @@ export class BuildingEditor {
         return true;
     }
 
-    public handleKey(e: KeyboardEvent): boolean {
-        const key = e.key.toLowerCase();
-        if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-            if (key === 'z' && !e.shiftKey) {
+    /** Runs one keyboard-bound action. Returns true when it was handled. */
+    public handleAction(action: WorldMapActionId): boolean {
+        switch (action) {
+            case 'mapUndo':
                 this.undo() || this.hooks.status(feLocalize('worldmap.building.nothingundo', 'No building edits to undo.'));
                 return true;
-            }
-            if (key === 'y' || (key === 'z' && e.shiftKey)) {
+            case 'mapRedo':
                 this.redo() || this.hooks.status(feLocalize('worldmap.building.nothingredo', 'No building edits to redo.'));
                 return true;
-            }
-            return false;
-        }
-        if (e.altKey || e.metaKey) {
-            return false;
-        }
-        switch (key) {
-            case 'escape':
+            case 'cancel':
                 this.deactivate();
                 return true;
-            case 'p':
+            case 'buildingPlaceMode':
                 this.setMode('place');
                 return true;
-            case 'x':
+            case 'buildingEraseMode':
                 this.setMode('erase');
                 return true;
-            case '[':
+            case 'buildingRotateLeft':
                 this.rotate(-45);
                 return true;
-            case ']':
+            case 'buildingRotateRight':
                 this.rotate(45);
                 return true;
+            default:
+                return false;
         }
-        return false;
     }
 
     // ---------------------------------------------------------------- saving

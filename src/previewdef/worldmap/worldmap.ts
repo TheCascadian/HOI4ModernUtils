@@ -74,6 +74,24 @@ export class WorldMap {
         this.panel = panel;
         this.worldMapLoader = new WorldMapLoader();
         this.worldMapLoader.onProgress(this.progressReporter);
+        this.setContext('worldMapFocused', panel.active);
+        this.setContext('worldMapTool', 'none');
+        this.setContext('worldMapKeyboardOwned', false);
+        panel.onDidChangeViewState(event => {
+            this.setContext('worldMapFocused', event.webviewPanel.active);
+            if (!event.webviewPanel.active) {
+                this.setContext('worldMapKeyboardOwned', false);
+            }
+        });
+    }
+
+    private setContext(key: string, value: string | boolean): void {
+        void vscode.commands.executeCommand('setContext', `hoi4ModernUtils.${key}`, value);
+    }
+
+    /** Sends a keyboard action to the webview. Native keybindings are the only source of these. */
+    public runAction(action: string): void {
+        void this.postMessageToWebview({ command: 'runworldmapaction', action });
     }
 
     public initialize(): void {
@@ -106,6 +124,8 @@ export class WorldMap {
 
     public dispose() {
         const disposedError = new Error('World-map runtime test webview was disposed.');
+        this.setContext('worldMapFocused', false);
+        this.setContext('worldMapKeyboardOwned', false);
         for (const pending of this.runtimeTestRequests.values()) {
             clearTimeout(pending.timeout);
             pending.reject(disposedError);
@@ -151,15 +171,6 @@ export class WorldMap {
 
     private renderWorldMap(webview: vscode.Webview): string {
         const conf = getConfiguration();
-        const worldMapKeybinds = {
-            selectionUndo: conf.get<string>('worldMapSelectionUndoKeybind', 'T'),
-            selectionRedo: conf.get<string>('worldMapSelectionRedoKeybind', 'R'),
-            mapUndo: conf.get<string>('worldMapMapUndoKeybind', 'Ctrl+Z'),
-            mapRedo: conf.get<string>('worldMapMapRedoKeybind', 'Ctrl+Y'),
-            createStateFromSelection: conf.get<string>('worldMapCreateStateKeybind', 'Ctrl+Shift+N'),
-            assignSelectionToState: conf.get<string>('worldMapAssignSelectionKeybind', 'Ctrl+Enter'),
-            assignSelectionToStrategicRegion: conf.get<string>('worldMapAssignSelectionToStrategicRegionKeybind', 'Ctrl+Shift+G'),
-        };
 
         return html(
             webview,
@@ -169,7 +180,6 @@ export class WorldMap {
                 { content: 'window.__enableSupplyArea = ' + getConfiguration().enableSupplyArea + ';' },
                 { content: 'window.__stateBoundaryColor = ' + JSON.stringify(getConfiguration().stateBoundaryColor) + ';' },
                 { content: 'window.__stateBoundaryWidth = ' + getConfiguration().stateBoundaryWidth + ';' },
-                { content: 'window.__worldMapKeybinds = ' + JSON.stringify(worldMapKeybinds) + ';' },
                 { content: 'window.__confirmNewProvinceCreation = ' + (conf.get<boolean>('worldMapConfirmNewProvinceCreation', true)) + ';' },
                 { content: 'window.__autoCoreTransfers = ' + (conf.get<boolean>('worldMapAutoCoreTransfers', false)) + ';' },
                 { content: 'window.__worldMapRuntimeTestEnabled = ' + isWorldMapRuntimeTestEnabled() + ';' },
@@ -235,6 +245,9 @@ export class WorldMap {
                     break;
                 case 'setautocoretransfers':
                     await getConfiguration().update('worldMapAutoCoreTransfers', (msg as any).value, vscode.ConfigurationTarget.Global);
+                    break;
+                case 'worldmapcontext':
+                    await this.updateWorldMapContext(msg as WorldMapContextMessage);
                     break;
                 case 'createcountry':
                     await this.createCountry(msg as CreateCountryMessage);
@@ -734,6 +747,16 @@ export class WorldMap {
 
     private async setConfirmNewProvinceCreation(value: boolean) {
         await getConfiguration().update('worldMapConfirmNewProvinceCreation', value, vscode.ConfigurationTarget.Global);
+    }
+
+    /** Mirrors webview focus and tool state into context keys used by native keybindings. */
+    private async updateWorldMapContext(msg: WorldMapContextMessage): Promise<void> {
+        if (typeof msg.tool === 'string' || msg.tool === undefined) {
+            await vscode.commands.executeCommand('setContext', 'hoi4ModernUtils.worldMapTool', msg.tool ?? 'none');
+        }
+        if (typeof msg.keyboardOwned === 'boolean') {
+            await vscode.commands.executeCommand('setContext', 'hoi4ModernUtils.worldMapKeyboardOwned', msg.keyboardOwned);
+        }
     }
 
     private async requestExportMap(format: 'png' | 'jpeg' | 'webp' = 'png') {

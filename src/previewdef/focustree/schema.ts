@@ -204,6 +204,12 @@ export interface SetFocusPropertiesMessage {
     properties: Partial<FocusEditableProperties>;
 }
 
+export interface FocusTreeContextMessage {
+    command: 'focustreecontext';
+    /** True while focus is inside a form control, where single-key bindings must stay quiet. */
+    keyboardOwned: boolean;
+}
+
 export type FocusTreeEditorMessage =
     UpdateFocusPositionsMessage |
     CreateFocusMessage |
@@ -214,7 +220,8 @@ export type FocusTreeEditorMessage =
     SetPrerequisitesMessage |
     SetMutuallyExclusiveMessage |
     SetRelativePositionMessage |
-    SetFocusPropertiesMessage;
+    SetFocusPropertiesMessage |
+    FocusTreeContextMessage;
 
 interface Offset {
     x: number;
