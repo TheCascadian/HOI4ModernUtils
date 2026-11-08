@@ -5,7 +5,7 @@ import { localize, localizeText, i18nTableAsScript } from '../../util/i18n';
 import { html } from '../../util/html';
 import { error, debug } from '../../util/debug';
 import { reportFailure } from '../../util/errorreport';
-import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistProvinceBmpMessage, PersistVictoryPointLocalisationMessage, PersistRailwaysMessage, PersistMapBuildingsMessage, BuildingDef, MapBuilding, PersistCountryDiplomacyMessage, CreateCountryMessage, RunAreaOperationMessage, RunContinentPipelineMessage, WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest, WorldMapRuntimeTestResultMessage } from './definitions';
+import { WorldMapMessage, ProgressReporter, WorldMapData, MapItemMessage, RequestMapItemMessage, PersistedState, PersistedStrategicRegion, PersistedProvince, PaintbrushConfig, PersistProvinceBmpMessage, PersistVictoryPointLocalisationMessage, PersistRailwaysMessage, PersistMapBuildingsMessage, BuildingDef, MapBuilding, PersistCountryDiplomacyMessage, CreateCountryMessage, RunAreaOperationMessage, RunContinentPipelineMessage, WorldMapRuntimeTestReport, WorldMapRuntimeTestRequest, WorldMapRuntimeTestResultMessage, SupplyNode, WorldMapContextMessage } from './definitions';
 import { matchPathEnd } from '../../util/nodecommon';
 import { writeFile, mkdirs, getDocumentByUri, dirUri } from '../../util/vsccommon';
 import { slice, debounceByInput, forceError } from '../../util/common';
@@ -331,11 +331,12 @@ export class WorldMap {
                     break;
                 case 'persistrailways':
                     try {
-                        await this.persistRailways(msg);
+                        const warning = await this.persistRailways(msg);
                         await this.postMessageToWebview({
                             command: 'persistrailwaysresult',
                             requestId: msg.requestId,
                             success: true,
+                            warning,
                         });
                     } catch (e) {
                         await this.postMessageToWebview({
@@ -1244,21 +1245,28 @@ export class WorldMap {
     private railwayWriteQueue: Promise<unknown> = Promise.resolve();
 
     /** Writes run one at a time so quick consecutive edits cannot interleave. */
-    private persistRailways(msg: PersistRailwaysMessage): Promise<void> {
+    private persistRailways(msg: PersistRailwaysMessage): Promise<string | undefined> {
         const run = this.railwayWriteQueue.then(() => this.writeRailways(msg));
         this.railwayWriteQueue = run.catch(() => undefined);
         return run;
     }
 
-    private async writeRailways(msg: PersistRailwaysMessage): Promise<void> {
+    private async writeRailways(msg: PersistRailwaysMessage): Promise<string | undefined> {
         const lines: string[] = [];
+        let normalized = 0;
+        let skipped = 0;
         for (const railway of msg.railways) {
-            const ids = railway.provinces;
-            if (!Number.isInteger(railway.level) || railway.level < 1 || railway.level > 5 ||
-                !Array.isArray(ids) || ids.length < 2 || ids.some(id => !Number.isInteger(id) || id < 1)) {
-                throw new Error('A railway has an invalid level or fewer than two valid provinces; nothing was written.');
+            const rawIds = Array.isArray(railway.provinces) ? railway.provinces : [];
+            const ids = rawIds.filter(id => Number.isInteger(id) && id >= 1);
+            const level = Number.isFinite(railway.level) ? Math.max(1, Math.min(5, Math.round(railway.level))) : 1;
+            if (ids.length < 2) {
+                skipped++;
+                continue;
             }
-            lines.push(`${railway.level} ${ids.length} ${ids.join(' ')}`);
+            if (ids.length !== rawIds.length || level !== railway.level) {
+                normalized++;
+            }
+            lines.push(`${level} ${ids.length} ${ids.join(' ')}`);
         }
 
         const relativePath = 'map/railways.txt';
@@ -1296,6 +1304,74 @@ export class WorldMap {
         this.cachedWorldMap = undefined;
         this.worldMapDependencies = undefined;
         debug(`Wrote ${lines.length} railways to ${targetFile.fsPath}`);
+
+        let skippedNodes = 0;
+        if (msg.supplyNodes) {
+            skippedNodes = await this.writeSupplyNodes(msg.supplyNodes);
+        }
+        const notes: string[] = [];
+        if (skipped > 0) {
+            notes.push(`${skipped} invalid railway ${skipped === 1 ? 'entry was' : 'entries were'} removed`);
+        }
+        if (normalized > 0) {
+            notes.push(`${normalized} railway ${normalized === 1 ? 'entry was' : 'entries were'} normalized`);
+        }
+        if (skippedNodes > 0) {
+            notes.push(`${skippedNodes} invalid supply hub ${skippedNodes === 1 ? 'entry was' : 'entries were'} removed`);
+        }
+        return notes.length > 0 ? `Saved with repairs: ${notes.join('; ')}.` : undefined;
+    }
+
+    /** Rewrites map/supply_nodes.txt as `level province` lines, keeping leading comments. */
+    private async writeSupplyNodes(nodes: SupplyNode[]): Promise<number> {
+        const levels = new Map<number, number>();
+        let skipped = 0;
+        for (const node of nodes) {
+            if (!Number.isInteger(node.province) || node.province < 1) {
+                skipped++;
+                continue;
+            }
+            const level = Number.isFinite(node.level) ? Math.max(1, Math.round(node.level)) : 1;
+            levels.set(node.province, Math.max(levels.get(node.province) ?? 0, level));
+        }
+
+        const relativePath = 'map/supply_nodes.txt';
+        const targetFile = await this.resolveTargetFile(relativePath);
+        let existing = '';
+        const snapshot = await this.readOperationalSnapshot(targetFile);
+        if (snapshot) {
+            existing = snapshot.toString('utf-8');
+        } else {
+            try {
+                const [buffer] = await readFileFromModOrHOI4(relativePath);
+                existing = buffer.toString('utf-8');
+            } catch {
+                // No supply node file exists anywhere yet; create it.
+            }
+        }
+        existing = existing.replace(/^\uFEFF/, '');
+        const eol = existing.includes('\r\n') ? '\r\n' : '\n';
+        const header: string[] = [];
+        for (const line of existing.split(/\r?\n/)) {
+            const trimmed = line.trim();
+            if (trimmed === '' || trimmed.startsWith('#')) {
+                header.push(line);
+            } else {
+                break;
+            }
+        }
+        while (header.length > 0 && header[header.length - 1].trim() === '') {
+            header.pop();
+        }
+
+        const lines = [...levels].map(([province, level]) => `${level} ${province}`);
+        const content = [...header, ...lines].join(eol) + (lines.length > 0 ? eol : '');
+        await mkdirs(dirUri(targetFile));
+        await this.writeOperationalFile(targetFile, Buffer.from(content, 'utf-8'));
+        this.cachedWorldMap = undefined;
+        this.worldMapDependencies = undefined;
+        debug(`Wrote ${lines.length} supply nodes to ${targetFile.fsPath}`);
+        return skipped;
     }
 
     private mapBuildingsWriteQueue: Promise<unknown> = Promise.resolve();

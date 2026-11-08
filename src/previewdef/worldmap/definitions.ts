@@ -784,6 +784,8 @@ export interface PersistRailwaysMessage {
     requestId: string;
     /** The complete railway list; map/railways.txt is rewritten from it. */
     railways: Railway[];
+    /** The complete supply node list; when present, map/supply_nodes.txt is rewritten too. */
+    supplyNodes?: SupplyNode[];
 }
 
 export interface PersistRailwaysResultMessage {
@@ -791,6 +793,8 @@ export interface PersistRailwaysResultMessage {
     requestId: string;
     success: boolean;
     error?: string;
+    /** Present when invalid loaded entries were skipped or normalized while saving. */
+    warning?: string;
 }
 
 export interface RequestReferenceImageMessage {

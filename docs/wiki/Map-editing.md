@@ -61,12 +61,26 @@ Use **Consolidate Selected Ocean Provinces to One Tile** when several existing s
 
 Use **Convert Selected Water Provinces to Land** for the reverse definition change. The dialog refuses partial metadata: each converted province is assigned a non-naval terrain, positive loaded continent, existing state, and existing strategic region before the write begins.
 
+## Railway and supply hub editor
+
+Open the editor from the railway toolbar button or with the configured **Open the railway editor** shortcut (default `Ctrl+Alt+R`). It draws every railway on the map, colored by level, and keeps the map display in sync with the edits.
+
+- **Select** picks a railway by clicking its line; click again to cycle overlapping railways. Select a node to split there, Shift+click a node to remove it, and Alt+click a province to detour through it.
+- **Draw** starts a new railway or extends the selected one from its end or start. Auto-connect fills gaps along the shortest land route. While a new railway has only its first province, click a second province to finish it.
+- The level control (or the configured level shortcuts, default `1`-`5`) changes the selected railway and new railways.
+- **Reverse**, **Split**, and **Delete** modify the selected railway. Clicking the tip again steps back one province.
+- **Supply hub** mode places supply hubs directly on land provinces. The same mode is available from the map-pin toolbar button or the configured **Open supply hub placement** shortcut (default `Ctrl+Alt+H`). Clicking a province that already has a hub removes it. Hubs are drawn as red squares while the editor is open.
+- Undo and redo use the configured map-edit shortcuts (default `Ctrl+Z` and `Ctrl+Y`).
+
+Every railway and supply hub edit saves automatically: railways to `map/railways.txt` and hubs to `map/supply_nodes.txt`, preserving leading comments in both files. Use the panel's retry button if a save fails.
+
 ## Undo and persistence
 
 Map edits have their own undo/redo history. Selection undo/redo is separate. Saving persists supported edits to the relevant mod files, but undo is not a substitute for source control or a filesystem backup.
 
 | Workflow | Primary files | Guard or recovery boundary |
 | --- | --- | --- |
+| Railway and supply hub edits | `map/railways.txt`, `map/supply_nodes.txt` | Automatic save, in-panel undo/redo, retry on failure, source control |
 | Province paint/create/merge | Effective `provinces.bmp`, `definition.csv`, plus repaired dependent references | Draft Apply/Cancel, transactional validation, in-session undo/redo, source control |
 | Ocean consolidation or water-to-land conversion | Effective `provinces.bmp`, `definition.csv`, affected state and strategic-region files | Explicit selection/metadata confirmation, transactional persistence, source control |
 | State create/assign/merge | Effective `history/states` files and supported dependent memberships | Selection and survivor confirmation, map undo/redo, source control |

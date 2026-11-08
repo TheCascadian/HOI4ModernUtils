@@ -105,30 +105,37 @@
             </div>
 
             <div class="group" data-overflow-priority="2">
-                <button id="toggle-railway" type="button" aria-pressed="false" title="%worldmap.railway.toolbar.tooltip|Railway editor: draw, extend, reroute and manage railways (Ctrl+Alt+R)%">
+                <button id="toggle-railway" type="button" aria-pressed="false" data-keybind-hint="toggleRailwayEditor" title="%worldmap.railway.toolbar.tooltip|Railway editor: draw, extend, reroute and manage railways and supply hubs%">
                     <i class="codicon codicon-milestone"></i>
                 </button>
             </div>
 
             <div class="group" data-overflow-priority="2">
-                <button id="toggle-building" type="button" aria-pressed="false" title="%worldmap.building.toolbar.tooltip|Building placement: plop vanilla and modded buildings onto the map (Ctrl+Alt+B)%">
+                <button id="toggle-supplyhub" type="button" aria-pressed="false" data-keybind-hint="toggleSupplyHubMode" title="%worldmap.supplyhub.toolbar.tooltip|Place supply hubs: click land provinces to add or remove hubs%">
+                    <i class="codicon codicon-map-pin"></i>
+                </button>
+            </div>
+
+            <div class="group" data-overflow-priority="2">
+                <button id="toggle-building" type="button" aria-pressed="false" data-keybind-hint="toggleBuildingEditor" title="%worldmap.building.toolbar.tooltip|Building placement: plop vanilla and modded buildings onto the map%">
                     <i class="codicon codicon-home"></i>
                 </button>
             </div>
 
             <div class="group interface-tools" data-overflow-priority="1">
-                <button id="interface-tools-button" type="button" aria-haspopup="menu" aria-controls="interface-tools-menu" aria-expanded="false" title="Interface and performance options (Ctrl+Alt+I)">
+                <button id="interface-tools-button" type="button" aria-haspopup="menu" aria-controls="interface-tools-menu" aria-expanded="false" data-keybind-hint="openInterfaceMenu" title="%worldmap.settings.tooltip|Settings: interface, performance and display options%">
                     <i class="codicon codicon-settings-gear"></i>
-                    <span class="responsive-button-label">Interface</span>
+                    <span class="responsive-button-label">%worldmap.settings|Settings%</span>
                     <i class="codicon codicon-chevron-down"></i>
                 </button>
-                <div id="interface-tools-menu" class="interface-tools-menu" role="menu" aria-label="Interface and performance options" hidden>
+                <div id="interface-tools-menu" class="interface-tools-menu" role="menu" aria-label="%worldmap.settings|Settings%" hidden>
+            <div class="interface-tools-heading">%worldmap.settings|Settings%</div>
+            <div class="interface-tools-section">%worldmap.settings.performance|Performance and display%</div>
             <div class="group render-optimizations">
-                <button id="render-optimizations-button" type="button" role="menuitem" aria-haspopup="menu" aria-controls="render-optimizations-menu" aria-expanded="false" title="%worldmap.topbar.optimizations.title|Experimental performance options (Ctrl+Alt+Shift+P)%">
+                <button id="render-optimizations-button" type="button" role="menuitem" aria-haspopup="menu" aria-controls="render-optimizations-menu" aria-expanded="false" data-keybind-hint="openPerformanceMenu" title="%worldmap.topbar.optimizations.title|Experimental performance options%">
                     <i class="codicon codicon-dashboard"></i>
                     <span class="responsive-button-label">%worldmap.topbar.optimizations|Performance%</span>
-                    <span id="render-optimizations-count" class="render-optimizations-count hidden"></span>
-                    <span class="menu-keybind">Ctrl+Alt+Shift+P</span><i class="codicon codicon-chevron-right"></i>
+                    <span id="render-optimizations-count" class="render-optimizations-count hidden"></span><i class="codicon codicon-chevron-right"></i>
                 </button>
                 <div id="render-optimizations-menu" class="render-optimizations-menu" role="group" aria-label="%worldmap.topbar.optimizations.heading|Experimental rendering%" hidden>
                     <div class="render-optimizations-heading">%worldmap.topbar.optimizations.heading|Experimental rendering%</div>
@@ -317,12 +324,15 @@
     <div id="action-status" class="hidden" role="status" aria-live="polite"></div>
     <canvas id="main-canvas" tabindex="0" role="application" aria-label="%worldmap.canvas.label|Interactive Hearts of Iron IV world map. Use Shift+F10 for map tools.%" aria-describedby="map-accessible-status"></canvas>
     <div id="map-accessible-status" class="screen-reader-only" role="status" aria-live="polite"></div>
-    <div id="railway-panel" class="worldmap-modal-card" role="region" aria-label="%worldmap.railway.panel.title|Railway editor%" hidden>
-        <div class="worldmap-modal-title railway-panel-heading"><span>%worldmap.railway.panel.title|Railway editor%</span><button id="railway-panel-close" type="button" title="%worldmap.railway.close|Close the railway editor (Esc)%"><i class="codicon codicon-close"></i></button></div>
+    <div id="railway-panel" class="worldmap-modal-card" role="region" aria-label="%worldmap.railway.panel.title|Railway and supply hub editor%" hidden>
+        <div class="worldmap-modal-title railway-panel-heading"><span>%worldmap.railway.panel.title|Railway and supply hub editor%</span><button id="railway-panel-close" type="button" title="%worldmap.railway.close|Close the railway editor (Esc)%"><i class="codicon codicon-close"></i></button></div>
         <div class="railway-panel-body">
             <div class="railway-row">
-                <button id="railway-mode-select" type="button" class="railway-wide" aria-pressed="true" title="%worldmap.railway.mode.select.tooltip|Pick and modify existing railways (S)%"><i class="codicon codicon-inspect"></i> %worldmap.railway.mode.select|Select%</button>
-                <button id="railway-mode-draw" type="button" class="railway-wide" aria-pressed="false" title="%worldmap.railway.mode.draw.tooltip|Draw a new railway, or extend the selected one (D)%"><i class="codicon codicon-edit"></i> %worldmap.railway.mode.draw|Draw%</button>
+                <button id="railway-mode-select" type="button" class="railway-wide" aria-pressed="true" data-keybind-hint="railwaySelectMode" title="%worldmap.railway.mode.select.tooltip|Pick and modify existing railways%"><i class="codicon codicon-inspect"></i> %worldmap.railway.mode.select|Select%</button>
+                <button id="railway-mode-draw" type="button" class="railway-wide" aria-pressed="false" data-keybind-hint="railwayDrawMode" title="%worldmap.railway.mode.draw.tooltip|Draw a new railway, or extend the selected one%"><i class="codicon codicon-edit"></i> %worldmap.railway.mode.draw|Draw%</button>
+            </div>
+            <div class="railway-row">
+                <button id="railway-mode-supply" type="button" class="railway-wide" aria-pressed="false" data-keybind-hint="railwaySupplyMode" title="%worldmap.railway.mode.supply.tooltip|Place a supply hub by clicking a land province; click an existing hub to remove it%"><i class="codicon codicon-map-pin"></i> %worldmap.railway.mode.supply|Supply hub%</button>
             </div>
             <div class="railway-row">
                 <label for="railway-level">%worldmap.railway.level|Level%</label>

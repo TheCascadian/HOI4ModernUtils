@@ -920,10 +920,12 @@ export class TopBar extends Subscriber {
         const editor = this.railwayEditor;
         const byId = <T extends HTMLElement>(id: string) => document.getElementById(id) as T | null;
         const toolbarBtn = byId<HTMLButtonElement>('toggle-railway');
+        const supplyHubBtn = byId<HTMLButtonElement>('toggle-supplyhub');
         const panel = byId<HTMLDivElement>('railway-panel');
         const closeBtn = byId<HTMLButtonElement>('railway-panel-close');
         const selectMode = byId<HTMLButtonElement>('railway-mode-select');
         const drawMode = byId<HTMLButtonElement>('railway-mode-draw');
+        const supplyMode = byId<HTMLButtonElement>('railway-mode-supply');
         const level = byId<HTMLSelectElement>('railway-level');
         const extend = byId<HTMLSelectElement>('railway-extend');
         const autoConnect = byId<HTMLInputElement>('railway-autoconnect');
@@ -939,7 +941,7 @@ export class TopBar extends Subscriber {
         const redo = byId<HTMLButtonElement>('railway-redo');
         const saveStatus = byId<HTMLSpanElement>('railway-save-status');
         const retry = byId<HTMLButtonElement>('railway-retry');
-        if (!toolbarBtn || !panel || !closeBtn || !selectMode || !drawMode || !level || !extend || !autoConnect || !info ||
+        if (!toolbarBtn || !supplyHubBtn || !panel || !closeBtn || !selectMode || !drawMode || !supplyMode || !level || !extend || !autoConnect || !info ||
             !hint || !prev || !next || !problem || !reverse || !split || !del || !undo || !redo || !saveStatus || !retry) {
             return;
         }
@@ -952,9 +954,17 @@ export class TopBar extends Subscriber {
             }));
         };
         act(toolbarBtn, () => { editor.toggle(); });
+        act(supplyHubBtn, () => {
+            if (editor.active$.value && editor.mode === 'supply') {
+                editor.deactivate();
+            } else {
+                editor.open('supply');
+            }
+        });
         act(closeBtn, () => { editor.deactivate(); });
         act(selectMode, () => editor.setMode('select'));
         act(drawMode, () => editor.setMode('draw'));
+        act(supplyMode, () => editor.setMode('supply'));
         act(prev, () => editor.selectRelative(-1));
         act(next, () => editor.selectRelative(1));
         act(problem, () => editor.selectNextProblem());
@@ -994,11 +1004,13 @@ export class TopBar extends Subscriber {
             const active = editor.active$.value;
             panel.hidden = !active;
             toolbarBtn.setAttribute('aria-pressed', String(active));
+            supplyHubBtn.setAttribute('aria-pressed', String(active && editor.mode === 'supply'));
             if (!active) {
                 return;
             }
             selectMode.setAttribute('aria-pressed', String(editor.mode === 'select'));
             drawMode.setAttribute('aria-pressed', String(editor.mode === 'draw'));
+            supplyMode.setAttribute('aria-pressed', String(editor.mode === 'supply'));
             level.value = String(Math.min(RAILWAY_MAX_LEVEL, editor.level));
             extend.value = editor.extendFrom;
             autoConnect.checked = editor.autoConnect;
@@ -1038,7 +1050,13 @@ export class TopBar extends Subscriber {
                 info.style.whiteSpace = 'pre-line';
             }
 
-            if (editor.mode === 'select') {
+            if (editor.mode === 'supply') {
+                hint.textContent = feLocalize(
+                    'worldmap.railway.hint.supply',
+                    'Click a land province to place a supply hub. Click an existing hub to remove it. {0} hubs on the map.',
+                    editor.supplyNodeCount
+                );
+            } else if (editor.mode === 'select') {
                 hint.textContent = railway
                     ? feLocalize('worldmap.railway.hint.select.selected', 'Click a node to select it (Shift+click removes it). Alt+click a province to detour through it. Click the line again to cycle overlapping railways. Esc deselects.')
                     : feLocalize('worldmap.railway.hint.select', 'Click a railway line to select it, or press D and click provinces to draw a new one.');
@@ -1063,10 +1081,10 @@ export class TopBar extends Subscriber {
             retry.hidden = editor.saveState !== 'failed';
             switch (editor.saveState) {
                 case 'saving':
-                    saveStatus.textContent = feLocalize('worldmap.railway.save.saving', 'Saving map/railways.txt...');
+                    saveStatus.textContent = feLocalize('worldmap.railway.save.saving', 'Saving map/railways.txt and map/supply_nodes.txt...');
                     break;
                 case 'saved':
-                    saveStatus.textContent = feLocalize('worldmap.railway.save.saved', 'All changes saved to map/railways.txt.');
+                    saveStatus.textContent = feLocalize('worldmap.railway.save.saved', 'All changes saved to map/railways.txt and map/supply_nodes.txt.');
                     break;
                 case 'dirty':
                     saveStatus.textContent = feLocalize('worldmap.railway.save.dirty', 'Unsaved changes...');

@@ -1,11 +1,12 @@
 import { BehaviorSubject } from 'rxjs';
-import { Point, Railway, WorldMapMessage } from '../../src/previewdef/worldmap/definitions';
+import { Point, Railway, SupplyNode, WorldMapMessage } from '../../src/previewdef/worldmap/definitions';
 import { feLocalize } from '../util/i18n';
 import { vscode } from '../util/vscode';
 import { FEWorldMap, Loader } from './loader';
 import { ViewPoint } from './viewpoint';
+import { WorldMapActionId } from '../../src/previewdef/worldmap/actions';
 
-export type RailwayEditMode = 'select' | 'draw';
+export type RailwayEditMode = 'select' | 'draw' | 'supply';
 export type RailwayExtendFrom = 'end' | 'start';
 export type RailwaySaveState = 'idle' | 'dirty' | 'saving' | 'saved' | 'failed';
 
@@ -19,6 +20,7 @@ export interface RailwayEditorHooks {
 
 interface Snapshot {
     railways: Railway[];
+    supplyNodes: SupplyNode[];
     selected: number;
 }
 
@@ -31,9 +33,14 @@ const SAVE_DELAY_MS = 450;
 const SAVE_TIMEOUT_MS = 20000;
 const PICK_RADIUS_PX = 10;
 const NODE_RADIUS_PX = 9;
+const SUPPLY_HUB_LEVEL = 1;
 
 function cloneRailways(railways: readonly Railway[]): Railway[] {
     return railways.map(railway => ({ level: railway.level, provinces: railway.provinces.slice() }));
+}
+
+function cloneSupplyNodes(nodes: readonly SupplyNode[]): SupplyNode[] {
+    return nodes.map(node => ({ level: node.level, province: node.province }));
 }
 
 function distanceToSegment(px: number, py: number, a: Point, b: Point): number {
@@ -64,6 +71,7 @@ export class RailwayEditor {
     public saveError = '';
 
     private railways: Railway[] = [];
+    private supplyNodes: SupplyNode[] = [];
     /** First click of a brand new railway; it needs a second province to exist. */
     private pendingStart: number | undefined;
     private undoStack: Snapshot[] = [];
@@ -85,6 +93,14 @@ export class RailwayEditor {
 
     public get railwayCount(): number {
         return this.railways.length;
+    }
+
+    public get supplyNodeCount(): number {
+        return this.supplyNodes.length;
+    }
+
+    public getSupplyNode(provinceId: number): SupplyNode | undefined {
+        return this.supplyNodes.find(node => node.province === provinceId);
     }
 
     public getSelected(): Railway | undefined {
@@ -109,6 +125,15 @@ export class RailwayEditor {
         return this.active$.value ? this.deactivate() : this.activate();
     }
 
+    /** Opens the editor (if needed) directly in the given mode. */
+    public open(mode: RailwayEditMode): boolean {
+        if (!this.active$.value && !this.activate()) {
+            return false;
+        }
+        this.setMode(mode);
+        return true;
+    }
+
     public activate(): boolean {
         if (this.active$.value) {
             return true;
@@ -122,10 +147,26 @@ export class RailwayEditor {
             return false;
         }
         const railways: Railway[] = [];
+        let droppedRailways = 0;
+        let normalizedRailways = 0;
         this.worldMap.forEachRailway(railway => {
-            railways.push({ level: railway.level, provinces: railway.provinces.slice() });
+            const provinces = railway.provinces.filter(id => Number.isInteger(id) && id >= 1);
+            const level = Number.isFinite(railway.level) ? Math.max(RAILWAY_MIN_LEVEL, Math.min(RAILWAY_MAX_LEVEL, Math.round(railway.level))) : RAILWAY_MIN_LEVEL;
+            if (provinces.length < 2) {
+                droppedRailways++;
+                return;
+            }
+            if (provinces.length !== railway.provinces.length || level !== railway.level) {
+                normalizedRailways++;
+            }
+            railways.push({ level, provinces });
         });
         this.railways = railways;
+        const supplyNodes: SupplyNode[] = [];
+        this.worldMap.forEachSupplyNode(node => {
+            supplyNodes.push({ level: node.level, province: node.province });
+        });
+        this.supplyNodes = supplyNodes;
         this.undoStack = [];
         this.redoStack = [];
         this.selected = -1;
@@ -137,6 +178,14 @@ export class RailwayEditor {
         this.previewKey = '';
         this.active$.next(true);
         this.changed();
+        if (droppedRailways > 0 || normalizedRailways > 0) {
+            this.hooks.status(feLocalize(
+                'worldmap.railway.repaired',
+                'Ignored {0} invalid railway entries and normalized {1} while loading.',
+                droppedRailways,
+                normalizedRailways
+            ), 'warn');
+        }
         return true;
     }
 
@@ -271,7 +320,7 @@ export class RailwayEditor {
     // ---------------------------------------------------------------- mutation
 
     private snapshot(): Snapshot {
-        return { railways: cloneRailways(this.railways), selected: this.selected };
+        return { railways: cloneRailways(this.railways), supplyNodes: cloneSupplyNodes(this.supplyNodes), selected: this.selected };
     }
 
     /** Runs a change as one undo step and schedules the save. */
@@ -288,6 +337,7 @@ export class RailwayEditor {
 
     private afterEdit(): void {
         this.worldMap.setRailways(cloneRailways(this.railways));
+        this.worldMap.setSupplyNodes(cloneSupplyNodes(this.supplyNodes));
         this.hooks.refreshMap();
         this.saveState = 'dirty';
         this.saveError = '';
@@ -317,6 +367,7 @@ export class RailwayEditor {
 
     private restore(snapshot: Snapshot): void {
         this.railways = cloneRailways(snapshot.railways);
+        this.supplyNodes = cloneSupplyNodes(snapshot.supplyNodes);
         this.selected = snapshot.selected < this.railways.length ? snapshot.selected : -1;
         this.selectedNode = -1;
         this.pendingStart = undefined;
@@ -330,6 +381,9 @@ export class RailwayEditor {
         this.mode = mode;
         this.pendingStart = undefined;
         this.selectedNode = -1;
+        if (mode === 'supply') {
+            this.selected = -1;
+        }
         this.changed();
     }
 
@@ -552,6 +606,10 @@ export class RailwayEditor {
     }
 
     public handleClick(mapX: number, mapY: number, provinceId: number | undefined, event: { shiftKey: boolean; altKey: boolean }): void {
+        if (this.mode === 'supply') {
+            this.supplyClick(provinceId);
+            return;
+        }
         if (this.mode === 'draw') {
             this.drawClick(provinceId);
             return;
@@ -577,6 +635,37 @@ export class RailwayEditor {
         } else {
             this.select(-1);
         }
+    }
+
+    /** Supply mode: one click places a hub, clicking an existing one removes it. */
+    private supplyClick(provinceId: number | undefined): void {
+        if (provinceId === undefined) {
+            return;
+        }
+        if (!this.isLand(provinceId)) {
+            this.hooks.status(feLocalize('worldmap.railway.supply.landonly', 'Supply hubs can only be placed in land provinces.'), 'warn');
+            return;
+        }
+        const index = this.supplyNodes.findIndex(node => node.province === provinceId);
+        if (index >= 0) {
+            this.mutate(() => {
+                this.supplyNodes.splice(index, 1);
+            });
+            this.hooks.status(feLocalize(
+                'worldmap.railway.supply.removed',
+                'Supply hub removed from province {0}. Ctrl+Z restores it.',
+                provinceId
+            ));
+            return;
+        }
+        this.mutate(() => {
+            this.supplyNodes.push({ level: SUPPLY_HUB_LEVEL, province: provinceId });
+        });
+        this.hooks.status(feLocalize(
+            'worldmap.railway.supply.placed',
+            'Supply hub placed in province {0}. Click it again to remove it.',
+            provinceId
+        ));
     }
 
     private drawClick(provinceId: number | undefined): void {
